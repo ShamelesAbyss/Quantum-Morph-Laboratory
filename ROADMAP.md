@@ -7,14 +7,15 @@ Status key: **Done** means present and tested in this repository; **Next** is pr
 - **Done:** Public repository on `main`; Rust workspace with `qml-core` and `qml-cli`.
 - **Done:** Basic validated dense matrix representation, CPU matrix-vector product, Frobenius norm, and unit tests.
 - **Done:** `qml help`, `qml version`, and basic `qml doctor`; unsupported capabilities are disclosed.
-- **Next:** Establish continuous integration and verify Linux/Windows build paths.
+- **Done:** Linux/Windows CI workflow and local formatting, test, and Clippy checks.
 - **Next:** Select a repository license with the project owner; currently no license is granted.
 
 ## Scientific foundation
 
-- **Next:** Complete a sourced prior-art index covering the methods in the master directive; capture authorship, date, canonical source, math, evidence, resources, limitations, licensing, relevance, and overlap.
-- **Next:** Establish a novelty ledger and mark every proposal as unreviewed until prior art is compared.
-- **Next:** Define deterministic test fixtures and baseline measurement conventions.
+- **Done:** First source-backed prior-art batch with 17 topic notes, an index, and a comparative synthesis.
+- **Next:** Expand the review to remaining methods named in the directive, including behavioral/interpretability work, distillation, evolutionary search, quantum-inspired optimization, complex-valued networks, and additional compression/file-format methods.
+- **Next:** Preserve a source-backed novelty ledger; current entries are explicitly hypotheses and no originality conclusion has been reached.
+- **Next:** Establish deterministic test fixtures and baseline measurement conventions.
 
 ## First proof of concept
 
@@ -30,4 +31,4 @@ Q-Scope, Q-Forge, Q-Entangle, Q-Behavior, Q-Genesis, QMF, Q-Core, hardware backe
 
 ## Scope caveat
 
-The source directive received so far is incomplete. The master file ends during the QMF section, and the supplied continuation labels itself “Continuation 1 of 2.” This roadmap covers only unambiguous early-stage requirements and must be reconciled with the complete directive when available.
+The source directive received so far is incomplete. The master file ends during the QMF section, and the supplied continuation labels itself “Continuation 1 of 2.” This roadmap covers only unambiguous early-stage requirements and must be reconciled with the complete directive when available. The initial literature batch is not comprehensive and establishes no novelty, priority, freedom-to-operate, or non-infringement conclusion.

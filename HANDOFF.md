@@ -25,8 +25,8 @@ A first source-backed prior-art batch covers 17 topics. Detailed notes are in `r
 
 ## Validation
 
-The initial workspace passed formatter, tests, strict Clippy, CLI help/doctor smoke tests, and dependency-tree inspection. The current uncommitted prototype has passed `cargo fmt --all -- --check`, `cargo test --workspace` (14 tests), `cargo clippy --workspace --all-targets -- -D warnings`, and CLI smoke tests for the generated demo, valid inspection, invalid input, and missing files. Markdown checks, commit/push, and latest Linux/Windows CI verification remain pending.
+Milestone `a5adea5` is committed and pushed to `main`; the working tree was clean after the push. It passed `cargo fmt --all -- --check`, `cargo test --workspace` (14 tests), `cargo clippy --workspace --all-targets -- -D warnings`, CLI smoke tests for generated demo/valid inspection/invalid input/missing files, `git diff --check`, and relative Markdown-link validation. GitHub Actions run `45369660967` passed on both `ubuntu-latest` and `windows-latest` (format, tests, Clippy). GitHub emitted a non-failing `actions/checkout@v4` Node.js 20 deprecation warning.
 
 ## Next steps
 
-Obtain the complete directive and reconcile the roadmap. Expand the sourced literature review while preserving item-level citations and uncertainty. Select a license with the project owner before accepting outside contributions or distributing releases. Finish CLI smoke tests and commit/push the validated synthetic proof-of-concept milestone, then continue with bounded Safetensors parsing and a legally redistributable fixture.
+Obtain the complete directive and reconcile the roadmap. Expand the sourced literature review while preserving item-level citations and uncertainty. Select a license with the project owner before accepting outside contributions or distributing releases. Continue with bounded Safetensors parsing and a legally redistributable fixture; do not treat the synthetic result as model-compression evidence.

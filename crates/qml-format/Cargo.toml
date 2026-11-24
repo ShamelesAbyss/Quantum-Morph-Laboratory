@@ -1,0 +1,10 @@
+[package]
+name = "qml-format"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+qml-core = { path = "../qml-core" }
+
+[lints]
+workspace = true

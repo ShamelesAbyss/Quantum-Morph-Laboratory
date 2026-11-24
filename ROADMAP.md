@@ -4,9 +4,11 @@ Status key: **Done** means present and tested in this repository; **Next** is pr
 
 ## Foundation
 
-- **Done:** Public repository on `main`; Rust workspace with `qml-core` and `qml-cli`.
+- **Done:** Public repository on `main`; Rust workspace with `qml-core`, `qml-format`, and `qml-cli`.
 - **Done:** Basic validated dense matrix representation, CPU matrix-vector product, Frobenius norm, and unit tests.
 - **Done:** `qml help`, `qml version`, and basic `qml doctor`; unsupported capabilities are disclosed.
+- **Done:** Deterministic largest-pivot rank-one cross approximation, direct factorized matvec, and error measurement on CPU.
+- **Done:** Synthetic rank-one CLI demo and bounded experimental QMF v0 serialization/inspection, with round-trip, corruption, and malformed-size tests.
 - **Done:** Linux/Windows CI workflow and local formatting, test, and Clippy checks.
 - **Next:** Select a repository license with the project owner; currently no license is granted.
 
@@ -19,11 +21,11 @@ Status key: **Done** means present and tested in this repository; **Next** is pr
 
 ## First proof of concept
 
-- **Research:** Load a small, legally redistributable tensor fixture with bounded parsing.
-- **Research:** Inspect tensor metadata without loading full models to GPU.
-- **Research:** Compare a conventional baseline with a mathematically defined structural approximation.
-- **Research:** Measure total bytes including metadata and residuals; report reconstruction and direct-operation error.
-- **Research:** Serialize, reload, and test the transformed representation.
+- **Done (synthetic only):** Compare a conventional largest-pivot rank-one approximation on a generated exact rank-one matrix; measure storage and reconstruction/direct-matvec error.
+- **Done (experimental only):** Serialize, reload, inspect, and reject malformed/corrupt single-matrix QMF v0 data. This is not a model format.
+- **Next:** Load a small, legally redistributable Safetensors tensor fixture with bounded parsing.
+- **Next:** Inspect tensor metadata without loading full models to GPU.
+- **Next:** Compare the baseline with a defined structural approximation on real tensor data; count all bytes and report reconstruction and direct-operation error.
 
 ## Longer term
 

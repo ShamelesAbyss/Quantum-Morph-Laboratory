@@ -1,6 +1,8 @@
 //! Small, safe mathematical building blocks for Quantum Morph Laboratory.
 //!
-//! These primitives are conventional foundations, not novel compression methods.
+//! These are conventional foundations, not novel compression methods. The
+//! rank-one pivot approximation here is a simple baseline, not an optimal
+//! truncated-SVD approximation.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -9,25 +11,57 @@ use std::fmt::{Display, Formatter};
 pub enum MatrixError {
     Empty,
     RaggedRows,
-    DimensionMismatch { expected: usize, actual: usize },
+    DimensionMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    ShapeMismatch {
+        expected_rows: usize,
+        expected_cols: usize,
+        actual_rows: usize,
+        actual_cols: usize,
+    },
+    ElementCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    NonFiniteValue {
+        index: usize,
+    },
 }
 
 impl Display for MatrixError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Empty => write!(f, "matrix must have at least one row and one column"),
+            Self::Empty => write!(f, "matrix and factor dimensions must be non-zero"),
             Self::RaggedRows => write!(f, "all matrix rows must have the same length"),
             Self::DimensionMismatch { expected, actual } => write!(
                 f,
                 "vector length mismatch: expected {expected}, received {actual}"
             ),
+            Self::ShapeMismatch {
+                expected_rows,
+                expected_cols,
+                actual_rows,
+                actual_cols,
+            } => write!(
+                f,
+                "matrix shape mismatch: expected {expected_rows}x{expected_cols}, received {actual_rows}x{actual_cols}"
+            ),
+            Self::ElementCountMismatch { expected, actual } => write!(
+                f,
+                "matrix element count mismatch: expected {expected}, received {actual}"
+            ),
+            Self::NonFiniteValue { index } => {
+                write!(f, "non-finite value at flat element index {index}")
+            }
         }
     }
 }
 
 impl Error for MatrixError {}
 
-/// A finite, row-major dense matrix stored in host `f64` values.
+/// A row-major dense matrix stored in host `f64` values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DenseMatrix {
     rows: usize,
@@ -36,7 +70,7 @@ pub struct DenseMatrix {
 }
 
 impl DenseMatrix {
-    /// Construct from row slices, rejecting empty and inconsistent dimensions.
+    /// Construct from row slices, rejecting empty, inconsistent, or non-finite input.
     pub fn from_rows(rows: &[&[f64]]) -> Result<Self, MatrixError> {
         let Some(first) = rows.first() else {
             return Err(MatrixError::Empty);
@@ -48,16 +82,31 @@ impl DenseMatrix {
         if rows.iter().any(|row| row.len() != cols) {
             return Err(MatrixError::RaggedRows);
         }
+        let data = rows.iter().flat_map(|row| row.iter().copied()).collect();
+        Self::from_flat(rows.len(), cols, data)
+    }
 
-        let mut data = Vec::with_capacity(rows.len() * cols);
-        for row in rows {
-            data.extend_from_slice(row);
+    /// Construct from row-major data after validating shape and values.
+    pub fn from_flat(rows: usize, cols: usize, data: Vec<f64>) -> Result<Self, MatrixError> {
+        if rows == 0 || cols == 0 {
+            return Err(MatrixError::Empty);
         }
-        Ok(Self {
-            rows: rows.len(),
-            cols,
-            data,
-        })
+        let Some(expected) = rows.checked_mul(cols) else {
+            return Err(MatrixError::ElementCountMismatch {
+                expected: usize::MAX,
+                actual: data.len(),
+            });
+        };
+        if data.len() != expected {
+            return Err(MatrixError::ElementCountMismatch {
+                expected,
+                actual: data.len(),
+            });
+        }
+        if let Some(index) = data.iter().position(|value| !value.is_finite()) {
+            return Err(MatrixError::NonFiniteValue { index });
+        }
+        Ok(Self { rows, cols, data })
     }
 
     pub fn rows(&self) -> usize {
@@ -107,11 +156,143 @@ impl DenseMatrix {
             .sum::<f64>()
             .sqrt()
     }
+
+    /// Build a rank-one cross approximation using the largest-magnitude pivot.
+    ///
+    /// For a pivot at `(i, j)`, this returns `left[r] = W[r,j]` and
+    /// `right[c] = W[i,c] / W[i,j]`. It exactly reconstructs rank-one matrices
+    /// when the selected pivot is non-zero, but is not guaranteed to minimize
+    /// Frobenius error for arbitrary matrices.
+    pub fn rank_one_pivot_approximation(&self) -> RankOneFactors {
+        let Some((pivot_index, pivot_value)) = self
+            .data
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+        else {
+            unreachable!("validated matrices are non-empty")
+        };
+
+        if pivot_value == 0.0 {
+            return RankOneFactors {
+                left: vec![0.0; self.rows],
+                right: vec![0.0; self.cols],
+            };
+        }
+
+        let pivot_row = pivot_index / self.cols;
+        let pivot_col = pivot_index % self.cols;
+        let left = (0..self.rows)
+            .map(|row| self.data[row * self.cols + pivot_col])
+            .collect();
+        let right = (0..self.cols)
+            .map(|col| self.data[pivot_row * self.cols + col] / pivot_value)
+            .collect();
+        RankOneFactors { left, right }
+    }
+
+    /// Compute Frobenius reconstruction error without materializing the approximation.
+    pub fn approximation_error(&self, factors: &RankOneFactors) -> Result<f64, MatrixError> {
+        if self.rows != factors.rows() || self.cols != factors.cols() {
+            return Err(MatrixError::ShapeMismatch {
+                expected_rows: self.rows,
+                expected_cols: self.cols,
+                actual_rows: factors.rows(),
+                actual_cols: factors.cols(),
+            });
+        }
+        let squared_error = self
+            .data
+            .iter()
+            .enumerate()
+            .map(|(index, original)| {
+                let row = index / self.cols;
+                let col = index % self.cols;
+                let difference = original - factors.left[row] * factors.right[col];
+                difference * difference
+            })
+            .sum::<f64>();
+        Ok(squared_error.sqrt())
+    }
+}
+
+/// Rank-one matrix representation `left * rightᵀ`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankOneFactors {
+    left: Vec<f64>,
+    right: Vec<f64>,
+}
+
+impl RankOneFactors {
+    pub fn new(left: Vec<f64>, right: Vec<f64>) -> Result<Self, MatrixError> {
+        if left.is_empty() || right.is_empty() {
+            return Err(MatrixError::Empty);
+        }
+        if let Some(index) = left
+            .iter()
+            .chain(&right)
+            .position(|value| !value.is_finite())
+        {
+            return Err(MatrixError::NonFiniteValue { index });
+        }
+        Ok(Self { left, right })
+    }
+
+    pub fn rows(&self) -> usize {
+        self.left.len()
+    }
+
+    pub fn cols(&self) -> usize {
+        self.right.len()
+    }
+
+    pub fn left(&self) -> &[f64] {
+        &self.left
+    }
+
+    pub fn right(&self) -> &[f64] {
+        &self.right
+    }
+
+    pub fn parameter_count(&self) -> usize {
+        self.left.len() + self.right.len()
+    }
+
+    pub fn parameter_bytes_f64(&self) -> usize {
+        self.parameter_count() * std::mem::size_of::<f64>()
+    }
+
+    /// Compute `(left * rightᵀ) * vector` without constructing the dense matrix.
+    pub fn matvec(&self, vector: &[f64]) -> Result<Vec<f64>, MatrixError> {
+        if vector.len() != self.cols() {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.cols(),
+                actual: vector.len(),
+            });
+        }
+        let projection = self
+            .right
+            .iter()
+            .zip(vector)
+            .map(|(weight, value)| weight * value)
+            .sum::<f64>();
+        Ok(self.left.iter().map(|value| value * projection).collect())
+    }
+
+    pub fn reconstruct(&self) -> Result<DenseMatrix, MatrixError> {
+        let data = self
+            .left
+            .iter()
+            .flat_map(|left| self.right.iter().map(move |right| left * right))
+            .collect();
+        DenseMatrix::from_flat(self.rows(), self.cols(), data)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DenseMatrix, MatrixError};
+    use super::{DenseMatrix, MatrixError, RankOneFactors};
 
     #[test]
     fn constructs_matrix_and_multiplies_vector() {
@@ -122,12 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_and_ragged_input() {
+    fn rejects_empty_ragged_mismatched_and_non_finite_input() {
         assert_eq!(DenseMatrix::from_rows(&[]), Err(MatrixError::Empty));
         assert_eq!(DenseMatrix::from_rows(&[&[]]), Err(MatrixError::Empty));
         assert_eq!(
             DenseMatrix::from_rows(&[&[1.0], &[2.0, 3.0]]),
             Err(MatrixError::RaggedRows)
+        );
+        assert_eq!(
+            DenseMatrix::from_flat(2, 2, vec![1.0, 2.0, 3.0]),
+            Err(MatrixError::ElementCountMismatch {
+                expected: 4,
+                actual: 3
+            })
+        );
+        assert_eq!(
+            DenseMatrix::from_flat(1, 2, vec![1.0, f64::NAN]),
+            Err(MatrixError::NonFiniteValue { index: 1 })
         );
     }
 
@@ -149,5 +341,56 @@ mod tests {
     fn computes_frobenius_norm() {
         let matrix = DenseMatrix::from_rows(&[&[3.0, 4.0]]).unwrap();
         assert_eq!(matrix.frobenius_norm(), 5.0);
+    }
+
+    #[test]
+    fn pivot_cross_factorization_exactly_recovers_a_rank_one_matrix() {
+        let matrix = DenseMatrix::from_rows(&[&[2.0, 4.0, 6.0], &[3.0, 6.0, 9.0]]).unwrap();
+        let factors = matrix.rank_one_pivot_approximation();
+        assert!(matrix.approximation_error(&factors).unwrap() < 1e-12);
+        assert_eq!(factors.parameter_count(), matrix.rows() + matrix.cols());
+    }
+
+    #[test]
+    fn factorized_matvec_matches_dense_matvec_without_reconstruction() {
+        let matrix = DenseMatrix::from_rows(&[&[2.0, 4.0, 6.0], &[3.0, 6.0, 9.0]]).unwrap();
+        let factors = matrix.rank_one_pivot_approximation();
+        let expected = matrix.matvec(&[0.5, -1.0, 2.0]).unwrap();
+        let actual = factors.matvec(&[0.5, -1.0, 2.0]).unwrap();
+        for (a, b) in actual.iter().zip(expected) {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn zero_matrix_and_non_rank_one_matrix_have_defined_error() {
+        let zero = DenseMatrix::from_rows(&[&[0.0, 0.0], &[0.0, 0.0]]).unwrap();
+        assert_eq!(
+            zero.approximation_error(&zero.rank_one_pivot_approximation())
+                .unwrap(),
+            0.0
+        );
+
+        let identity = DenseMatrix::from_rows(&[&[1.0, 0.0], &[0.0, 1.0]]).unwrap();
+        assert!(
+            (identity
+                .approximation_error(&identity.rank_one_pivot_approximation())
+                .unwrap()
+                - 1.0)
+                .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn factor_constructor_rejects_invalid_values() {
+        assert_eq!(
+            RankOneFactors::new(vec![], vec![1.0]),
+            Err(MatrixError::Empty)
+        );
+        assert_eq!(
+            RankOneFactors::new(vec![1.0, f64::INFINITY], vec![1.0]),
+            Err(MatrixError::NonFiniteValue { index: 1 })
+        );
     }
 }

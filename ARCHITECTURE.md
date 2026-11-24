@@ -4,27 +4,25 @@
 
 ```text
 crates/
-├── qml-core/   Safe, dependency-free mathematical primitives and tests
-└── qml-cli/    Minimal truthful command-line interface
+├── qml-core/    Safe dense-matrix primitives and rank-one factorized operations
+├── qml-format/  Narrow experimental QMF v0 reader/writer for one rank-one f64 matrix
+└── qml-cli/     CLI help, basic diagnostics, synthetic demo, and QMF validation
 ```
 
-The workspace intentionally begins with two small crates. A future crate should be introduced only when a stable responsibility warrants separation.
+The workspace stays small. A future crate should be introduced only when a stable responsibility warrants separation.
 
 ## Current data flow
 
-There is not yet a model-loading or transformation data flow. `qml-core` owns a small row-major `f64` matrix abstraction. `qml-cli` currently uses the standard library for argument handling and host diagnostics. No weights are read, written, uploaded, or transformed.
+`qml demo-rank1` creates a deterministic synthetic low-rank matrix, applies a largest-pivot rank-one cross approximation, performs matrix-vector products through the factors directly, writes the factors to an experimental `.qmf` file, reloads them, and compares output values. `qml inspect-qmf` validates and summarizes that narrow representation. The demo does not read model files or represent a pretrained model.
+
+`qml-core` owns row-major `f64` matrices and rank-one factors. `qml-format` encodes factors using the experimental QMF v0 layout documented in [`research/qmf-experimental-v0.md`](research/qmf-experimental-v0.md). `qml-cli` composes those APIs. The workspace has no external Rust dependencies.
 
 ## Design constraints
 
-- Rust is the implementation language; `unsafe` is forbidden at workspace level.
-- Avoid Python application, development, or runtime dependencies.
-- Keep imported models immutable by default when model IO is introduced.
-- Establish bounded parsing, streamed access, and resource budgets before supporting large checkpoints.
-- Require an independently testable CPU reference before acceleration.
-- Keep structural, behavioral, and computational morphogenesis independently configurable.
-- QMF remains experimental until its requirements and binary specification are validated.
-- Quantum-inspired classical computation must not be described as physical quantum computation.
+Rust is the implementation language, and `unsafe` is forbidden at workspace level. Avoid Python application, development, or runtime dependencies. Keep future imported models immutable by default. Model parsers must validate sizes, offsets, integer arithmetic, and resource budgets before allocation or access. Require an independently testable CPU reference before acceleration. Keep structural, behavioral, and computational morphogenesis independently configurable. Quantum-inspired classical computation must not be described as physical quantum computation.
+
+QMF v0 is intentionally experimental and limited to one rank-one matrix. It is not a stable general model format and has no compatibility promise. CRC-32 is only an accidental-corruption check, not authentication. The transformation is a conventional baseline; it is not claimed as novel or optimal.
 
 ## Planned boundaries (not implemented)
 
-Model inspection, transformation algorithms, behavior analysis, evolutionary search, QMF serialization, inference, hardware discovery, and desktop UI are future responsibilities. No placeholder crates are created for them yet. See [ROADMAP.md](ROADMAP.md).
+Safetensors/GGUF model loading, tensor enumeration, model configuration/tokenizer inspection, quantization algorithms, behavior analysis, evolutionary search, generalized QMF, inference, hardware discovery, and desktop UI remain future responsibilities. No placeholder crates are created for them yet. See [ROADMAP.md](ROADMAP.md).

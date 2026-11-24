@@ -5,7 +5,18 @@ version = 4
 [[package]]
 name = "qml-cli"
 version = "0.1.0"
+dependencies = [
+ "qml-core",
+ "qml-format",
+]
 
 [[package]]
 name = "qml-core"
 version = "0.1.0"
+
+[[package]]
+name = "qml-format"
+version = "0.1.0"
+dependencies = [
+ "qml-core",
+]

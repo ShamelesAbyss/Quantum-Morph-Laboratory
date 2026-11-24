@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/qml-core",
+    "crates/qml-format",
     "crates/qml-cli",
 ]
 

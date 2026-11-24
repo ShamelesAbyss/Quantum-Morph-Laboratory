@@ -8,6 +8,8 @@ name = "qml"
 path = "src/main.rs"
 
 [dependencies]
+qml-core = { path = "../qml-core" }
+qml-format = { path = "../qml-format" }
 
 [lints]
 workspace = true

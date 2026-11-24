@@ -1,0 +1,12 @@
+/target/
+*.qmf
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.model
+*.log
+.DS_Store
+Thumbs.db

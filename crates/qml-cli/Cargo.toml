@@ -1,0 +1,13 @@
+[package]
+name = "qml-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "qml"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

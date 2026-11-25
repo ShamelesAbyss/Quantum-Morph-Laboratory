@@ -1,0 +1,16 @@
+[package]
+name = "qml-hardware"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+qml-core = { path = "../qml-core" }
+serde = { version = "1", features = ["derive"] }
+sysinfo = "0.33"
+wgpu = "24"
+
+[lints]
+workspace = true

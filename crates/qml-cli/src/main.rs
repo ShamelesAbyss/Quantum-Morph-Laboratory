@@ -86,51 +86,39 @@ fn main() -> ExitCode {
 }
 
 fn doctor() -> ExitCode {
+    let hw = qml_hardware::probe_hardware();
     println!("QML host diagnostics");
-    println!("  OS: {}", env::consts::OS);
-    println!("  Architecture: {}", env::consts::ARCH);
-    match std::thread::available_parallelism() {
-        Ok(count) => println!("  Available logical parallelism: {}", count.get()),
-        Err(error) => println!("  Available logical parallelism: unavailable ({error})"),
+    println!("  OS: {}", hw.os);
+    println!("  Architecture: {}", hw.arch);
+    println!("  CPU: {}", hw.cpu_brand);
+    println!("  Available logical parallelism: {}", hw.logical_cores);
+    let simd = if hw.simd_features.is_empty() {
+        "platform baseline".to_owned()
+    } else {
+        hw.simd_features.join(", ")
+    };
+    println!("  CPU SIMD features: {simd}");
+    println!(
+        "  System RAM: {:.2} GiB available / {:.2} GiB total",
+        hw.available_ram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        hw.total_ram_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+    );
+    println!("  Recommended backend: {}", hw.recommended_backend);
+    if hw.gpus.is_empty() {
+        println!("  GPU/WGPU adapters: none detected (CPU fallback active)");
+    } else {
+        println!("  GPU/WGPU adapters ({}):", hw.gpus.len());
+        for gpu in &hw.gpus {
+            println!(
+                "    - {} [{} / {}] max_buffer={:.0} MiB",
+                gpu.name,
+                gpu.device_type,
+                gpu.backend,
+                gpu.max_buffer_size as f64 / (1024.0 * 1024.0)
+            );
+        }
     }
-    println!("  CPU SIMD features: {}", detect_cpu_simd());
-    println!("  Compute backend: CPU reference (100% safe Rust)");
-    println!("  GPU/VRAM discovery: not yet implemented");
     ExitCode::SUCCESS
-}
-
-fn detect_cpu_simd() -> String {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        let mut features = Vec::new();
-        if std::arch::is_x86_feature_detected!("sse4.2") {
-            features.push("SSE4.2");
-        }
-        if std::arch::is_x86_feature_detected!("avx") {
-            features.push("AVX");
-        }
-        if std::arch::is_x86_feature_detected!("avx2") {
-            features.push("AVX2");
-        }
-        if std::arch::is_x86_feature_detected!("fma") {
-            features.push("FMA");
-        }
-        if std::arch::is_x86_feature_detected!("f16c") {
-            features.push("F16C");
-        }
-        if std::arch::is_x86_feature_detected!("avx512f") {
-            features.push("AVX-512F");
-        }
-        if features.is_empty() {
-            "baseline x86".to_owned()
-        } else {
-            features.join(", ")
-        }
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        "non-x86 platform baseline".to_owned()
-    }
 }
 
 fn demo_rank_one(args: Vec<String>) -> ExitCode {
@@ -995,7 +983,7 @@ fn run_morph(args: Vec<String>) -> ExitCode {
         "map" => TransformStrategy::MapAdaptive {
             target_avg_bpp: target_bpp,
             propagation_weight: 0.35,
-            include_svd_rank: Some(rank),
+            include_svd_rank: None,
         },
         other => {
             eprintln!("unknown morph method {other:?}");

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/qml-core",
+    "crates/qml-hardware",
     "crates/qml-format",
     "crates/qml-model",
     "crates/qml-scope",
@@ -11,6 +12,7 @@ members = [
     "crates/qml-tokenizer",
     "crates/qml-genesis",
     "crates/qml-cli",
+    "crates/qml-desktop",
 ]
 
 [workspace.package]

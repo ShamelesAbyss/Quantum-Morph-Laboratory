@@ -41,3 +41,10 @@
   - Refactored `qml-forge` to operate strictly tensor-by-tensor (single-tensor methods) and cluster-by-cluster (RMQ methods), bounding peak transformation memory, and added `--method rmq-core` to `qml-cli`.
   - Eliminated dense `f64` embedding table reconstruction in `qml-runtime` (`QCoreModel` now performs on-demand `embed_tokens.decode_row(token_id)` and supports `tie_word_embeddings` + `QmfLatentCache`).
   - Added matched-exact-byte-budget MAP vs uniform Q4_0 unit test in `qml-quant`.
+- **Project Singularity — Phases II–IV (Real Pretrained Model Validation, WGPU Compute, Rayon Parallelism & Native Windows Desktop App `v0.1.0-alpha.1`):**
+  - Added `qml-tokenizer`: pure safe Rust Hugging Face `tokenizer.json` Byte-Level BPE tokenizer with individual-digit pre-tokenization, special tokens, ChatML formatting, and streaming token decode.
+  - Added `qml generate` CLI command and `TransformerConfig::from_hf_config_bytes` / `QCoreModel::generate_with_callback`.
+  - Parallelized `qml-quant` compressed `matvec` kernels across CPU threads using `rayon`.
+  - Validated the complete end-to-end pipeline on real `HuggingFaceTB/SmolLM2-135M-Instruct` (`experiments/exp-002-smollm2-135m.toml`): Q-Scope discovered strong adjacent-layer `k_proj` right-subspace Grassmannian affinity (`0.6455`), Q-Core generated coherent English text directly from compressed QMF v1 weights, quantization-only MAP at `4.521 bpp` beat uniform `Q4_0` (`4.511 bpp`) by 16.4% KL divergence, and the unrestricted SVD-8 MAP failure mode was honestly preserved as a negative control.
+  - Added `qml-hardware`: cross-platform CPU/SIMD/RAM telemetry, WGPU GPU adapter discovery, resource presets, and a validated WGSL compute shader `f32` matvec prototype verified against CPU on NVIDIA RTX 4070 Laptop GPU.
+  - Added `qml-desktop` (`v0.1.0-alpha.1`): native Windows desktop research workbench (`eframe`/`egui` + `egui_plot` + `rfd`) with Deep Obsidian / Ultraviolet / Electric Cyan visual identity, crash logging, persistent library state, and 10 real-engine views.

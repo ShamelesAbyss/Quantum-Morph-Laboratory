@@ -5,8 +5,8 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **PROJECT SINGULARITY — Phase I (Audit Deficiency Remediation: Rust 1.99+ Clippy, Multi-GB QMF v1, Streaming Q-Forge, Compressed Embeddings, Shared-Core RMQ, Pure-Rust SHA-256, Matched-Budget MAP)**.
-- The workspace currently contains 9 cohesive crates (`qml-core`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`); zero new external dependencies were introduced in Phase I and no Python runtime dependency exists anywhere in the graph.
+- Active takeover milestone: **PROJECT SINGULARITY — `v0.1.0-alpha.1` Complete (Audit Remediation, Pure-Rust BPE Tokenizer, Real SmolLM2-135M Validation, Rayon CPU Parallelism, WGPU Compute Prototype, and Native Windows Desktop Laboratory `qml-desktop`)**.
+- The workspace now contains **12 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
 - No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
 ## Implemented capabilities

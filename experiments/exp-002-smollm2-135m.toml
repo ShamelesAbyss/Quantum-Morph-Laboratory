@@ -1,0 +1,55 @@
+# Reproducible experimental record — Real Pretrained Model Validation (SmolLM2-135M-Instruct)
+schema_version = 1
+experiment_id = "exp-002-smollm2-135m-real-model-validation"
+created_utc = "2026-11-25T21:26:00Z"
+status = "completed"
+outcome = "validated_with_negative_control"
+
+[model]
+identifier = "HuggingFaceTB/SmolLM2-135M-Instruct"
+source_format = "safetensors (BF16, 272 tensors, 134,515,008 parameters, 269,060,552 bytes)"
+source_hash_sha256 = "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+license = "Apache-2.0"
+architecture = "LlamaForCausalLM (30 layers, hidden=576, inter=1536, heads=9, kv_heads=3, vocab=49152, tie_word_embeddings=true)"
+
+[transformation]
+name = "BF16 (Ref) | INT8_SYM (g64) | INT4_SYM (Q4_0 g32) | MAP_ADAPTIVE (Quant-Only, 4.521 bpp) | MAP_ADAPTIVE (Unrestricted SVD-8 Negative Control, 4.511 bpp)"
+version = "0.1.0"
+configuration = "qml scope --svd-rank 12; qml morph --method bf16|int8|int4|map; qml generate --chat --max-tokens 48 --compare-qmf smollm2-bf16.qmf"
+random_seed = 42
+
+[hardware]
+os = "Windows 11 Home (26H2) x86_64"
+cpu = "Intel Core i9-14900HX"
+logical_processors = 32
+system_memory_bytes = 34123513856
+accelerator = "NVIDIA GeForce RTX 4070 Laptop GPU (8 GiB VRAM, verified via WGPU DX12/Vulkan compute self-test)"
+accelerator_memory_bytes = 8332236800
+backend = "Rayon multi-threaded CPU (100% safe Rust, release profile, SSE4.2/AVX/AVX2/FMA/F16C) + WGPU compute prototype"
+
+[software]
+qml_version = "0.1.0"
+rustc_version = "1.100.0 (0ef1bc386 2026-11-09)"
+git_commit = "3180eab00be05b6f0f0e561b3f71fb63eacf95cf + rayon + qml-hardware + qml-desktop"
+dependency_lock_hash_sha256 = "ebf6dd22e14c9a0acd6e61562d832b543c168e9fe22db664b011dd684623d9fb"
+
+[evaluation]
+methodology = "End-to-end real pretrained model Q-Scope scan, streaming Q-Forge transformation to QMF v1 with complete byte accounting, pure-Rust Byte-Level BPE tokenization (qml-tokenizer), and native Q-Core compressed autoregressive text generation + exact logit KL divergence, RMSE, top-1 agreement, and perplexity vs BF16 QMF reference."
+prompt = "Explain singular value decomposition in two sentences. (ChatML template, 29 prompt tokens, greedy temp=0.0)"
+context_length = 77
+
+[results]
+input_bytes = 269060552
+qscope_findings = "Analyzed all 272 tensors (134.5M params) in 10s. Peak quantization susceptibility: model.layers.27.mlp.gate_proj.weight (score 52.30). Adjacent KProj pairs exhibit strong right-subspace Grassmannian affinity (layers.17<->18 right=0.6455, shared=0.3464, elementwise_cos=-0.0044; layers.21<->22 right=0.4290, shared=0.2807) while global 240-pair mean is 0.0648 — confirming RMQ must be selectively affinity-gated."
+bf16_reference = "269,145,551 B (16.007 complete QMF bpp, 0.007 bpp overhead), 0.00000 Frob/MV err, 6.90 tok/s, coherent English SVD explanation."
+int8_sym_g64 = "138,885,054 B (8.260 bpp, 1.94x), Frob=0.00628, MV=0.00629, Mean KL=0.00223, Logit RMSE=0.23987, Top-1=97.7%, PPL ref=5.038 vs tr=4.986, 4.29 tok/s."
+int4_sym_q4_0 = "75,847,831 B (4.511 bpp, 3.55x), Frob=0.10135, MV=0.10160, Mean KL=0.94767, Logit RMSE=3.99471, Top-1=59.1%, PPL ref=9.175 vs tr=8.140, 3.85 tok/s, degraded English ('SINGULAR VARIATION...')."
+map_quant_only_matched = "76,010,084 B (4.521 bpp, 3.54x), Frob=0.08845 (-12.7% vs Q4_0), MV=0.08891 (-12.5%), Mean KL=0.79210 (-16.4%), Logit RMSE=3.60194 (-9.8%), Top-1=61.4% (+2.3 pp), 3.22 tok/s, coherent English SVD explanation."
+map_unrestricted_svd_negative_control = "75,843,859 B (4.511 bpp). Allowing rank-8 SVD on embed_tokens lowered unweighted mean Frob error to 0.05772 (-43%) while collapsing text generation ('imimimim...', Mean KL=7.66516, Top-1=20.5%, PPL=5201.4). Preserved as falsifiable negative finding proving embedding/full-rank layers must be excluded from aggressive low-rank truncation."
+
+[limitations]
+items = [
+  "Evaluated on a 135M-parameter model (SmolLM2-135M-Instruct); billion-parameter models (1B-7B) require GPU-accelerated compressed kernels for interactive generation speed.",
+  "Q-Core currently runs on Rayon multi-threaded CPU (3.2-6.9 tok/s on 135M); WGPU compute is currently a validated dense f32 matvec prototype, not yet a full GPU Transformer runtime.",
+  "Model weights are stored locally outside Git and never committed."
+]

@@ -3,12 +3,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-1.94%2B%20(2024%20Edition)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
+  <img src="https://img.shields.io/badge/Rust-1.100%2B%20(2024%20Edition)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
   <img src="https://img.shields.io/badge/Unsafe%20Code-FORBIDDEN-06B6D4?style=for-the-badge" alt="Zero Unsafe"/>
   <img src="https://img.shields.io/badge/Python%20Deps-ZERO-0EA5E9?style=for-the-badge" alt="Zero Python"/>
-  <img src="https://img.shields.io/badge/Crates-9%20Modular-8B5CF6?style=for-the-badge" alt="9 Crates"/>
-  <img src="https://img.shields.io/badge/Tests-67%20Passing-10B981?style=for-the-badge" alt="67 Tests"/>
-  <img src="https://img.shields.io/badge/Status-Experimental%20Research%20Lab-F59E0B?style=for-the-badge" alt="Experimental"/>
+  <img src="https://img.shields.io/badge/Crates-12%20Modular-8B5CF6?style=for-the-badge" alt="12 Crates"/>
+  <img src="https://img.shields.io/badge/Tests-74%20Passing-10B981?style=for-the-badge" alt="74 Tests"/>
+  <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.1%20SINGULARITY-F59E0B?style=for-the-badge" alt="Experimental"/>
 </p>
 
 <h3 align="center"><em>Don't just compress intelligence. Transform its representation.</em></h3>
@@ -19,7 +19,7 @@
 
 ---
 
-> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is an active experimental research platform, not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. Current benchmarks run on deterministic synthetic fixtures; pretrained billion-parameter model validation, GPU kernels, and a native desktop UI remain upcoming milestones. Every byte—including scales, zero-points, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported sizes.
+> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is an active experimental research platform (`v0.1.0-alpha.1 — PROJECT SINGULARITY`), not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. QML has been validated end-to-end on both synthetic benchmarks (`exp-001`) and a real openly licensed pretrained 135M-parameter language model (`HuggingFaceTB/SmolLM2-135M-Instruct`, `exp-002`, weights stored locally outside Git). Every byte—including scales, zero-points, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported sizes, and negative controls are preserved alongside positive results.
 
 ---
 
@@ -29,26 +29,37 @@
   <img src="assets/architecture.svg" alt="Quantum Morph Laboratory Implemented Rust Pipeline Architecture" width="100%"/>
 </p>
 
-### Implemented Subsystems (9 Safe Rust Crates)
+### Implemented Subsystems (12 Safe Rust Crates)
 
 | Subsystem | Crate | Implemented Capabilities | Maturity |
 |---|---|---|---|
-| **Core Math** | `qml-core` | Validated dense matrices, `matmul`/`transpose`/`matvec_transposed`, deterministic SplitMix64 PRNG, exact **one-sided Jacobi thin SVD**, Halko–Martinsson–Tropp randomized SVD, spectral metrics (stable rank, Roy–Vetterli effective rank, 90/95/99% energy ranks), Grassmannian subspace affinity | Implemented & tested |
-| **Model Ingestion** | `qml-model` | Bounded read-only Safetensors header inspection (16 MiB cap), **constant-memory streaming** payload reader (`PayloadBudget`), exact safe-Rust codecs (`F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, ints, bool), sharded `index.json` & Hugging Face `config.json` parsers, bounded **GGUF v2/v3** metadata inspector | Implemented & tested |
-| **Q-Scope Observatory** | `qml-scope` | Two-pass streaming Welford statistics (mean, std, skewness, excess kurtosis, norms, sparsity, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy), 2D SVD structure, transformer role classification, cross-layer Grassmannian subspace affinity | Implemented & tested |
-| **Baselines, RMQ & MAP** | `qml-quant` | Conventional baselines (`FP16`, `BF16`, `INT8_SYM`, `INT8_ASYM`, `Q4_0`-style `INT4_SYM`, `Q4_1`-style `INT4_ASYM`, `LowRankSvd`, `SparseResidual`) with exact `StorageBreakdown`; **RMQ Shared-Basis** (`U·Cₗ·Vᵀ + Rₗ` via 2D-HOOI with **RPCA-inspired outlier peeling**); **RMQ Shared-Core** (`Aₗ·S·Bₗ + Rₗ`); **MAP** sensitivity + downstream spectral propagation allocator | Experimental & benchmarked |
-| **QMF Container** | `qml-format` | Experimental **QMF v0** (rank-one prototype) and **QMF v1** generalized multi-tensor binary container with a **Shared Latent Table** (`U_shared`, `V_sharedᵀ`), heterogeneous per-tensor representations, sparse COO FP16 residuals, canonical JSON manifests, per-blob & whole-file CRC-32 checks, and direct `QmfOperator::matvec` | Experimental (unstable) |
-| **Q-Forge Engine** | `qml-forge` | Read-only Safetensors → QMF v1 transformation pipeline supporting FP16, BF16, INT8, INT4, SVD, role-clustered RMQ, and MAP mixed precision with full provenance and round-trip verification (`compare`) | Experimental & tested |
-| **Q-Core Runtime** | `qml-runtime` | Native CPU reference decoder-only Llama-style Transformer (RMSNorm, RoPE, Grouped-Query Attention + KV-cache, SwiGLU MLP) executing **directly over QMF v1 compressed operators** with zero dense weight reconstruction, autoregressive token generation, KL divergence & perplexity evaluation | Experimental CPU reference |
-| **Q-Genesis** | `qml-genesis` | Multi-objective evolutionary representation search optimizing hybrid per-layer & RMQ-cluster genomes over complete effective BPP, measured matvec error, and estimated matvec FLOPs, maintaining non-dominated **Pareto frontiers** and persistent JSON archives | Experimental & tested |
-| **Laboratory CLI** | `qml-cli` | 12 commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `genesis`, `demo-rank1`) with text and `--json` output | Implemented & tested |
+| **Core Math & SHA-256** | `qml-core` | Validated dense matrices, `matmul`/`transpose`/`matvec_transposed`, SplitMix64 PRNG, exact **one-sided Jacobi thin SVD**, HMT randomized SVD, spectral metrics, Grassmannian subspace affinity, pure-Rust FIPS 180-4 **SHA-256** | Implemented & tested |
+| **Hardware & WGPU** | `qml-hardware` | Cross-platform CPU/SIMD/RAM telemetry, WGPU GPU adapter discovery, resource presets, and a validated **WGSL compute shader** `f32` matvec prototype with CPU equivalence test & graceful headless fallback | Experimental prototype |
+| **Model Ingestion** | `qml-model` | Bounded read-only Safetensors header inspection (16 MiB cap), **constant-memory streaming** payload reader (`PayloadBudget`), exact safe-Rust codecs (`F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, ints, bool), sharded `index.json` & Hugging Face `config.json` parsers, bounded **GGUF v2/v3** inspector | Implemented & tested |
+| **Q-Scope Observatory** | `qml-scope` | Two-pass streaming Welford statistics (mean, std, skewness, kurtosis, norms, sparsity, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy), 2D SVD structure, transformer role classification, cross-layer Grassmannian subspace affinity | Implemented & tested |
+| **Baselines, RMQ & MAP** | `qml-quant` | Rayon-parallelized conventional baselines (`FP16`, `BF16`, `INT8_SYM`, `INT8_ASYM`, `Q4_0`-style `INT4_SYM`, `Q4_1`-style `INT4_ASYM`, `LowRankSvd`, `SparseResidual`) with exact `StorageBreakdown`; **RMQ Shared-Basis** (`U·Cₗ·Vᵀ + Rₗ` via 2D-HOOI + outlier peeling); **RMQ Shared-Core** (`Aₗ·S·Bₗ + Rₗ`); **MAP** sensitivity + downstream spectral propagation allocator | Experimental & benchmarked |
+| **QMF Container** | `qml-format` | Experimental **QMF v0** & multi-GB **QMF v1** (`QmfBudget` default 8 GiB, streaming header-only inspector, `QmfLatentCache` `Arc` deduplication, first-class `RmqSharedCore`, on-demand `decode_row`, Shared Latent Table, sparse COO FP16 residuals, CRC-32) | Experimental (unstable) |
+| **Q-Forge Engine** | `qml-forge` | Memory-bounded tensor-by-tensor and cluster-by-cluster Safetensors → QMF v1 transformation pipeline with real SHA-256 provenance and direct round-trip matvec verification (`compare`) | Experimental & tested |
+| **Pure-Rust Tokenizer** | `qml-tokenizer` | Pure safe Rust Hugging Face `tokenizer.json` Byte-Level BPE tokenizer (GPT-2/SmolLM/Llama-3/Qwen2 style) with individual-digit pre-tokenization, special tokens, ChatML formatting, and streaming token decode | Implemented & tested |
+| **Q-Core Runtime** | `qml-runtime` | Native Rayon-parallelized Llama-style Transformer (RMSNorm, RoPE, GQA + KV-cache, SwiGLU MLP, `tie_word_embeddings`, on-demand compressed embedding lookup via `decode_row`, `Arc` shared-latent cache) executing **directly over QMF v1 compressed operators**, streaming generation, KL divergence & perplexity | Experimental CPU runtime |
+| **Q-Genesis** | `qml-genesis` | Multi-objective NSGA-II evolutionary search optimizing hybrid per-layer & RMQ-cluster genomes over complete effective BPP, measured matvec error, and estimated matvec FLOPs | Experimental & tested |
+| **Laboratory CLI** | `qml-cli` | 13 commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `generate`, `genesis`, `demo-rank1`) with text and `--json` output | Implemented & tested |
+| **Native Desktop App** | `qml-desktop` | Native Windows GUI (`eframe`/`egui` + `egui_plot` + `rfd`) with Deep Obsidian / Ultraviolet / Electric Cyan theme and 10 real-engine views: Command Center, Model Library, Q-Scope, Q-Entangle heatmap, Q-Forge Studio, Q-Genesis Pareto Lab, QMF Explorer, Q-Core Inference Chamber, RMQ Benchmarks, and System Observatory | `v0.1.0-alpha.1` |
 
-### Not Yet Implemented (Upcoming Milestones)
+### Real Pretrained Model Validation (`HuggingFaceTB/SmolLM2-135M-Instruct`, `exp-002`)
 
-- Pretrained open-weight model evaluation campaigns (e.g., SmolLM / TinyLlama local validation without committing weights)
-- GPU compute backends (WGPU / Vulkan / CUDA targeting RTX 4070 Laptop 8 GB VRAM) & SIMD-accelerated CPU kernels
-- Q-Behavior activation/behavioral interpretability & regression suite
-- Native Rust desktop research laboratory UI (`qml-desktop`)
+Measured directly from `qml.exe --release` on Windows 11 x86_64 (Intel Core i9-14900HX, 32 threads, Apache-2.0 source `model.safetensors` SHA-256 `5af571cb...`, 134,515,008 parameters, 269,060,552 bytes; see [`experiments/exp-002-smollm2-135m.toml`](experiments/exp-002-smollm2-135m.toml)):
+
+| QMF v1 Variant | Complete QMF Bytes | Complete BPP | Mean MV Err | Mean KL vs BF16 | Logit RMSE | Top-1 Match | Direct CPU Tok/s | Generated English Quality |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `BF16` (Reference) | 269,145,551 | 16.007 *(0.007 overhead)* | 0.00000 | 0.00000 | 0.00000 | 100.0% | 6.90 | Coherent SVD explanation |
+| `INT8_SYM (g64)` | 138,885,054 | 8.260 *(1.94×)* | 0.00629 | 0.00223 | 0.23987 | 97.7% | 4.29 | Near-identical to BF16 |
+| `INT4_SYM (Q4_0 g32)` | 75,847,831 | 4.511 *(3.55×)* | 0.10160 | 0.94767 | 3.99471 | 59.1% | 3.85 | Degraded (`"SINGULAR VARIATION..."`) |
+| **`MAP (Quant-Only, matched)`** | **76,010,084** | **4.521 *(3.54×)*** | **0.08891 (−12.5%)** | **0.79210 (−16.4%)** | **3.60194 (−9.8%)** | **61.4%** | 3.22 | **Coherent SVD explanation** |
+| `MAP (Unrestricted SVD-8 — Control)` | 75,843,859 | 4.511 | 0.05817 *(misleading)* | 7.66516 *(collapsed)* | 10.19178 | 20.5% | 0.68 | Collapsed (`"imimimim..."`) |
+
+- **Real Cross-Layer Affinity (Q-Scope):** On `SmolLM2-135M`, adjacent `k_proj` layers exhibit strong right-subspace Grassmannian affinity (`layers.17 <-> 18` right=`0.6455`, shared=`0.3464` despite element-wise cosine `-0.0044`), while the 240-pair global mean is `0.0648`—confirming RMQ must be selectively affinity-gated.
+- **Preserved Negative Control:** Allowing rank-8 SVD on full-rank `embed_tokens` inside MAP lowered unweighted Frobenius error by 43% while destroying generation (`PPL = 5201`), proving why quantization-only MAP (or embedding-protected menus) is mandatory on real LLMs.
 
 ---
 

@@ -13,6 +13,7 @@ qml-core = { path = "../qml-core" }
 qml-forge = { path = "../qml-forge" }
 qml-format = { path = "../qml-format" }
 qml-genesis = { path = "../qml-genesis" }
+qml-hardware = { path = "../qml-hardware" }
 qml-model = { path = "../qml-model" }
 qml-quant = { path = "../qml-quant" }
 qml-runtime = { path = "../qml-runtime" }

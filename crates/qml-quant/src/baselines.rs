@@ -10,6 +10,7 @@
 use crate::{LinearOperator, StorageBreakdown};
 use qml_core::{DenseMatrix, MatrixError, truncated_svd};
 use qml_model::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 const BASE_HEADER_BYTES: usize = 16;
@@ -89,15 +90,29 @@ impl LinearOperator for Fp16Matrix {
                 actual: vector.len(),
             });
         }
-        let mut out = vec![0.0_f64; self.rows];
-        for (r, slot) in out.iter_mut().enumerate() {
-            let row = &self.data[r * self.cols..(r + 1) * self.cols];
-            *slot = row
-                .iter()
-                .zip(vector)
-                .map(|(&bits, &x)| f64::from(f16_to_f32(bits)) * x)
-                .sum();
-        }
+        let cols = self.cols;
+        let out = if self.rows >= 64 {
+            (0..self.rows)
+                .into_par_iter()
+                .map(|r| {
+                    let row = &self.data[r * cols..(r + 1) * cols];
+                    row.iter()
+                        .zip(vector)
+                        .map(|(&bits, &x)| f64::from(f16_to_f32(bits)) * x)
+                        .sum()
+                })
+                .collect()
+        } else {
+            (0..self.rows)
+                .map(|r| {
+                    let row = &self.data[r * cols..(r + 1) * cols];
+                    row.iter()
+                        .zip(vector)
+                        .map(|(&bits, &x)| f64::from(f16_to_f32(bits)) * x)
+                        .sum()
+                })
+                .collect()
+        };
         Ok(out)
     }
 
@@ -195,15 +210,29 @@ impl LinearOperator for Bf16Matrix {
                 actual: vector.len(),
             });
         }
-        let mut out = vec![0.0_f64; self.rows];
-        for (r, slot) in out.iter_mut().enumerate() {
-            let row = &self.data[r * self.cols..(r + 1) * self.cols];
-            *slot = row
-                .iter()
-                .zip(vector)
-                .map(|(&bits, &x)| f64::from(bf16_to_f32(bits)) * x)
-                .sum();
-        }
+        let cols = self.cols;
+        let out = if self.rows >= 64 {
+            (0..self.rows)
+                .into_par_iter()
+                .map(|r| {
+                    let row = &self.data[r * cols..(r + 1) * cols];
+                    row.iter()
+                        .zip(vector)
+                        .map(|(&bits, &x)| f64::from(bf16_to_f32(bits)) * x)
+                        .sum()
+                })
+                .collect()
+        } else {
+            (0..self.rows)
+                .map(|r| {
+                    let row = &self.data[r * cols..(r + 1) * cols];
+                    row.iter()
+                        .zip(vector)
+                        .map(|(&bits, &x)| f64::from(bf16_to_f32(bits)) * x)
+                        .sum()
+                })
+                .collect()
+        };
         Ok(out)
     }
 
@@ -346,8 +375,7 @@ impl LinearOperator for Int8SymMatrix {
                 actual: vector.len(),
             });
         }
-        let mut out = vec![0.0_f64; self.rows];
-        for (r, slot) in out.iter_mut().enumerate() {
+        let compute_row = |r: usize| -> f64 {
             let base = r * self.cols;
             let mut acc = 0.0_f64;
             for (c, &x) in vector.iter().enumerate() {
@@ -355,8 +383,13 @@ impl LinearOperator for Int8SymMatrix {
                 let scale = f64::from(f16_to_f32(self.scales_f16[idx / self.group_size]));
                 acc += (f64::from(self.codes[idx]) * scale) * x;
             }
-            *slot = acc;
-        }
+            acc
+        };
+        let out = if self.rows >= 64 {
+            (0..self.rows).into_par_iter().map(compute_row).collect()
+        } else {
+            (0..self.rows).map(compute_row).collect()
+        };
         Ok(out)
     }
 
@@ -648,15 +681,19 @@ impl LinearOperator for Int4SymGroupMatrix {
                 actual: vector.len(),
             });
         }
-        let mut out = vec![0.0_f64; self.rows];
-        for (r, slot) in out.iter_mut().enumerate() {
+        let compute_row = |r: usize| -> f64 {
             let base = r * self.cols;
             let mut acc = 0.0_f64;
             for (c, &x) in vector.iter().enumerate() {
                 acc += self.decode_at(base + c) * x;
             }
-            *slot = acc;
-        }
+            acc
+        };
+        let out = if self.rows >= 64 {
+            (0..self.rows).into_par_iter().map(compute_row).collect()
+        } else {
+            (0..self.rows).map(compute_row).collect()
+        };
         Ok(out)
     }
 
@@ -844,15 +881,19 @@ impl LinearOperator for Int4AsymGroupMatrix {
                 actual: vector.len(),
             });
         }
-        let mut out = vec![0.0_f64; self.rows];
-        for (r, slot) in out.iter_mut().enumerate() {
+        let compute_row = |r: usize| -> f64 {
             let base = r * self.cols;
             let mut acc = 0.0_f64;
             for (c, &x) in vector.iter().enumerate() {
                 acc += self.decode_at(base + c) * x;
             }
-            *slot = acc;
-        }
+            acc
+        };
+        let out = if self.rows >= 64 {
+            (0..self.rows).into_par_iter().map(compute_row).collect()
+        } else {
+            (0..self.rows).map(compute_row).collect()
+        };
         Ok(out)
     }
 

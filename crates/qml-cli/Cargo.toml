@@ -12,6 +12,7 @@ path = "src/main.rs"
 qml-core = { path = "../qml-core" }
 qml-format = { path = "../qml-format" }
 qml-model = { path = "../qml-model" }
+qml-scope = { path = "../qml-scope" }
 serde_json = "1"
 
 [lints]

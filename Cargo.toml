@@ -4,6 +4,7 @@ members = [
     "crates/qml-core",
     "crates/qml-format",
     "crates/qml-model",
+    "crates/qml-scope",
     "crates/qml-cli",
 ]
 

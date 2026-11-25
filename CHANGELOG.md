@@ -13,4 +13,8 @@
 - Added `qml-model` with bounded, read-only Safetensors metadata inspection and text/JSON CLI reporting. The parser validates duplicate keys, dtype/shape size arithmetic, offsets, contiguous layouts, header/resource limits, and file length without reading payload bytes.
 - Added property-based tests and generated F32/F4 differential fixtures checked by the exact-pinned Safetensors 0.8.0 dev dependency; no model weights or third-party datasets are included.
 - Added a source-linked Safetensors research note and an architectural decision record for the header-only parser and its tradeoffs.
-- Safetensors payload analysis, model transformation, inference, and real-model benchmark functionality remain unimplemented; no QML novelty or general compression result is claimed.
+- **Milestone I — Q-Scope Foundation:**
+  - Extended `qml-core` with full dense linear algebra (`transpose`, `matmul`, `matvec_transposed`, cosine similarity), deterministic SplitMix64 PRNG, exact one-sided Jacobi thin SVD, deterministic Halko–Martinsson–Tropp randomized SVD, spectral metrics (stable rank, Roy–Vetterli effective rank, energy ranks), and Grassmannian subspace affinity.
+  - Extended `qml-model` with bounded & constant-memory streaming Safetensors tensor payload access (`SafetensorsFile`, `PayloadBudget`), exact safe-Rust dtype codecs (`F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, `F32`, `F64`, ints, bool), sharded Safetensors index parser, Hugging Face `config.json` parser, and bounded read-only GGUF v2/v3 metadata inspector (`inspect_gguf`).
+  - Added `qml-scope` (Q-Scope Neural Model Observatory) with two-pass streaming distributional statistics, sparsity & outlier detection, histogram/entropy estimation, quantization susceptibility proxy, 2D matrix SVD structure analysis, transformer role classification, and cross-layer subspace affinity analysis.
+  - Added `qml scope` and `qml inspect-gguf` CLI commands and upgraded `qml doctor` with safe CPU SIMD feature detection.

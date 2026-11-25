@@ -4,35 +4,28 @@
 
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
-- Local workspace: `/home/ubuntu/Quantum-Morph-Laboratory`
-- Safetensors implementation commit: `e90cbb7` (`Add bounded Safetensors metadata inspection`).
-- Verified milestone head: `a16490d` (`Update handoff for Safetensors inspection milestone`); GitHub Actions run `45582096501` passed on this SHA.
-- The complete original directive and both continuations are preserved in `MASTER_DEVELOPMENT_DIRECTIVE.md`.
-- Rust stable 1.100.0 is installed in this sandbox. Cargo may require `source "$HOME/.cargo/env"` in a fresh shell.
-- The workspace contains `qml-core`, `qml-format`, `qml-model`, and `qml-cli`; no Python runtime dependency is present in the normal or development dependency graph.
+- Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
+- Active takeover milestone: **Milestone I — Q-Scope Foundation** (bounded Safetensors tensor payload access, exact numerical dtype codecs, GGUF v2/v3 metadata inspection, one-sided Jacobi & randomized SVD, and `qml-scope` neural observatory).
+- The workspace now contains `qml-core`, `qml-format`, `qml-model`, `qml-scope`, and `qml-cli`; zero new external dependencies were introduced and no Python runtime dependency exists anywhere in the graph.
 - No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
 ## Implemented capabilities
 
-`qml-core` provides validated dense-matrix primitives and a deterministic conventional largest-pivot rank-one baseline, including direct factorized matrix-vector multiplication and Frobenius reconstruction error. `qml-format` provides a bounded reader and deterministic writer for an experimental single-rank-one-`f64` QMF v0 file; this is not a general model format and CRC-32 is not authentication. The synthetic demo is not a pretrained-model result.
-
-`qml-model` provides a bounded, read-only Safetensors metadata inspector. It reads the 8-byte prefix and at most 16 MiB of header, seeks to determine file length, and never reads or maps payload bytes. It rejects malformed/duplicate JSON keys, unknown tensor fields and dtypes, excessive rank/tensor counts, arithmetic overflow, unaligned sub-byte tensors, invalid offsets, gaps/overlaps, and file-length mismatch. Results are deterministically sorted. `qml inspect-safetensors PATH` emits text; `qml inspect-safetensors --json PATH` emits JSON. It does not validate tensor values, identify architecture, or transform models.
-
-Generated F32 and F4 fixtures are differentially checked against the exact-pinned Safetensors 0.8.0 crate in development tests. Property-based shape tests and CLI integration tests use synthetic bytes only. Research and design rationale are in `research/safetensors-inspection.md` and `docs/decisions/0001-bounded-safetensors-inspection.md`.
+- `qml-core`: Validated dense-matrix primitives (`transpose`, `matmul`, `matvec_transposed`, element-wise ops, cosine similarity), deterministic SplitMix64 PRNG, deterministic one-sided Jacobi exact thin SVD, deterministic Halko–Martinsson–Tropp randomized SVD, direct factorized matrix-vector multiplication (`U (Σ (Vᵀ x))`), spectral summary metrics (spectral norm, stable rank, Roy–Vetterli effective rank, 90%/95%/99% Frobenius energy ranks, Grassmannian subspace affinity), plus the original largest-pivot rank-one baseline.
+- `qml-model`: Bounded read-only Safetensors header inspection (16 MiB cap), bounded & constant-memory streaming Safetensors payload reader (`SafetensorsFile`, `PayloadBudget`), pure safe Rust bit-exact codecs (`F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, integer/bool), sharded Safetensors index parser (`model.safetensors.index.json`), Hugging Face `config.json` parser, and bounded read-only GGUF v2/v3 metadata/tensor-directory inspector (`inspect_gguf`).
+- `qml-scope`: Q-Scope Neural Model Observatory computing two-pass constant-memory streaming statistics (Welford mean/variance, skewness, excess kurtosis, norms, sparsity fractions, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy), 2D matrix SVD spectrum analysis, transformer layer-role classification, and pairwise cross-layer Grassmannian subspace affinity analysis.
+- `qml-format`: Bounded reader and deterministic writer for experimental QMF v0 single rank-one `f64` matrix.
+- `qml-cli`: `doctor` (with safe x86 SIMD detection), `demo-rank1`, `inspect-qmf`, `inspect-safetensors`, `inspect-gguf`, and `scope` (text and JSON).
 
 ## Validation actually executed on the implementation
 
-All of the following passed locally after the final parser edits:
+All of the following passed locally on Windows 11 with Rust 1.94.0:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace` — 32 tests passed: 8 `qml-core`, 6 `qml-format`, 13 `qml-model` unit tests, 2 Safetensors oracle integration tests, and 3 CLI integration tests.
+- `cargo test --workspace` — 54 tests passed (15 `qml-core`, 6 `qml-format`, 24 `qml-model` unit + 2 Safetensors oracle, 2 `qml-scope`, 5 `qml-cli` integration).
 - `cargo build --workspace`
-- `cargo deny check` with cargo-deny 0.21.0 — advisories, bans, licenses, and sources all passed.
-- `git diff --check` and a Node-based scan of 35 Markdown files — all relative links resolved; all three directive-part markers were present.
-- `cargo tree --workspace -e normal,dev` search found no Python/PyO3-related dependencies.
-
-GitHub Actions run `45582096501` passed on `a16490d9bfff5326cd02f073bcbb7b1597157999`. Both `ubuntu-latest` and `windows-latest` passed formatting, tests, workspace build, and Clippy. The Ubuntu dependency-policy job passed cargo-deny advisory, ban, license, and source checks. The run reported a non-failing `actions/checkout@v4` Node.js 20 deprecation warning; it did not affect job results.
+- Zero new third-party dependencies added (preserves `cargo-deny` policy compliance; CI `dependency-policy` job verifies on push).
 
 ## Research and design findings
 

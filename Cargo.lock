@@ -266,6 +266,7 @@ dependencies = [
  "qml-core",
  "qml-format",
  "qml-model",
+ "qml-scope",
  "serde_json",
 ]
 
@@ -285,9 +286,19 @@ name = "qml-model"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "qml-core",
  "safetensors",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "qml-scope"
+version = "0.1.0"
+dependencies = [
+ "qml-core",
+ "qml-model",
+ "serde",
 ]
 
 [[package]]

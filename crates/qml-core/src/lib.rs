@@ -4,6 +4,15 @@
 //! rank-one pivot approximation here is a simple baseline, not an optimal
 //! truncated-SVD approximation.
 
+pub mod rng;
+pub mod svd;
+
+pub use rng::DeterministicRng;
+pub use svd::{
+    SpectrumMetrics, SvdResult, exact_thin_svd, randomized_svd, spectrum_metrics_from_values,
+    subspace_affinity_columns, truncated_svd,
+};
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -27,6 +36,10 @@ pub enum MatrixError {
     },
     NonFiniteValue {
         index: usize,
+    },
+    InvalidRank {
+        requested: usize,
+        max_rank: usize,
     },
 }
 
@@ -55,6 +68,10 @@ impl Display for MatrixError {
             Self::NonFiniteValue { index } => {
                 write!(f, "non-finite value at flat element index {index}")
             }
+            Self::InvalidRank {
+                requested,
+                max_rank,
+            } => write!(f, "invalid rank {requested}: must be within 1..={max_rank}"),
         }
     }
 }
@@ -155,6 +172,157 @@ impl DenseMatrix {
             .map(|value| value * value)
             .sum::<f64>()
             .sqrt()
+    }
+
+    /// Construct an all-zero matrix with validated non-zero dimensions.
+    pub fn zeros(rows: usize, cols: usize) -> Result<Self, MatrixError> {
+        if rows == 0 || cols == 0 {
+            return Err(MatrixError::Empty);
+        }
+        let Some(count) = rows.checked_mul(cols) else {
+            return Err(MatrixError::ElementCountMismatch {
+                expected: usize::MAX,
+                actual: 0,
+            });
+        };
+        Ok(Self {
+            rows,
+            cols,
+            data: vec![0.0; count],
+        })
+    }
+
+    /// Return the transpose `selfᵀ` (`cols × rows`).
+    pub fn transpose(&self) -> Self {
+        let mut out = vec![0.0_f64; self.data.len()];
+        for r in 0..self.rows {
+            let row_start = r * self.cols;
+            for c in 0..self.cols {
+                out[c * self.rows + r] = self.data[row_start + c];
+            }
+        }
+        Self {
+            rows: self.cols,
+            cols: self.rows,
+            data: out,
+        }
+    }
+
+    /// Compute `selfᵀ * vector` without materializing the transpose.
+    pub fn matvec_transposed(&self, vector: &[f64]) -> Result<Vec<f64>, MatrixError> {
+        if vector.len() != self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: vector.len(),
+            });
+        }
+        let mut output = vec![0.0_f64; self.cols];
+        for (r, &v) in vector.iter().enumerate() {
+            if v == 0.0 {
+                continue;
+            }
+            let row = &self.data[r * self.cols..(r + 1) * self.cols];
+            for (out, &w) in output.iter_mut().zip(row) {
+                *out += w * v;
+            }
+        }
+        Ok(output)
+    }
+
+    /// Compute dense matrix-matrix product `self * other`.
+    pub fn matmul(&self, other: &Self) -> Result<Self, MatrixError> {
+        if self.cols != other.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.cols,
+                actual: other.rows,
+            });
+        }
+        let m = self.rows;
+        let k = self.cols;
+        let n = other.cols;
+        let Some(count) = m.checked_mul(n) else {
+            return Err(MatrixError::ElementCountMismatch {
+                expected: usize::MAX,
+                actual: 0,
+            });
+        };
+        let mut out = vec![0.0_f64; count];
+        for i in 0..m {
+            let a_row = &self.data[i * k..(i + 1) * k];
+            let c_row = &mut out[i * n..(i + 1) * n];
+            for (p, &a_ip) in a_row.iter().enumerate() {
+                if a_ip == 0.0 {
+                    continue;
+                }
+                let b_row = &other.data[p * n..(p + 1) * n];
+                for (c_ij, &b_pj) in c_row.iter_mut().zip(b_row) {
+                    *c_ij += a_ip * b_pj;
+                }
+            }
+        }
+        Self::from_flat(m, n, out)
+    }
+
+    /// Element-wise addition `self + other`.
+    pub fn add(&self, other: &Self) -> Result<Self, MatrixError> {
+        self.check_same_shape(other)?;
+        let data = self
+            .data
+            .iter()
+            .zip(&other.data)
+            .map(|(a, b)| a + b)
+            .collect();
+        Self::from_flat(self.rows, self.cols, data)
+    }
+
+    /// Element-wise subtraction `self - other`.
+    pub fn sub(&self, other: &Self) -> Result<Self, MatrixError> {
+        self.check_same_shape(other)?;
+        let data = self
+            .data
+            .iter()
+            .zip(&other.data)
+            .map(|(a, b)| a - b)
+            .collect();
+        Self::from_flat(self.rows, self.cols, data)
+    }
+
+    /// Scalar multiplication `factor * self`.
+    pub fn scale(&self, factor: f64) -> Result<Self, MatrixError> {
+        if !factor.is_finite() {
+            return Err(MatrixError::NonFiniteValue { index: 0 });
+        }
+        let data = self.data.iter().map(|v| v * factor).collect();
+        Self::from_flat(self.rows, self.cols, data)
+    }
+
+    /// Frobenius inner product `sum(self[i,j] * other[i,j])`.
+    pub fn frobenius_inner(&self, other: &Self) -> Result<f64, MatrixError> {
+        self.check_same_shape(other)?;
+        Ok(self.data.iter().zip(&other.data).map(|(a, b)| a * b).sum())
+    }
+
+    /// Cosine similarity between flattened weight matrices (`0.0` if either norm is zero).
+    pub fn cosine_similarity(&self, other: &Self) -> Result<f64, MatrixError> {
+        let dot = self.frobenius_inner(other)?;
+        let denom = self.frobenius_norm() * other.frobenius_norm();
+        if denom <= 1e-30 {
+            Ok(0.0)
+        } else {
+            Ok((dot / denom).clamp(-1.0, 1.0))
+        }
+    }
+
+    fn check_same_shape(&self, other: &Self) -> Result<(), MatrixError> {
+        if self.rows != other.rows || self.cols != other.cols {
+            return Err(MatrixError::ShapeMismatch {
+                expected_rows: self.rows,
+                expected_cols: self.cols,
+                actual_rows: other.rows,
+                actual_cols: other.cols,
+            });
+        }
+        Ok(())
     }
 
     /// Build a rank-one cross approximation using the largest-magnitude pivot.

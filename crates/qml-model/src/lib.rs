@@ -1,7 +1,31 @@
-//! Bounded, read-only inspection of Safetensors headers.
+//! Bounded, read-only model format inspection and tensor payload access.
 //!
-//! This crate reads the eight-byte header-length prefix and a bounded JSON
-//! header. It seeks over, but never reads or maps, tensor payload bytes.
+//! Supports:
+//! - Safetensors metadata-only inspection (bounded 16 MiB header cap, never reads payloads)
+//! - Safetensors bounded & streaming tensor payload access with safe dtype conversion
+//! - Sharded Safetensors index (`model.safetensors.index.json`) parsing
+//! - Hugging Face `config.json` architecture metadata parsing
+//! - Bounded, read-only GGUF v2/v3 metadata & tensor-directory inspection
+
+pub mod config;
+pub mod dtype;
+pub mod gguf;
+pub mod payload;
+
+pub use config::{MAX_CONFIG_BYTES, ModelConfig};
+pub use dtype::{
+    DType, bf16_to_f32, decode_chunk_to_f64, f8_e4m3_to_f32, f8_e5m2_to_f32, f16_to_f32,
+    f32_to_bf16, f32_to_f16,
+};
+pub use gguf::{
+    GGUF_MAGIC, GgufError, GgufMetadata, GgufTensorInfo, GgufValueSummary, ggml_type_name,
+    inspect_gguf,
+};
+pub use payload::{
+    DEFAULT_MAX_TENSOR_BYTES, DEFAULT_MAX_TOTAL_BYTES, DEFAULT_STREAM_CHUNK_ELEMENTS,
+    PayloadBudget, PayloadError, SafetensorsFile, SafetensorsShardIndex, encode_safetensors,
+    parse_shard_index, tensor_element_count,
+};
 
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};

@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440">
+  <defs>
+    <linearGradient id="bbg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070810"/>
+      <stop offset="100%" stop-color="#0D0A1E"/>
+    </linearGradient>
+    <linearGradient id="barCyan" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0891B2"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="barUv" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#C084FC"/>
+    </linearGradient>
+    <linearGradient id="barRose" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#BE123C"/>
+      <stop offset="100%" stop-color="#FB7185"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="440" rx="14" fill="url(#bbg)" stroke="#241E44" stroke-width="1.2"/>
+  <text x="30" y="36" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="700">MEASURED EXPERIMENTAL BENCHMARKS (RELEASE BUILD · WINDOWS 11 · INTEL i9-14900HX · CPU REFERENCE)</text>
+  <text x="30" y="55" fill="#94A3B8" font-family="ui-monospace, monospace" font-size="11">Complete serialized byte accounting (all scales, shared bases, indices &amp; manifests included). Synthetic fixtures; not pretrained LLM claims.</text>
+
+  <!-- LEFT PANEL: RMQ Ablation (8x64x64 Correlated Shared Subspace) -->
+  <g transform="translate(30, 76)">
+    <rect width="555" height="336" rx="10" fill="#0B0D19" stroke="#28224A" stroke-width="1"/>
+    <text x="18" y="26" fill="#D8B4FE" font-family="ui-monospace, monospace" font-size="13" font-weight="700">RMQ ABLATION — 8×64×64 CORRELATED CLUSTER (32,768 PARAMS)</text>
+    <text x="18" y="44" fill="#94A3B8" font-family="sans-serif" font-size="11">Effective Bits/Param (lower = smaller) vs Relative Frobenius Error (lower = better)</text>
+
+    <!-- Plot axes -->
+    <line x1="72" y1="68" x2="72" y2="270" stroke="#334155" stroke-width="1.2"/>
+    <line x1="72" y1="270" x2="525" y2="270" stroke="#334155" stroke-width="1.2"/>
+
+    <!-- Gridlines -->
+    <g stroke="#1E293B" stroke-width="0.8" stroke-dasharray="3 3">
+      <line x1="72" y1="220" x2="525" y2="220"/>
+      <line x1="72" y1="170" x2="525" y2="170"/>
+      <line x1="72" y1="120" x2="525" y2="120"/>
+      <line x1="72" y1="70" x2="525" y2="70"/>
+      <line x1="172" y1="68" x2="172" y2="270"/>
+      <line x1="272" y1="68" x2="272" y2="270"/>
+      <line x1="372" y1="68" x2="372" y2="270"/>
+      <line x1="472" y1="68" x2="472" y2="270"/>
+    </g>
+
+    <!-- Axis labels -->
+    <g fill="#94A3B8" font-family="ui-monospace, monospace" font-size="10">
+      <text x="64" y="274" text-anchor="end">0.00</text>
+      <text x="64" y="224" text-anchor="end">0.08</text>
+      <text x="64" y="174" text-anchor="end">0.16</text>
+      <text x="64" y="124" text-anchor="end">0.24</text>
+      <text x="64" y="74" text-anchor="end">0.32</text>
+
+      <text x="72" y="286" text-anchor="middle">0</text>
+      <text x="172" y="286" text-anchor="middle">2</text>
+      <text x="272" y="286" text-anchor="middle">4</text>
+      <text x="372" y="286" text-anchor="middle">6</text>
+      <text x="472" y="286" text-anchor="middle">8 bpp</text>
+    </g>
+
+    <!-- Data points: x = 72 + bpp * 50, y = 270 - (err / 0.32) * 200 -->
+    <!-- Pareto polyline: RMQ_BASIS+1% (0.867, 0.1422) -> RMQ_CORE+1% (2.098, 0.0670) -> INT8 (8.289, 0.00854) -->
+    <polyline points="115.4,181.1 151.7,225.5 176.9,228.1 486.5,264.7" fill="none" stroke="#22D3EE" stroke-width="1.6" stroke-dasharray="4 3" opacity="0.7"/>
+
+    <!-- RMQ_SHARED_BASIS (0.387, 0.30349) -> (91.4, 80.3) -->
+    <circle cx="91.4" cy="80.3" r="6" fill="#A855F7" stroke="#F8FAFC" stroke-width="1.2"/>
+    <text x="102" y="84" fill="#D8B4FE" font-family="ui-monospace, monospace" font-size="10">RMQ Basis (0.39 bpp, 0.303)</text>
+
+    <!-- RMQ_SHARED_BASIS+SPARSE1% (0.867, 0.14223) -> (115.4, 181.1) -->
+    <circle cx="115.4" cy="181.1" r="7.5" fill="#22D3EE" stroke="#F8FAFC" stroke-width="1.5"/>
+    <text x="128" y="177" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="10.5" font-weight="700">RMQ Basis+1% Sparse (0.87 bpp, 0.142)</text>
+
+    <!-- INDEPENDENT_SVD_INT8 (1.594, 0.07123) -> (151.7, 225.5) -->
+    <circle cx="151.7" cy="225.5" r="5.5" fill="#64748B" stroke="#E2E8F0" stroke-width="1"/>
+    <text x="162" y="218" fill="#CBD5E1" font-family="ui-monospace, monospace" font-size="9.8">Indep. SVD INT8 (1.59 bpp, 0.071)</text>
+
+    <!-- RMQ_SHARED_CORE+SPARSE1% (2.098, 0.06703) -> (176.9, 228.1) -->
+    <circle cx="176.9" cy="228.1" r="7" fill="#C084FC" stroke="#F8FAFC" stroke-width="1.4"/>
+    <text x="188" y="242" fill="#E9D5FF" font-family="ui-monospace, monospace" font-size="10.2" font-weight="700">RMQ Core+1% (2.10 bpp, 0.067)</text>
+
+    <!-- Q4_0 (4.539, 0.10226) -> (299.0, 206.1) -->
+    <circle cx="299.0" cy="206.1" r="6" fill="#F59E0B" stroke="#FEF3C7" stroke-width="1.2"/>
+    <text x="310" y="209" fill="#FCD34D" font-family="ui-monospace, monospace" font-size="10">Q4_0 g32 (4.54 bpp, 0.102)</text>
+
+    <!-- INT8_SYM (8.289, 0.00854) -> (486.5, 264.7) -->
+    <circle cx="486.5" cy="264.7" r="6" fill="#10B981" stroke="#D1FAE5" stroke-width="1.2"/>
+    <text x="478" y="253" text-anchor="end" fill="#6EE7B7" font-family="ui-monospace, monospace" font-size="10">INT8 g64 (8.29 bpp, 0.009)</text>
+
+    <!-- Control caveat box -->
+    <rect x="18" y="298" width="519" height="28" rx="6" fill="#181228" stroke="#4C1D95" stroke-width="0.9"/>
+    <text x="28" y="316" fill="#CBD5E1" font-family="ui-monospace, monospace" font-size="10">Control (i.i.d. full-rank Gaussian): Q4_0 (0.097) beats RMQ (0.80–0.92). Subspace affinity required.</text>
+  </g>
+
+  <!-- RIGHT PANEL: Q-Core Direct-Compressed Mini-Llama Inference -->
+  <g transform="translate(610, 76)">
+    <rect width="560" height="336" rx="10" fill="#0B0D19" stroke="#28224A" stroke-width="1"/>
+    <text x="18" y="26" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="13" font-weight="700">Q-CORE DIRECT-COMPRESSED INFERENCE (4L MINI-LLAMA QMF v1)</text>
+    <text x="18" y="44" fill="#94A3B8" font-family="sans-serif" font-size="11">Measured throughput (tok/s, zero dense rebuild) &amp; Mean KL Divergence vs FP16</text>
+
+    <!-- Bars for Throughput (max = 9057 tok/s -> width 270px) -->
+    <g transform="translate(18, 68)" font-family="ui-monospace, monospace" font-size="10.5">
+      <!-- Row 1: FP16 -->
+      <text x="0" y="16" fill="#E2E8F0" font-weight="600">FP16 Ref (17.39 bpp)</text>
+      <rect x="180" y="4" width="111" height="18" rx="4" fill="#475569"/>
+      <text x="298" y="17" fill="#CBD5E1">3,733 tok/s · KL 0.0000 · Top1 100%</text>
+
+      <!-- Row 2: INT8 -->
+      <text x="0" y="64" fill="#E2E8F0" font-weight="600">INT8 g64 (10.14 bpp)</text>
+      <rect x="180" y="52" width="94" height="18" rx="4" fill="#10B981"/>
+      <text x="282" y="65" fill="#6EE7B7">3,146 tok/s · KL 0.0002 · Top1 100%</text>
+
+      <!-- Row 3: MAP Adaptive -->
+      <text x="0" y="112" fill="#E9D5FF" font-weight="700">MAP Mix  ( 7.49 bpp)</text>
+      <rect x="180" y="100" width="75" height="18" rx="4" fill="url(#barUv)"/>
+      <text x="263" y="113" fill="#D8B4FE">2,526 tok/s · KL 0.0057 · Top1 77.8%</text>
+
+      <!-- Row 4: Q4_0 -->
+      <text x="0" y="160" fill="#FDE68A" font-weight="600">Q4_0 g32 ( 6.43 bpp)</text>
+      <rect x="180" y="148" width="76" height="18" rx="4" fill="url(#barRose)"/>
+      <text x="264" y="161" fill="#FDA4AF">2,557 tok/s · KL 0.0670 · Top1 44.4%</text>
+
+      <!-- Row 5: RMQ Shared-Basis -->
+      <text x="0" y="208" fill="#67E8F9" font-weight="700">RMQ+Sp1% ( 5.31 bpp)</text>
+      <rect x="180" y="196" width="270" height="18" rx="4" fill="url(#barCyan)"/>
+      <text x="186" y="209" fill="#04121C" font-weight="700">9,057 tok/s (2.43× FP16!)</text>
+      <text x="180" y="229" fill="#67E8F9" font-size="10">KL 0.0604 (better than Q4_0) · Top1 55.6% · 26.7 KB QMF</text>
+    </g>
+
+    <!-- Bottom summary box -->
+    <rect x="18" y="298" width="524" height="28" rx="6" fill="#0F1C2A" stroke="#0E7490" stroke-width="0.9"/>
+    <text x="28" y="316" fill="#BAE6FD" font-family="ui-monospace, monospace" font-size="10">MAP cuts KL divergence 11.8× vs Q4_0; RMQ cuts FLOPs &amp; hits 3.54× Q4_0 CPU speed.</text>
+  </g>
+</svg>

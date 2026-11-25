@@ -29,3 +29,8 @@
   - Added `qml-runtime` (Q-Core) native CPU decoder-only Transformer executing directly over QMF v1 compressed operators with RMSNorm, RoPE, Grouped-Query Attention + KV-cache, SwiGLU MLP, autoregressive token generation, and KL-divergence / perplexity evaluation.
   - Added `qml-genesis` (Q-Genesis) multi-objective evolutionary search discovering Pareto-optimal hybrid precision/SVD/RMQ genomes with persistent JSON experiment archives.
   - Integrated `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `genesis`, and QMF v0/v1 `inspect-qmf` into `qml-cli`.
+- **Milestone VI — Algorithmic Refinements, Reproducible Benchmarks & Visual Identity:**
+  - Added RPCA-inspired outlier-peeling refinement to `RmqSharedBasisCluster::fit`, cutting correlated-cluster reconstruction error by 49.2% at identical `0.867` effective bpp.
+  - Added NSGA-II-style elite capping (`pop_size / 2` spaced across BPP) to `qml-genesis` so every generation breeds fresh crossover/mutated genomes.
+  - Recorded measured release-mode Windows 11 / Intel i9-14900HX experimental data in `experiments/exp-001-rmq-map-qcore-baseline.toml`.
+  - Created custom deep-obsidian/ultraviolet/cyan SVG visual identity (`assets/hero.svg`, `assets/architecture.svg`, `assets/benchmarks.svg`) and refreshed `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `research/novelty-ledger.md`, and `HANDOFF.md`.

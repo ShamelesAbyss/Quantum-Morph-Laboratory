@@ -1,0 +1,68 @@
+# Reproducible experimental record — RMQ, MAP, Q-Core, and Q-Genesis CPU Reference Suite
+schema_version = 1
+experiment_id = "exp-001-rmq-map-qcore-baseline"
+created_utc = "2026-11-25T09:59:00Z"
+status = "completed"
+outcome = "validated_with_falsifiable_control"
+
+[model]
+identifier = "synthetic-correlated-8x64x64-and-mini-llama-4L"
+source_format = "safetensors (generated in-memory deterministic fixtures)"
+source_hash_sha256 = "deterministic-seed-2026"
+license = "synthetic-generated-fixture"
+fixture_description = "1) 8x64x64 correlated shared-subspace cluster + 8x64x64 i.i.d. Gaussian control; 2) 4-layer Llama-style decoder-only transformer (vocab=48, hidden=32, inter=64, heads=4, kv_heads=2, 40,224 params, 164,864 B source Safetensors)."
+
+[transformation]
+name = "RMQ_SHARED_BASIS+SPARSE1% | RMQ_SHARED_CORE+SPARSE1% | MAP_ADAPTIVE | Q-GENESIS"
+version = "0.1.0"
+configuration = "qml rmq-ablate --layers 8 --dim 64 --rank 6; qml infer-demo; qml genesis --synthetic --population 12 --generations 5"
+random_seed = 42
+
+[hardware]
+os = "Windows 11 Home (26H2) x86_64"
+cpu = "Intel Core i9-14900HX"
+logical_processors = 32
+system_memory_bytes = 34123513856
+accelerator = "NVIDIA GeForce RTX 4070 Laptop GPU (not used in CPU reference run)"
+accelerator_memory_bytes = 8332236800
+backend = "CPU reference (100% safe Rust, release profile, SSE4.2/AVX/AVX2/FMA/F16C host)"
+
+[software]
+qml_version = "0.1.0"
+rustc_version = "1.94.0 (4a4ef493e 2026-03-02)"
+git_commit = "e1c26ec + outlier-peeling RMQ & genesis elite cap"
+dependency_lock_hash_sha256 = "see Cargo.lock"
+
+[evaluation]
+methodology = "Complete byte-for-byte storage accounting (scales, zero-points, shared bases, cores, sparse COO indices, JSON manifests, CRC-32) + direct compressed matvec error + autoregressive KL divergence and perplexity vs FP16 reference."
+dataset_identifier = "deterministic-probe-vectors-and-token-sequence"
+dataset_license = "synthetic-generated"
+seed = 42
+context_length = 32
+
+[resources]
+configured_ram_budget_bytes = 268435456
+configured_vram_budget_bytes = 0
+peak_ram_bytes = -1
+peak_vram_bytes = 0
+elapsed_milliseconds = 2500
+
+[results]
+input_bytes = 164864
+output_bytes = 26681
+metadata_bytes = 5800
+reconstruction_error = "Correlated 8x64x64: RMQ_SHARED_BASIS+SPARSE1% = 0.14223 (0.867 bpp; down 49.2% from 0.28006 via outlier peeling), RMQ_SHARED_CORE+SPARSE1% = 0.06703 (2.098 bpp), Q4_0 = 0.10226 (4.539 bpp), INT8 = 0.00854 (8.289 bpp). Gaussian control: Q4_0 = 0.09677 beats RMQ = 0.80094..0.96642."
+matvec_error = "Mini-Llama Q-Core direct inference vs FP16: INT8 Mean KL=0.00018 (100% top1, 3146 tok/s), MAP Adaptive Mean KL=0.00566 (77.8% top1, 2526 tok/s), RMQ+1% Sparse Mean KL=0.06037 (55.6% top1, 9057 tok/s, 5.31 complete QMF bpp), Q4_0 Mean KL=0.06702 (44.4% top1, 2557 tok/s, 6.43 complete QMF bpp)."
+perplexity = "measured-on-synthetic-sequence"
+task_accuracy = "not_measured"
+
+[limitations]
+items = [
+  "Evaluated on deterministic synthetic fixtures, not pretrained billion-parameter checkpoints.",
+  "RMQ advantage requires measurable cross-layer subspace affinity; fails on i.i.d. full-rank Gaussian control weights.",
+  "On tiny 40K-parameter models, QMF v1 JSON manifest adds ~1.1 bpp overhead; overhead amortizes to <0.05 bpp on realistic models.",
+  "CPU reference only; GPU CUDA/WGPU kernels are not yet implemented."
+]
+
+[artifacts]
+report_path = "assets/benchmarks.svg"

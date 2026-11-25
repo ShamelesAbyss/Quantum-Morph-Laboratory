@@ -233,11 +233,24 @@ pub fn run_genesis(
 
     for generation_idx in 1..=config.generations {
         mark_pareto(&mut population);
-        let elites: Vec<CandidateRecord> = population
+        let mut elites: Vec<CandidateRecord> = population
             .iter()
             .filter(|c| c.on_pareto_frontier)
             .cloned()
             .collect();
+        // Keep at most half the population as elites (evenly spaced across BPP) so every
+        // generation actively breeds new crossover and mutated offspring.
+        let max_elites = (pop_size / 2).max(2);
+        if elites.len() > max_elites {
+            elites.sort_by(|a, b| a.fitness.effective_bpp.total_cmp(&b.fitness.effective_bpp));
+            let mut selected = Vec::with_capacity(max_elites);
+            let step = (elites.len() - 1) as f64 / (max_elites - 1) as f64;
+            for k in 0..max_elites {
+                let idx = ((k as f64) * step).round() as usize;
+                selected.push(elites[idx.min(elites.len() - 1)].clone());
+            }
+            elites = selected;
+        }
 
         let mut next_pop = elites;
         while next_pop.len() < pop_size {

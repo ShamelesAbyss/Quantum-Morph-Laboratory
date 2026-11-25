@@ -5,7 +5,7 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **Milestone V — Q-Core Native Inference Runtime, Q-Genesis Evolutionary Discovery & Full Laboratory CLI** (`qml-runtime`, `qml-genesis`, `qml-cli`).
+- Active takeover milestone: **Milestone VI — Robust Outlier-Peeling RMQ, NSGA-II Q-Genesis Elite Capping, Release Benchmarks, Custom SVG Identity & Documentation Overhaul**.
 - The workspace now contains 9 cohesive crates (`qml-core`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`); zero new external dependencies were introduced and no Python runtime dependency exists anywhere in the graph.
 - No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
@@ -33,14 +33,19 @@ All of the following passed locally on Windows 11 with Rust 1.94.0:
 
 ## Research and design findings
 
-The Safetensors file structure, dtype bit sizes, offset rules, and upstream-parser limitation are documented with primary-source URLs in `research/safetensors-inspection.md`. The 16 MiB cap is a QML resource policy and is stricter than upstream's documented maximum. The upstream crate is dev-only; runtime parsing stays within the small `qml-model` responsibility. This is a header/layout check only, not payload verification or complete compatibility certification.
+- **Outlier-Peeling RMQ Discovery (`exp-001`):** Isolated large weight outliers in correlated multi-layer matrices can steal a shared subspace dimension during 2D-HOOI. Adding RPCA-inspired sparse outlier peeling before 2D-HOOI reduced `RMQ_SHARED_BASIS + SPARSE 1%` relative Frobenius error by **49.2%** (`0.28006 -> 0.14223`) at an identical `0.867` effective bpp (all overhead counted).
+- **Falsifiable Boundary Condition:** On an uncorrelated i.i.d. full-rank Gaussian control, `Q4_0` (`0.09677`) decisively outperforms all low-rank/RMQ methods (`0.80–0.97`). RMQ should only be applied to layer clusters where Q-Scope measures significant cross-layer Grassmannian subspace affinity.
+- **Direct Compressed Inference Speedup (`exp-001`):** Executing `U_shared (C_l (V_sharedᵀ x)) + R_l x` directly in Q-Core without dense weight reconstruction reached `9,057 tok/s` (`2.43×` faster than FP16 and `3.54×` faster than Q4_0 on CPU) with lower KL divergence (`0.06037`) than uniform `Q4_0` (`0.06702`).
+- **MAP Precision Allocation (`exp-001`):** Sensitivity + downstream spectral propagation allocation reduced Mean KL divergence on the synthetic mini-Llama by **11.8×** vs uniform `Q4_0` (`0.00566` vs `0.06702`, `77.8%` vs `44.4%` top-1 token agreement).
+- **QMF v1 Manifest Overhead:** On tiny 40K-parameter models, canonical JSON manifests add ~1.15 bpp to complete file size; on realistic models (>10M params) this amortizes to `<0.05` bpp.
 
 ## Known limits and blockers
 
-No Safetensors payload reader, tensor-value analysis, model architecture/configuration reader, GGUF support, quantizer, transformation pipeline, inference runtime, or GUI is implemented. The prior-art review remains incomplete. No QML novelty, model-compression advantage, or real-model result is claimed. QMF v0 is experimental and unsuitable for important artifacts. No pretrained weights or private datasets are in the repository or fixtures.
+All current benchmarks were executed on deterministic synthetic fixtures (no pretrained LLM checkpoint has yet been evaluated end-to-end). GPU backends (WGPU/CUDA), SIMD-vectorized/multithreaded kernels, real BPE tokenizers, Q-Behavior, and the native desktop GUI (`qml-desktop`) remain to be built. QMF v0/v1 are experimental and not compatibility-stable. No project license has been selected.
 
 ## Next steps
 
-1. Continue on `main`; verify the working tree and current SHA before editing.
-2. Keep the next milestone scoped to a separately bounded Safetensors payload reader for legally appropriate/generated small fixtures, or other user-approved research work. Preserve read-only-by-default behavior, add resource-budget tests, and do not commit model weights.
-3. Continue the remaining source-backed prior-art review and keep the novelty ledger explicit about unresolved overlap.
+1. Continue on `main`; verify `git status` and CI results on GitHub Actions (`Rust CI` + `dependency-policy`).
+2. Validate Q-Scope, RMQ, MAP, Q-Forge, and Q-Core on a small openly licensed pretrained Transformer downloaded locally (outside Git, e.g., SmolLM-135M or GPT-2 small): measure real cross-layer Grassmannian subspace affinity, actual RMQ vs Q4_0/AWQ tradeoffs, and WikiText perplexity.
+3. Add real BPE/SentencePiece tokenizer support and memory-mapped QMF v1 streaming for multi-GB models, plus `rayon`/SIMD CPU acceleration and WGPU/CUDA GPU kernel prototypes targeting the RTX 4070 Laptop 8 GB VRAM budget.
+4. Implement `qml-behavior` and the native Rust desktop laboratory (`qml-desktop`) once real pretrained model pipelines are validated.

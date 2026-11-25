@@ -1,35 +1,42 @@
 # Architecture
 
-## Current workspace
+## Current Workspace (9 Safe Rust Crates)
 
 ```text
 crates/
-├── qml-core/    Safe dense-matrix primitives and rank-one baseline
-├── qml-format/  Narrow experimental QMF v0 reader/writer for one rank-one f64 matrix
-├── qml-model/   Bounded, read-only Safetensors metadata parser
-└── qml-cli/     CLI help, basic diagnostics, synthetic demo, and inspection commands
+├── qml-core/     Validated dense matrices, SplitMix64 PRNG, one-sided Jacobi & HMT randomized SVD, spectral metrics
+├── qml-model/    Bounded Safetensors header & streaming payload reader, exact dtype codecs, shard/config/GGUF parsers
+├── qml-scope/    Q-Scope Neural Observatory: streaming moments, outliers, histograms, SVD, cross-layer affinity
+├── qml-quant/    Conventional baselines (FP16/BF16/INT8/Q4_0/Q4_1/SVD), RMQ Shared-Basis/Shared-Core, MAP allocator
+├── qml-format/   Experimental QMF v0 (single rank-one) and QMF v1 (multi-tensor + Shared Latent Table + CRC-32)
+├── qml-forge/    Q-Forge Safetensors -> QMF v1 transformation pipeline and direct round-trip verifier
+├── qml-runtime/  Q-Core CPU reference Llama-style decoder-only Transformer executing directly over QMF v1 operators
+├── qml-genesis/  Q-Genesis multi-objective evolutionary search with Pareto frontier & persistent JSON archives
+└── qml-cli/      `qml` command-line laboratory exposing 12 diagnostic, analysis, morph, inference, and evolution commands
 ```
 
-The workspace remains intentionally small. A future crate should be introduced only when its responsibility is cohesive and independently testable.
+Every crate enforces `#![forbid(unsafe_code)]` via workspace lints. Zero Python dependencies exist anywhere in the normal, dev, or build dependency graph.
 
-## Current data flow
+## End-to-End Data Flow
 
-`qml demo-rank1` creates a deterministic synthetic low-rank matrix, applies a largest-pivot rank-one cross approximation, performs matrix-vector products through the factors directly, writes the factors to an experimental `.qmf` file, reloads them, and compares output values. `qml inspect-qmf` validates and summarizes that narrow representation. The demo does not read model files or represent a pretrained model.
+1. **Ingestion (`qml-model`):** Opens `.safetensors` (or `.gguf`) read-only, validates bounded metadata headers (`<= 16 MiB`) with checked arithmetic, and provides streaming chunked decoding (`F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, `F32`, `F64`, integers, bool) under explicit `PayloadBudget` ceilings.
+2. **Observatory (`qml-scope`):** Computes two-pass constant-memory streaming statistics (Welford moments, sparsity, 3σ/6σ outliers, crest factor, binned Shannon entropy), 2D matrix singular-value spectra, transformer role classification, and cross-layer Grassmannian subspace affinity.
+3. **Quantization, RMQ & MAP (`qml-quant`):** Evaluates conventional baselines with exact `StorageBreakdown` byte accounting, fits RMQ shared-basis clusters (`U_shared · C_l · V_sharedᵀ + R_l` via 2D-HOOI with RPCA-inspired outlier peeling) or shared-core clusters (`A_l · S · B_l + R_l`), and solves global byte-budget mixed-precision allocations in MAP.
+4. **Transformation & Containerization (`qml-forge` + `qml-format`):** Transforms immutable Safetensors models into deterministic QMF v1 containers storing shared latent matrices once in `shared_latents`, encoding heterogeneous per-tensor representations and sparse COO FP16 residuals, and verifying per-blob + whole-file CRC-32 checksums.
+5. **Direct Native Execution (`qml-runtime`):** Loads `QmfOperator` handles directly from QMF v1 and runs RMSNorm, RoPE, Grouped-Query Attention with KV-cache, and SwiGLU MLP **without reconstructing dense weight matrices**, reporting throughput, KL divergence, top-1 token agreement, and perplexity.
+6. **Evolutionary Discovery (`qml-genesis`):** Evolves per-layer and RMQ-cluster genomes over complete effective BPP, measured matvec error, and estimated matvec FLOPs, outputting non-dominated Pareto frontiers and persistent JSON experiment archives.
 
-`qml inspect-safetensors PATH` opens the file read-only. `qml-model` seeks to determine the file size, reads the eight-byte length prefix and a header capped at 16 MiB, validates the JSON and tensor metadata, and does not read or map the payload. The CLI can emit sorted human-readable output or JSON with `--json`. This operation does not inspect tensor values or identify model architecture. Its rationale and tradeoffs are recorded in [ADR 0001](docs/decisions/0001-bounded-safetensors-inspection.md); the source-backed format research is in [the Safetensors note](research/safetensors-inspection.md).
+## Safety and Resource Constraints
 
-`qml-core` owns row-major `f64` matrices and rank-one factors. `qml-format` encodes factors using the experimental QMF v0 layout documented in [`research/qmf-experimental-v0.md`](research/qmf-experimental-v0.md). `qml-model` owns safe header parsing and metadata validation; it depends on `serde` and `serde_json`. The `safetensors` 0.8.0 parser and `proptest` are dev-only dependencies used as a differential oracle and for generated invariant tests. The CLI composes local crate APIs.
+- `unsafe` is forbidden at workspace level (`Cargo.toml`).
+- Imported model files are opened read-only and never modified.
+- All parsers bound header/manifest/file sizes and use checked integer arithmetic before allocation.
+- CRC-32 verifies accidental corruption only; it is not cryptographic authentication.
+- QMF v0 and v1 remain experimental and not compatibility-stable.
 
-## Safety and resource constraints
+## Planned Future Crates (Not Yet Created)
 
-Rust is the implementation language, and `unsafe` is forbidden at workspace level. Python application, development, and runtime dependencies are not part of the project. Imported models remain immutable by default. Model parsers validate sizes, offsets, integer arithmetic, and resource budgets before allocation or access. The Safetensors parser rejects duplicate JSON keys, unknown tensor fields and dtypes, excessive tensor counts/ranks, arithmetic overflow, misaligned sub-byte tensors, invalid ranges, gaps, overlaps, and payload-length disagreement. The parser never allocates according to payload size.
-
-The 16 MiB QML header cap is stricter than upstream's documented limit. The parser accepts only known Safetensors dtypes and validates metadata layout, but it does not validate payload contents. See [the research note](research/safetensors-inspection.md) and [ADR 0001](docs/decisions/0001-bounded-safetensors-inspection.md).
-
-Require an independently testable CPU reference before acceleration. Keep structural, behavioral, and computational morphogenesis independently configurable. Quantum-inspired classical computation must not be described as physical quantum computation.
-
-QMF v0 is intentionally experimental and limited to one rank-one matrix. It is not a stable general model format and has no compatibility promise. CRC-32 is only an accidental-corruption check, not authentication. The transformation is a conventional baseline; it is not claimed as novel or optimal.
-
-## Planned boundaries (not implemented)
-
-Safetensors payload reading, GGUF/model configuration/tokenizer loading, full tensor enumeration over payload values, quantization algorithms, behavior analysis, evolutionary search, generalized QMF, inference, hardware discovery, and desktop UI remain future responsibilities. No placeholder crates are created for them. See [ROADMAP.md](ROADMAP.md).
+- Pretrained model tokenizer + real-checkpoint benchmarking harness
+- Hardware-accelerated compute backends (SIMD / Rayon / WGPU / CUDA)
+- `qml-behavior` (behavioral interpretability & regression evaluation)
+- `qml-desktop` (native Rust graphical research laboratory)

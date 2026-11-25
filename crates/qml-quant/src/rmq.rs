@@ -181,8 +181,49 @@ impl RmqSharedBasisCluster {
 
         // Higher-Order Orthogonal Iteration refinement.
         for iter in 0..config.hooi_iters {
-            vt = compute_shared_vt(layers, &u, q, config.seed.wrapping_add(10 + iter as u64))?;
-            u = compute_shared_u(layers, &vt, p, config.seed.wrapping_add(100 + iter as u64))?;
+            vt = compute_shared_vt(layers, &u, q, seed_offset(config.seed, 10 + iter as u64))?;
+            u = compute_shared_u(layers, &vt, p, seed_offset(config.seed, 100 + iter as u64))?;
+        }
+
+        // Robust Outlier-Peeling Refinement (RPCA-inspired): when a sparse residual is enabled,
+        // peel top-k residual outliers (plus initial extreme magnitude outliers) and refit the
+        // shared subspaces on `(W_l - R_l)` so isolated weight outliers cannot steal shared
+        // subspace dimensions from the layer cluster.
+        if let RmqResidualKind::SparseTopFraction { fraction } = config.residual_kind
+            && fraction > 0.0
+        {
+            let mut peeled_storage: Vec<DenseMatrix> = Vec::with_capacity(layers.len());
+            for mat in layers {
+                // First peel obvious heavy-tailed outliers directly from W_l so they cannot dominate SVD.
+                let sp = SparseResidual::from_residual_top_fraction(mat, fraction);
+                let mut clean_data = mat.as_slice().to_vec();
+                for (&idx, &val_bits) in sp.indices().iter().zip(sp.values_f16()) {
+                    clean_data[idx as usize] -= f64::from(qml_model::f16_to_f32(val_bits));
+                }
+                peeled_storage.push(DenseMatrix::from_flat(m, n, clean_data)?);
+            }
+            let peeled_refs: Vec<&DenseMatrix> = peeled_storage.iter().collect();
+            let mut stacked_p = Vec::with_capacity(layers.len() * m * n);
+            for mat in &peeled_refs {
+                stacked_p.extend_from_slice(mat.as_slice());
+            }
+            let stacked_mat = DenseMatrix::from_flat(layers.len() * m, n, stacked_p)?;
+            vt = truncated_svd(&stacked_mat, q, seed_offset(config.seed, 150))?.vt;
+            u = compute_shared_u(&peeled_refs, &vt, p, seed_offset(config.seed, 160))?;
+            for iter in 0..config.hooi_iters.max(1) {
+                vt = compute_shared_vt(
+                    &peeled_refs,
+                    &u,
+                    q,
+                    seed_offset(config.seed, 200 + iter as u64),
+                )?;
+                u = compute_shared_u(
+                    &peeled_refs,
+                    &vt,
+                    p,
+                    seed_offset(config.seed, 300 + iter as u64),
+                )?;
+            }
         }
 
         // Quantize shared bases once, then project cores against the *quantized* bases
@@ -197,9 +238,21 @@ impl RmqSharedBasisCluster {
         let mut cores = Vec::with_capacity(layers.len());
         let mut residuals = Vec::with_capacity(layers.len());
         for mat in layers {
-            // Core C_l = U_effᵀ * W_l * V_eff (p × q)
-            let ut_w = ut_eff.matmul(mat)?;
-            let core_dense = ut_w.matmul(&v_eff)?;
+            // Core C_l = U_effᵀ * W_l * V_eff (p × q), refined after peeling sparse outliers if active.
+            let mut core_dense = ut_eff.matmul(mat)?.matmul(&v_eff)?;
+            if let RmqResidualKind::SparseTopFraction { fraction } = config.residual_kind
+                && fraction > 0.0
+            {
+                let approx0 = u_eff.matmul(&core_dense)?.matmul(&vt_eff)?;
+                let diff0 = mat.sub(&approx0)?;
+                let sp0 = SparseResidual::from_residual_top_fraction(&diff0, fraction);
+                let mut peeled = mat.as_slice().to_vec();
+                for (&idx, &val_bits) in sp0.indices().iter().zip(sp0.values_f16()) {
+                    peeled[idx as usize] -= f64::from(qml_model::f16_to_f32(val_bits));
+                }
+                let peeled_mat = DenseMatrix::from_flat(m, n, peeled)?;
+                core_dense = ut_eff.matmul(&peeled_mat)?.matmul(&v_eff)?;
+            }
             let core_q = QuantizedFactor::encode(&core_dense, config.core_precision)?;
 
             let residual = if matches!(config.residual_kind, RmqResidualKind::None) {
@@ -484,6 +537,10 @@ impl LinearOperator for RmqSharedCoreLayer<'_> {
             header_bytes: RMQ_LAYER_HEADER_BYTES + RMQ_SHARED_HEADER_BYTES.div_ceil(n_layers),
         }
     }
+}
+
+fn seed_offset(base: u64, delta: u64) -> u64 {
+    base.wrapping_add(delta)
 }
 
 fn compute_shared_u(

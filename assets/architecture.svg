@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 410" width="1200" height="410">
+  <defs>
+    <linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070810"/>
+      <stop offset="100%" stop-color="#0C0A1B"/>
+    </linearGradient>
+    <linearGradient id="boxUv" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#191334"/>
+      <stop offset="100%" stop-color="#100D22"/>
+    </linearGradient>
+    <linearGradient id="boxCyan" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0D1E2E"/>
+      <stop offset="100%" stop-color="#09131F"/>
+    </linearGradient>
+    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#22D3EE"/>
+    </marker>
+    <marker id="arrowUv" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#A855F7"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="410" rx="14" fill="url(#abg)" stroke="#241E44" stroke-width="1.2"/>
+  <text x="32" y="38" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="700" letter-spacing="0.8">QUANTUM MORPH LABORATORY — IMPLEMENTED RUST PIPELINE ARCHITECTURE</text>
+  <text x="32" y="58" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11">9 Workspace Crates · Zero Unsafe Code · Zero Python Dependencies · Deterministic CPU Reference</text>
+
+  <!-- Row 1: Ingestion -> Observatory -> Quant/RMQ/MAP -> Forge -->
+  <!-- Box 1: qml-model -->
+  <g transform="translate(32, 86)">
+    <rect width="230" height="124" rx="10" fill="url(#boxCyan)" stroke="#22D3EE" stroke-opacity="0.65" stroke-width="1.3"/>
+    <text x="14" y="26" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="13" font-weight="700">1. qml-model</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Bounded Safetensors header</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Streaming chunked payloads</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• F16/BF16/FP8/F32/Int codecs</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• GGUF v2/v3 &amp; config.json</text>
+  </g>
+
+  <line x1="262" y1="148" x2="306" y2="148" stroke="#22D3EE" stroke-width="1.8" marker-end="url(#arrowCyan)"/>
+
+  <!-- Box 2: qml-scope -->
+  <g transform="translate(310, 86)">
+    <rect width="250" height="124" rx="10" fill="url(#boxUv)" stroke="#A855F7" stroke-opacity="0.7" stroke-width="1.3"/>
+    <text x="14" y="26" fill="#D8B4FE" font-family="ui-monospace, monospace" font-size="13" font-weight="700">2. qml-scope (Q-Scope)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Streaming moments &amp; entropy</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• 3σ/6σ outliers &amp; crest factor</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Jacobi &amp; HMT randomized SVD</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Cross-layer subspace affinity</text>
+  </g>
+
+  <line x1="560" y1="148" x2="604" y2="148" stroke="#A855F7" stroke-width="1.8" marker-end="url(#arrowUv)"/>
+
+  <!-- Box 3: qml-quant -->
+  <g transform="translate(608, 86)">
+    <rect width="270" height="124" rx="10" fill="url(#boxUv)" stroke="#A855F7" stroke-opacity="0.7" stroke-width="1.3"/>
+    <text x="14" y="26" fill="#D8B4FE" font-family="ui-monospace, monospace" font-size="13" font-weight="700">3. qml-quant (RMQ + MAP)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• FP16/BF16/INT8/Q4_0/Q4_1/SVD</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• RMQ 2D-HOOI + outlier peeling</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• MAP sensitivity + propagation</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Exact complete byte accounting</text>
+  </g>
+
+  <line x1="878" y1="148" x2="922" y2="148" stroke="#22D3EE" stroke-width="1.8" marker-end="url(#arrowCyan)"/>
+
+  <!-- Box 4: qml-forge -->
+  <g transform="translate(926, 86)">
+    <rect width="242" height="124" rx="10" fill="url(#boxCyan)" stroke="#22D3EE" stroke-opacity="0.65" stroke-width="1.3"/>
+    <text x="14" y="26" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="13" font-weight="700">4. qml-forge (Q-Forge)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Immutable source ingestion</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Role-clustered RMQ builder</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• MAP mixed-precision encoder</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Round-trip matvec verification</text>
+  </g>
+
+  <!-- Vertical connector down from qml-forge to qml-format -->
+  <line x1="1047" y1="210" x2="1047" y2="254" stroke="#22D3EE" stroke-width="1.8" marker-end="url(#arrowCyan)"/>
+
+  <!-- Row 2: qml-core -> qml-genesis -> qml-runtime <- qml-format -->
+  <!-- Box 5: qml-format -->
+  <g transform="translate(886, 258)">
+    <rect width="282" height="122" rx="10" fill="url(#boxUv)" stroke="#C084FC" stroke-opacity="0.75" stroke-width="1.4"/>
+    <text x="14" y="26" fill="#E9D5FF" font-family="ui-monospace, monospace" font-size="13" font-weight="700">5. qml-format (QMF v0/v1)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Shared Latent Table (U, Vᵀ, S)</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Heterogeneous tensor directory</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Sparse COO FP16 residuals</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Per-blob &amp; whole-file CRC-32</text>
+  </g>
+
+  <line x1="886" y1="319" x2="842" y2="319" stroke="#A855F7" stroke-width="1.8" marker-end="url(#arrowUv)"/>
+
+  <!-- Box 6: qml-runtime -->
+  <g transform="translate(558, 258)">
+    <rect width="280" height="122" rx="10" fill="url(#boxCyan)" stroke="#22D3EE" stroke-opacity="0.7" stroke-width="1.4"/>
+    <text x="14" y="26" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="13" font-weight="700">6. qml-runtime (Q-Core)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Direct compressed matvec</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• RMSNorm, RoPE, GQA + KV-cache</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• SwiGLU MLP &amp; autoregressive gen</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Exact KL divergence &amp; perplexity</text>
+  </g>
+
+  <!-- Box 7: qml-genesis -->
+  <g transform="translate(274, 258)">
+    <rect width="256" height="122" rx="10" fill="url(#boxUv)" stroke="#A855F7" stroke-opacity="0.7" stroke-width="1.3"/>
+    <text x="14" y="26" fill="#D8B4FE" font-family="ui-monospace, monospace" font-size="13" font-weight="700">7. qml-genesis (Q-Genesis)</text>
+    <text x="14" y="46" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Hybrid precision/SVD/RMQ genomes</text>
+    <text x="14" y="64" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• 3-objective Pareto evolution</text>
+    <text x="14" y="82" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• BPP × MV-Error × Est. FLOPs</text>
+    <text x="14" y="100" fill="#CBD5E1" font-family="sans-serif" font-size="11.5">• Persistent JSON lineage archive</text>
+  </g>
+
+  <!-- Connector from qml-quant down to qml-genesis -->
+  <path d="M 740 210 L 740 234 L 402 234 L 402 254" fill="none" stroke="#A855F7" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowUv)"/>
+
+  <!-- Box 8: qml-core + qml-cli -->
+  <g transform="translate(32, 258)">
+    <rect width="214" height="122" rx="10" fill="#0F1222" stroke="#475569" stroke-width="1.2"/>
+    <text x="14" y="26" fill="#E2E8F0" font-family="ui-monospace, monospace" font-size="13" font-weight="700">Foundation &amp; CLI</text>
+    <text x="14" y="48" fill="#A78BFA" font-family="ui-monospace, monospace" font-size="11.5">qml-core</text>
+    <text x="14" y="65" fill="#94A3B8" font-family="sans-serif" font-size="11">Matrices, Jacobi SVD, PRNG</text>
+    <text x="14" y="88" fill="#67E8F9" font-family="ui-monospace, monospace" font-size="11.5">qml-cli (qml)</text>
+    <text x="14" y="105" fill="#94A3B8" font-family="sans-serif" font-size="11">12 research &amp; benchmark cmds</text>
+  </g>
+</svg>

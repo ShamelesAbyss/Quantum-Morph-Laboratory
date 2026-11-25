@@ -1,0 +1,13 @@
+[package]
+name = "qml-genesis"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+qml-core = { path = "../qml-core" }
+qml-quant = { path = "../qml-quant" }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

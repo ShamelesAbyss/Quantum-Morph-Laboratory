@@ -25,3 +25,7 @@
 - **Milestone IV — QMF v1 & Q-Forge (`qml-format` v1, `qml-forge`):**
   - Evolved `qml-format` with experimental QMF v1 (`QmfArchiveV1`, `QmfV1Builder`, `QmfOperator`) supporting multi-tensor directories, shared latent tables for RMQ cross-layer bases, FP32/FP16/BF16, groupwise INT8/INT4, truncated SVD, sparse COO FP16 residuals, deterministic JSON manifests, and per-blob + whole-file CRC-32 integrity checks (`research/qmf-experimental-v1.md`).
   - Added `qml-forge` transformation pipeline (`forge_safetensors_to_qmf`, `compare_safetensors_and_qmf`) preserving read-only source files and verifying direct compressed execution after full QMF v1 serialization round trips.
+- **Milestone V — Q-Core Native Inference, Q-Genesis & Laboratory CLI (`qml-runtime`, `qml-genesis`, `qml-cli`):**
+  - Added `qml-runtime` (Q-Core) native CPU decoder-only Transformer executing directly over QMF v1 compressed operators with RMSNorm, RoPE, Grouped-Query Attention + KV-cache, SwiGLU MLP, autoregressive token generation, and KL-divergence / perplexity evaluation.
+  - Added `qml-genesis` (Q-Genesis) multi-objective evolutionary search discovering Pareto-optimal hybrid precision/SVD/RMQ genomes with persistent JSON experiment archives.
+  - Integrated `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `genesis`, and QMF v0/v1 `inspect-qmf` into `qml-cli`.

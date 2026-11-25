@@ -5,8 +5,8 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **Milestone IV — QMF v1 Generalized Container & Q-Forge Transformation Engine** (`qml-format` v1 + `qml-forge`).
-- The workspace now contains `qml-core`, `qml-format`, `qml-model`, `qml-scope`, `qml-quant`, `qml-forge`, and `qml-cli`; zero new external dependencies were introduced and no Python runtime dependency exists anywhere in the graph.
+- Active takeover milestone: **Milestone V — Q-Core Native Inference Runtime, Q-Genesis Evolutionary Discovery & Full Laboratory CLI** (`qml-runtime`, `qml-genesis`, `qml-cli`).
+- The workspace now contains 9 cohesive crates (`qml-core`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`); zero new external dependencies were introduced and no Python runtime dependency exists anywhere in the graph.
 - No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
 ## Implemented capabilities
@@ -17,7 +17,9 @@
 - `qml-quant`: Reproducible conventional baselines (`FP16`, `BF16`, `INT8_SYM`, `INT8_ASYM`, `INT4_SYM_G32(Q4_0)`, `INT4_ASYM_G32(Q4_1)`, `INT4_SYM_G128`, `SVD_FP16`, `SVD_INT8`, `SparseResidual`) with exact byte-for-byte storage accounting (`StorageBreakdown`) and direct compressed `LinearOperator::matvec`; experimental RMQ Shared-Basis (`U_shared C_l V_sharedᵀ + R_l` via deterministic 2D-HOOI) and RMQ Shared-Core (`A_l S B_l + R_l`) engines with sparse/INT4 residuals and baseline ablation comparator; experimental MAP (Morphological Adaptive Precision) sensitivity + downstream spectral propagation mixed-precision allocator.
 - `qml-format`: Bounded reader and deterministic writer for experimental QMF v0 (single rank-one `f64`) and QMF v1 (`QmfArchiveV1`, `QmfV1Builder`, `QmfOperator`) supporting multi-tensor containers, shared latent structure tables (for RMQ), dense FP32/FP16/BF16, groupwise INT8/INT4, truncated SVD, sparse COO FP16 residuals, per-blob + whole-file CRC-32 checks, and direct compressed operator execution (`research/qmf-experimental-v1.md`).
 - `qml-forge`: Modular Q-Forge transformation pipeline (`forge_safetensors_to_qmf`, `compare_safetensors_and_qmf`) converting immutable Safetensors inputs into verified QMF v1 artifacts with full provenance, complete file-level byte accounting, and direct round-trip matvec verification.
-- `qml-cli`: `doctor` (with safe x86 SIMD detection), `demo-rank1`, `inspect-qmf`, `inspect-safetensors`, `inspect-gguf`, and `scope` (text and JSON).
+- `qml-runtime`: Q-Core CPU reference Llama-style decoder-only Transformer executing directly over QMF v1 compressed `QmfOperator` layers (RMSNorm, RoPE, Grouped-Query Attention with KV-cache, SwiGLU MLP, greedy/sampled autoregressive token generation, and exact KL-divergence / logit-RMSE / top-1 agreement / perplexity fidelity evaluation).
+- `qml-genesis`: Q-Genesis deterministic multi-objective evolutionary search engine optimizing per-layer & RMQ-cluster genomes over complete effective bpp, measured matvec error, and estimated matvec FLOPs, outputting non-dominated Pareto frontiers and full persistent JSON archives (including dominated trials).
+- `qml-cli`: `doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf` (v0 & v1), `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `genesis`, and `demo-rank1`.
 
 ## Validation actually executed on the implementation
 
@@ -25,7 +27,7 @@ All of the following passed locally on Windows 11 with Rust 1.94.0:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace` — 63 tests passed (15 `qml-core`, 7 `qml-format`, 24 `qml-model` unit + 2 Safetensors oracle, 2 `qml-scope`, 7 `qml-quant`, 1 `qml-forge`, 5 `qml-cli` integration).
+- `cargo test --workspace` — 67 tests passed (15 `qml-core`, 7 `qml-format`, 24 `qml-model` unit + 2 Safetensors oracle, 2 `qml-scope`, 7 `qml-quant`, 1 `qml-forge`, 1 `qml-runtime`, 1 `qml-genesis`, 7 `qml-cli` integration).
 - `cargo build --workspace`
 - Zero new third-party dependencies added (preserves `cargo-deny` policy compliance; CI `dependency-policy` job verifies on push).
 

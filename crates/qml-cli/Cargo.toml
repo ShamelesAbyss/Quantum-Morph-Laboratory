@@ -10,9 +10,14 @@ path = "src/main.rs"
 
 [dependencies]
 qml-core = { path = "../qml-core" }
+qml-forge = { path = "../qml-forge" }
 qml-format = { path = "../qml-format" }
+qml-genesis = { path = "../qml-genesis" }
 qml-model = { path = "../qml-model" }
+qml-quant = { path = "../qml-quant" }
+qml-runtime = { path = "../qml-runtime" }
 qml-scope = { path = "../qml-scope" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [lints]

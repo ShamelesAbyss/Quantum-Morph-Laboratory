@@ -264,9 +264,14 @@ name = "qml-cli"
 version = "0.1.0"
 dependencies = [
  "qml-core",
+ "qml-forge",
  "qml-format",
+ "qml-genesis",
  "qml-model",
+ "qml-quant",
+ "qml-runtime",
  "qml-scope",
+ "serde",
  "serde_json",
 ]
 
@@ -298,6 +303,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qml-genesis"
+version = "0.1.0"
+dependencies = [
+ "qml-core",
+ "qml-quant",
+ "serde",
+]
+
+[[package]]
 name = "qml-model"
 version = "0.1.0"
 dependencies = [
@@ -314,6 +328,18 @@ version = "0.1.0"
 dependencies = [
  "qml-core",
  "qml-model",
+ "serde",
+]
+
+[[package]]
+name = "qml-runtime"
+version = "0.1.0"
+dependencies = [
+ "qml-core",
+ "qml-forge",
+ "qml-format",
+ "qml-model",
+ "qml-quant",
  "serde",
 ]
 

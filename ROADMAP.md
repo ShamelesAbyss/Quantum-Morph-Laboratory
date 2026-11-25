@@ -17,4 +17,4 @@ Status key: **Done** means implemented, tested, and pushed on `main`; **Experime
 - **Next — Full GPU-Accelerated Q-Core Kernels:** Extend the validated WGPU compute matvec prototype into quantized (`Q4_0`/`INT8`/RMQ) GPU kernels for interactive multi-billion-parameter (1B–7B) inference.
 - **Next — Selective Affinity-Gated RMQ on Pretrained LLMs:** Apply Q-Scope affinity gating to compress only high-affinity cross-layer clusters (e.g., adjacent `k_proj` layers with `right_affinity > 0.4`) on 1B–3B models with WikiText-2 perplexity benchmarks.
 - **Next — Q-Behavior Subsystem:** Activation-space characterization, behavioral regression suites, and transparent representation-intervention experiments separate from structural compression.
-- **Next — Project License Selection:** Select an explicit repository license with the project owner.
+- **Done — Project License Selection:** Officially licensed under the **MIT License** (`LICENSE`), enabling public GitHub Releases (`v0.1.0-alpha.1` and automated release builds via `.github/workflows/release.yml`).

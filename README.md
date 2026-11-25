@@ -7,7 +7,8 @@
   <img src="https://img.shields.io/badge/Unsafe%20Code-FORBIDDEN-06B6D4?style=for-the-badge" alt="Zero Unsafe"/>
   <img src="https://img.shields.io/badge/Python%20Deps-ZERO-0EA5E9?style=for-the-badge" alt="Zero Python"/>
   <img src="https://img.shields.io/badge/Crates-12%20Modular-8B5CF6?style=for-the-badge" alt="12 Crates"/>
-  <img src="https://img.shields.io/badge/Tests-74%20Passing-10B981?style=for-the-badge" alt="74 Tests"/>
+  <img src="https://img.shields.io/badge/Tests-76%20Passing-10B981?style=for-the-badge" alt="76 Tests"/>
+  <img src="https://img.shields.io/badge/License-MIT-22D3EE?style=for-the-badge" alt="MIT License"/>
   <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.1%20SINGULARITY-F59E0B?style=for-the-badge" alt="Experimental"/>
 </p>
 
@@ -145,6 +146,6 @@ See [BUILD.md](BUILD.md) for `cargo-deny` policy checks and CI workflow details.
 - **Architecture & Decisions:** [`ARCHITECTURE.md`](ARCHITECTURE.md), [`ROADMAP.md`](ROADMAP.md), [`docs/decisions/0001-bounded-safetensors-inspection.md`](docs/decisions/0001-bounded-safetensors-inspection.md)
 - **Cross-Agent Handoff:** [`AGENTS.md`](AGENTS.md), [`HANDOFF.md`](HANDOFF.md), [`MASTER_DEVELOPMENT_DIRECTIVE.md`](MASTER_DEVELOPMENT_DIRECTIVE.md)
 
-## Licensing Status
+## License
 
-No project license has been selected yet. Public visibility does **not** grant permission to reuse, modify, or redistribute Quantum Morph Laboratory source code; do not select or imply a license without explicit owner approval. Third-party Rust crate dependency licenses are continuously verified by `cargo-deny` in CI (`deny.toml`).
+Quantum Morph Laboratory is licensed under the **[MIT License](LICENSE)** (Copyright © 2026 ShamelesAbyss). Third-party Rust crate dependency licenses and advisories are continuously verified by `cargo-deny` in CI ([`deny.toml`](deny.toml)). Prebuilt Windows and Linux release binaries with SHA-256 checksums are published on the [GitHub Releases](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases) page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)).

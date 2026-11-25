@@ -7,7 +7,7 @@
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
 - Active takeover milestone: **PROJECT SINGULARITY — `v0.1.0-alpha.1` Complete (Audit Remediation, Pure-Rust BPE Tokenizer, Real SmolLM2-135M Validation, Rayon CPU Parallelism, WGPU Compute Prototype, and Native Windows Desktop Laboratory `qml-desktop`)**.
 - The workspace now contains **12 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
-- No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
+- **License:** Officially licensed under the **MIT License** ([LICENSE](LICENSE), approved by repository owner). All 12 workspace crates inherit `license.workspace = true`.
 
 ## Implemented capabilities
 

@@ -3,30 +3,51 @@
 ## Current state
 
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
-- Development branch: `main`
+- Development branch: `main` only.
 - Local workspace: `/home/ubuntu/Quantum-Morph-Laboratory`
-- Rust stable toolchain is installed in the current sandbox.
-- Workspace contains `qml-core`, `qml-format`, and `qml-cli`, with no third-party Rust dependencies.
-- Initial Rust CI on GitHub completed successfully on Linux and Windows.
+- Current local commit: `e90cbb7` (`Add bounded Safetensors metadata inspection`); push is pending.
+- The complete original directive and both continuations are preserved in `MASTER_DEVELOPMENT_DIRECTIVE.md`.
+- Rust stable 1.100.0 is installed in this sandbox. Cargo may require `source "$HOME/.cargo/env"` in a fresh shell.
+- The workspace contains `qml-core`, `qml-format`, `qml-model`, and `qml-cli`; no Python runtime dependency is present in the normal or development dependency graph.
+- No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
-## Implemented
+## Implemented capabilities
 
-`qml-core` provides a validated row-major `DenseMatrix`, a deterministic largest-pivot rank-one cross approximation, factorized `matvec`, Frobenius reconstruction error, and unit tests. `qml-format` reads/writes a narrow experimental QMF v0 single-rank-one-`f64` representation, with bounded input and CRC-32 corruption detection (not authentication). `qml demo-rank1` runs against a generated exact rank-one matrix; `qml inspect-qmf` validates the format. Neither is a pretrained-model result. There is still no tensor/model loader, weight transformation pipeline, quantizer, inference runtime, or GUI.
+`qml-core` provides validated dense-matrix primitives and a deterministic conventional largest-pivot rank-one baseline, including direct factorized matrix-vector multiplication and Frobenius reconstruction error. `qml-format` provides a bounded reader and deterministic writer for an experimental single-rank-one-`f64` QMF v0 file; this is not a general model format and CRC-32 is not authentication. The synthetic demo is not a pretrained-model result.
 
-A first source-backed prior-art batch covers 17 topics. Detailed notes are in `research/literature/`; the index is `research/prior-art-index.md` and the comparison is `research/prior-art-synthesis.md`. The broader review is incomplete, QML has not reproduced any cited method/results, and no novelty or freedom-to-operate conclusion is made. `research/novelty-ledger.md` records comparison status and open definitions.
+`qml-model` provides a bounded, read-only Safetensors metadata inspector. It reads the 8-byte prefix and at most 16 MiB of header, seeks to determine file length, and never reads/maps payload bytes. It rejects malformed/duplicate JSON keys, unknown tensor fields and dtypes, excessive rank/tensor counts, arithmetic overflow, unaligned sub-byte tensors, invalid offsets, gaps/overlaps, and file-length mismatch. Results are deterministically sorted. `qml inspect-safetensors PATH` emits text; `qml inspect-safetensors --json PATH` emits JSON. It does not validate tensor values, identify architecture, or transform models.
 
-## Important open items
+The generated F32 and F4 fixtures are differentially checked against the exact-pinned Safetensors 0.8.0 crate in development tests. Property-based shape tests and CLI integration tests use synthetic bytes only. Research and design rationale are in `research/safetensors-inspection.md` and `docs/decisions/0001-bounded-safetensors-inspection.md`.
 
-1. The master directive attachment ends abruptly at “Deterministic serialization where a”.
-2. The second attachment is titled “Continuation 1 of 2”; no continuation 2 has been received yet.
-3. Remaining prior art includes behavioral/interpretability work, distillation, evolutionary optimization, quantum-inspired optimization, complex-valued networks, and additional compression and file-format methods.
-4. No project license has been selected. Do not treat the public repository as licensed for reuse.
-5. QMF v0 is experimental, narrowly implemented and tested, but not stable, not a model container, and unsuitable for important artifacts.
+## Validation actually executed on `e90cbb7`
 
-## Validation
+All of the following passed locally after the final parser edits:
 
-Milestone `a5adea5` is committed and pushed to `main`; the working tree was clean after the push. It passed `cargo fmt --all -- --check`, `cargo test --workspace` (14 tests), `cargo clippy --workspace --all-targets -- -D warnings`, CLI smoke tests for generated demo/valid inspection/invalid input/missing files, `git diff --check`, and relative Markdown-link validation. GitHub Actions run `45369660967` passed on both `ubuntu-latest` and `windows-latest` (format, tests, Clippy). GitHub emitted a non-failing `actions/checkout@v4` Node.js 20 deprecation warning.
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace` — 32 tests passed: 8 `qml-core`, 6 `qml-format`, 13 `qml-model` unit tests, 2 Safetensors oracle integration tests, and 3 CLI integration tests.
+- `cargo build --workspace`
+- `cargo deny check` with cargo-deny 0.21.0 — advisories, bans, licenses, and sources all passed.
+- `git diff --check` and a Node-based scan of 35 Markdown files — all relative links resolved; all three directive-part markers were present.
+- `cargo tree --workspace -e normal,dev` search found no Python/PyO3-related dependencies.
+
+The previous successful GitHub Actions run was `45369660967` on the earlier commit; it passed on Ubuntu and Windows. CI for `e90cbb7` has not run yet because the commit has not been pushed. The updated workflow builds and tests on Ubuntu and Windows, and runs `cargo deny check` on Ubuntu.
+
+## Research and design findings
+
+The Safetensors file structure, dtype bit sizes, offset rules, and upstream-parser limitation are documented with primary-source URLs in `research/safetensors-inspection.md`. The 16 MiB cap is a QML resource policy and is stricter than upstream's documented maximum. The upstream crate is dev-only; runtime parsing stays within the small `qml-model` responsibility. This is a header/layout check only, not payload verification or complete compatibility certification.
+
+## Known limits and blockers
+
+- No Safetensors payload reader, tensor-value analysis, model architecture/configuration reader, GGUF support, quantizer, transformation pipeline, inference runtime, or GUI is implemented.
+- The prior-art review remains incomplete. No QML novelty, model-compression advantage, or real-model result is claimed.
+- QMF v0 is experimental and unsuitable for important artifacts.
+- No pretrained weights or private datasets are in the repository or fixtures.
+- This commit is local on `main` and awaits push and CI confirmation.
 
 ## Next steps
 
-Obtain the complete directive and reconcile the roadmap. Expand the sourced literature review while preserving item-level citations and uncertainty. Select a license with the project owner before accepting outside contributions or distributing releases. Continue with bounded Safetensors parsing and a legally redistributable fixture; do not treat the synthetic result as model-compression evidence.
+1. Push `e90cbb7` and the handoff update to `origin/main`; do not use branches or rewrite history.
+2. Verify the new GitHub Actions workflow on both `ubuntu-latest` and `windows-latest`, plus the Ubuntu dependency-policy job. Record actual run IDs and results here.
+3. Keep the next milestone scoped to a separately bounded Safetensors payload reader for legally appropriate/generated small fixtures, or other user-approved research work. Preserve read-only-by-default behavior, add resource-budget tests, and do not commit model weights.
+4. Continue the remaining source-backed prior-art review and keep the novelty ledger explicit about unresolved overlap.

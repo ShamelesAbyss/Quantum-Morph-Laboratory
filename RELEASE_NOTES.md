@@ -1,47 +1,53 @@
-# Quantum Morph Laboratory `v0.1.0-alpha.2` — PROJECT TRANSCENDENCE (Wave I: Out-of-Core Streaming, Atomic Safety & GGUF Payload Decoding)
+# Quantum Morph Laboratory `v0.2.0-alpha.1` — PROJECT ACCELERATION (Persistent GPU-Resident Compressed Q-Core & SmolLM2-360M Validation)
 
 > *Don't just compress intelligence. Transform its representation.*
 
-**Quantum Morph Laboratory (`v0.1.0-alpha.2`)** resolves all remaining independent-audit stability and memory-scaling deficiencies from `v0.1.0-alpha.1` while expanding real-model format support — written in **100% safe Rust (`#![forbid(unsafe_code)]`)**, **MIT Licensed**, with **zero Python dependencies**.
+**Quantum Morph Laboratory (`v0.2.0-alpha.1`)** integrates **persistent GPU-resident compressed inference** directly into **Q-Core**, executing all 6 compressed matrix formats (`FP32`, `FP16`, `BF16`, `INT8_SYM`, `Q4_0`, `Q4_1`) plus `LowRankSvd` and deduplicated **RMQ Shared-Basis / Shared-Core** latents natively in VRAM with **zero per-token weight transfers** and **zero per-token GPU buffer allocations** — written in **100% safe Rust (`#![forbid(unsafe_code)]`)**, **MIT Licensed**, with **zero Python dependencies**.
 
 ---
 
 ## Major Upgrades Implemented
 
-### 1. Out-of-Core File-Backed QMF v1 Streaming Reader (`qml-format`, `qml-runtime`, `qml-cli`, `qml-desktop`)
-- Added **`QmfFileReader<R: Read + Seek>`**: opens multi-GB QMF v1 files while holding **zero payload bytes in RAM** (only the JSON manifest), lazily seeking and verifying individual tensor blobs on demand with `QmfLatentCache` `Arc` deduplication.
-- Added **`QmfFileReader::verify_integrity_streaming()`**: validates whole-file CRC-32 and computes exact FIPS 180-4 SHA-256 in constant 64 KiB chunks (`O(1)` memory) without cloning full archives.
-- Switched **`QCoreModel::from_qmf_reader`**, **`qml generate`** (including `--compare-qmf`), and **`qml-desktop` Q-Core Inference Chamber** to stream tensors directly from disk via `QmfFileReader`.
+### 1. Persistent GPU-Resident Compressed Operators & Reusable Scratch Buffers (`qml-hardware`)
+- Added **direct compressed WGSL compute shaders** for **`FP16`** (`unpack2x16float`), **`BF16`** (`bitcast<f32>`), and **`Q4_1 (INT4_ASYM)`** (interleaved `(scale_f16, min_f16)` packed into a single `u32` per group for 1-instruction `unpack2x16float`), joining `FP32`, `INT8_SYM`, and `Q4_0 (INT4_SYM)`.
+- Added **`PersistentGpuMatrix`** and preallocated reusable GPU scratch buffers (`GPU_SCRATCH_MAX_ELEMS = 131,072` floats = 512 KiB per buffer, covering vocabularies up to 131K tokens):
+  - Weight buffers and `wgpu::BindGroup`s are uploaded and bound **ONCE** at model load time.
+  - Each autoregressive token transfers only the tiny activation vector (`cols * 4` bytes, ~4 KiB) with **zero weight transfers**, **zero GPU buffer allocations**, and **zero bind-group allocations** per token.
+- Verified exact CPU-vs-GPU equivalence (`max_abs_err < 1e-4`) across all 6 persistent compressed formats on an NVIDIA GeForce RTX 4070 Laptop GPU.
 
-### 2. Atomic QMF Publication & Source-Output Alias Protection (`qml-format`, `qml-cli`, `qml-desktop`)
-- Added **`QmfArchiveV1::write_to_file_atomic(output_path, source_path, budget)`**: canonicalizes paths to reject any attempt to overwrite an immutable source model (`QmfError::SourceOutputAlias`), streams CRC-32 + SHA-256 into a sibling temporary file, calls `sync_all()`, and atomically replaces the destination path so interrupted or failed runs never leave partial `.qmf` artifacts.
+### 2. Integrated GPU Hybrid Q-Core Backend (`qml-runtime`, `qml-cli`, `qml-desktop`)
+- Added **`QCoreBackend::GpuHybrid`** (`QCoreModel::from_qmf_reader_with_backend` & `QCoreModel::from_qmf_with_backend`) with automatic graceful fallback to Rayon CPU on headless hosts.
+- Deduplicates shared RMQ latents (`U_shared`, `V_sharedᵀ`, `S`) across layers in VRAM via `Arc<PersistentGpuMatrix>`, reporting exact `QCoreBackendStats` (GPU adapter, GPU-resident operator count, CPU fallbacks, compressed VRAM bytes, deduplicated GPU latents).
+- Added `--backend cpu|gpu` to **`qml generate`** and a **`GPU Hybrid (Persistent Compressed VRAM)`** toggle with live VRAM telemetry in **`qml-desktop` Q-Core Inference Chamber**.
+- Raised default `PayloadBudget` ceilings (`2 GiB` per tensor, `16 GiB` cumulative) to support 360M–3B pretrained models out of the box.
 
-### 3. Two-Pass Streaming MAP & True Cooperative Q-Forge Cancellation (`qml-quant`, `qml-forge`, `qml-desktop`)
-- Refactored **MAP (Morphological Adaptive Precision)** into a genuinely **two-pass streaming pipeline** (`MapLayerProfile`, `profile_layer_for_map`, `allocate_from_profiles`) — profiling one matrix at a time and dropping decoded dense weights immediately before encoding only each tensor's selected tier.
-- Added **`ForgeControl`** (`Arc<AtomicBool>` cancellation + live per-tensor progress callback) and `ForgeError::Cancelled`, wired across single-tensor, two-pass MAP, and RMQ cluster loops so clicking **Cancel** in `qml-desktop` genuinely aborts the background transformation worker.
-- Wired **`ResourcePreset`** (`Conservative` / `Balanced` / `Performance`) directly into `PayloadBudget::max_total_bytes` so host memory presets enforce real computation bounds.
+### 3. Real Pretrained Model Scaling & GPU Acceleration Benchmarks (`SmolLM2-360M-Instruct`, `exp-003`)
+Measured directly on Windows 11 x86_64 (Intel Core i9-14900HX 32 threads + NVIDIA GeForce RTX 4070 Laptop GPU Vulkan, Apache-2.0 `SmolLM2-360M-Instruct`, `361,821,120` params, `723.67 MB`; archived in `experiments/exp-003-smollm2-360m-gpu.toml`):
 
-### 4. Bounded GGUF v2/v3 Quantized Payload Decoding (`qml-model`)
-- Implemented **`GgufFile<R: Read + Seek>`** for bounded, read-only tensor payload decoding of real GGUF models supporting **`F32`**, **`F16`**, **`BF16`**, **`Q8_0`**, **`Q4_0`**, and **`Q4_1`** GGML block layouts with `general.alignment` offset calculation and strict `PayloadBudget` enforcement.
+| Model & Variant | Complete QMF BPP | Compressed VRAM | CPU (32T) Tok/s | **GPU Hybrid Tok/s** | Speedup | Mean KL vs BF16 | Top-1 Match |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `SmolLM2-135M` `MAP 4.52` | 4.521 | **72.30 MiB** | 4.18 | **11.53** | **2.76×** | 0.79210 | 61.4% |
+| `SmolLM2-135M` `BF16` | 16.007 | 256.50 MiB | 7.56 | **11.67** | **1.54×** | 0.00000 | 100.0% |
+| `SmolLM2-360M` `BF16` | 16.004 | 690.00 MiB | 4.74 | **12.10** | **2.55×** | 0.00000 | 100.0% |
+| **`SmolLM2-360M` `INT8_SYM`** | **8.256** | **355.78 MiB** | — | **20.97** | **4.42× vs BF16 CPU** | **0.00706** | **95.5%** |
+| `SmolLM2-360M` `Q4_0` | 4.506 | **194.07 MiB** | — | **11.65** | — | 0.32446 | 77.3% |
+| `SmolLM2-360M` `MAP 4.52` | 4.516 | **194.49 MiB** | 2.25 | **11.92** | **5.30×** | 0.43276 | 68.2% |
 
-### 5. Explicit Opt-In Model Discovery & Documentation Alignment (`qml-desktop`, `HANDOFF.md`, `README.md`)
-- Removed automatic first-launch directory scanning in `qml-desktop`: model discovery is now **strictly user-initiated** via explicit import or folder scan actions.
-- Updated `HANDOFF.md`, `CHANGELOG.md`, and `README.md` to eliminate obsolete pre-Singularity caveats while preserving full scientific honesty and the Permanent Memorial Dedication.
+- **Bit-for-Bit Coherent Equivalence:** GPU Hybrid generated **exact identical English text** to Rayon CPU on every tested `SmolLM2-135M` and `SmolLM2-360M` variant while keeping `100%` of linear projection operators (`211/211` on 135M, `225/225` on 360M) compressed in VRAM.
+- **Preserved Scientific Nuance (`exp-003`):** On `SmolLM2-360M`, weight-only MAP lowered mean matvec error by `11.2%` vs uniform `Q4_0` at matched budget (`0.09001` vs `0.10134`), yet uniform `Q4_0` achieved lower output KL divergence (`0.32446` vs `0.43276`) because `g128` groups hurt wider-model logits — directly motivating activation-aware **Q-Behavior** sensitivity in `v0.2.0-alpha.2`.
 
 ---
 
 ## Security, Policy & Quality Verification
 
 - **License:** MIT ([LICENSE](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/blob/main/LICENSE))
-- **Rust CI (Ubuntu & Windows, Rust `1.100.0`):** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and all **79 automated tests** pass cleanly.
+- **Rust CI (Ubuntu & Windows, Rust `1.100.0`):** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and all **78 automated tests** pass cleanly (including all 6 persistent GPU compressed kernels + full GPU Hybrid RMQ Q-Core transformer equivalence).
 - **Dependency Policy (`cargo-deny 0.21.0`):** `advisories ok, bans ok, licenses ok, sources ok` — zero ignored advisories.
 
 ---
 
 ## Quick Start (Downloaded Assets)
 
-1. **Windows:** Download `qml-desktop-v0.1.0-alpha.2-windows-x86_64.exe` (or extract `quantum-morph-laboratory-v0.1.0-alpha.2-windows-x86_64.zip`) and double-click `qml-desktop.exe`.
-2. **Linux:** Extract `quantum-morph-laboratory-v0.1.0-alpha.2-linux-x86_64.tar.gz` and run `./qml-desktop` or `./qml --help`.
+1. **Windows:** Download `qml-desktop-v0.2.0-alpha.1-windows-x86_64.exe` (or extract `quantum-morph-laboratory-v0.2.0-alpha.1-windows-x86_64.zip`) and double-click `qml-desktop.exe`.
+2. **Linux:** Extract `quantum-morph-laboratory-v0.2.0-alpha.1-linux-x86_64.tar.gz` and run `./qml-desktop` or `./qml --help`.
 3. **Verify Integrity:** Compare downloaded binaries against `SHA256SUMS.txt`.
-
-> **Experimental Notice:** QMF v0/v1, RMQ, MAP, Q-Genesis, and the WGPU compute kernels are active experimental research prototypes. Imported model weights are always opened strictly read-only.

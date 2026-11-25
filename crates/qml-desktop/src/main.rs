@@ -183,6 +183,7 @@ pub struct QmlDesktopApp {
     pub infer_compare_qmf_path: String,
     pub infer_prompt: String,
     pub infer_use_chatml: bool,
+    pub infer_use_gpu: bool,
     pub infer_max_tokens: usize,
     pub infer_temperature: f64,
     pub infer_output_text: String,
@@ -293,6 +294,7 @@ impl QmlDesktopApp {
             infer_compare_qmf_path: String::new(),
             infer_prompt: "Explain singular value decomposition in two sentences.".to_owned(),
             infer_use_chatml: true,
+            infer_use_gpu: false,
             infer_max_tokens: 48,
             infer_temperature: 0.0,
             infer_output_text: String::new(),
@@ -698,6 +700,11 @@ impl QmlDesktopApp {
         }
         let prompt = self.infer_prompt.clone();
         let use_chatml = self.infer_use_chatml;
+        let backend = if self.infer_use_gpu {
+            qml_runtime::QCoreBackend::GpuHybrid
+        } else {
+            qml_runtime::QCoreBackend::Cpu
+        };
         let max_tokens = self.infer_max_tokens.clamp(1, 256);
         let temperature = self.infer_temperature.clamp(0.0, 2.0);
         let cancel = self.cancel_flag.clone();
@@ -720,8 +727,17 @@ impl QmlDesktopApp {
                 let qmf_file = File::open(&qmf_path).map_err(|e| e.to_string())?;
                 let mut qmf_reader = QmfFileReader::open(qmf_file, &QmfBudget::default())
                     .map_err(|e| e.to_string())?;
-                let model = QCoreModel::from_qmf_reader(&mut qmf_reader, cfg.clone())
-                    .map_err(|e| e.to_string())?;
+                let model =
+                    QCoreModel::from_qmf_reader_with_backend(&mut qmf_reader, cfg.clone(), backend)
+                        .map_err(|e| e.to_string())?;
+                let bstats = model.backend_stats();
+                let _ = tx.send(WorkerEvent::Status(format!(
+                    "Q-Core backend: {} (GPU ops={}, VRAM={:.1} MiB)",
+                    bstats.backend,
+                    bstats.gpu_resident_operators,
+                    bstats.vram_weight_bytes as f64 / (1024.0 * 1024.0)
+                )));
+                ctx.request_repaint();
 
                 let formatted = if use_chatml {
                     tokenizer.format_chat_prompt(None, &prompt)

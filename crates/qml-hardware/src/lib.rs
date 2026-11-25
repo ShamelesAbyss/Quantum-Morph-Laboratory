@@ -6,9 +6,13 @@
 //! GPU adapter is available (such as on headless CI runners).
 
 use qml_core::{DenseMatrix, MatrixError};
-use qml_quant::{Int4SymGroupMatrix, Int8SymMatrix, LinearOperator};
+use qml_quant::{
+    Bf16Matrix, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix, Int8SymMatrix, LinearOperator,
+    QuantizedFactor,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
 /// Summary of host CPU, SIMD, memory, and discovered GPU adapters.
@@ -203,6 +207,7 @@ pub enum GpuComputeError {
     DeviceRequestFailed(String),
     Matrix(MatrixError),
     BufferMapFailed(String),
+    DimensionExceedsScratch { dim: usize, max_dim: usize },
 }
 
 impl fmt::Display for GpuComputeError {
@@ -212,6 +217,10 @@ impl fmt::Display for GpuComputeError {
             Self::DeviceRequestFailed(msg) => write!(f, "WGPU device request failed: {msg}"),
             Self::Matrix(err) => write!(f, "matrix error: {err}"),
             Self::BufferMapFailed(msg) => write!(f, "WGPU buffer readback failed: {msg}"),
+            Self::DimensionExceedsScratch { dim, max_dim } => write!(
+                f,
+                "dimension {dim} exceeds preallocated GPU scratch capacity {max_dim}"
+            ),
         }
     }
 }
@@ -338,6 +347,107 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+const MATVEC_Q4_1_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> nibbles_packed: array<u32>;
+@group(0) @binding(2) var<storage, read> scale_min_packed: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    var acc: f32 = 0.0;
+    let base = row * dims.cols;
+    for (var c: u32 = 0u; c < dims.cols; c = c + 1u) {
+        let idx = base + c;
+        let word = nibbles_packed[idx >> 3u];
+        let nibble = (word >> ((idx & 7u) * 4u)) & 0xFu;
+        let g = idx / dims.group_size;
+        let sm = unpack2x16float(scale_min_packed[g]);
+        acc = acc + (f32(nibble) * sm.x + sm.y) * vector[c];
+    }
+    output[row] = acc;
+}
+"#;
+
+const MATVEC_FP16_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> weights_packed: array<u32>;
+@group(0) @binding(2) var<storage, read> vector: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    var acc: f32 = 0.0;
+    let base = row * dims.cols;
+    for (var c: u32 = 0u; c < dims.cols; c = c + 1u) {
+        let idx = base + c;
+        let pair = unpack2x16float(weights_packed[idx >> 1u]);
+        let w = select(pair.x, pair.y, (idx & 1u) != 0u);
+        acc = acc + w * vector[c];
+    }
+    output[row] = acc;
+}
+"#;
+
+const MATVEC_BF16_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> weights_packed: array<u32>;
+@group(0) @binding(2) var<storage, read> vector: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    var acc: f32 = 0.0;
+    let base = row * dims.cols;
+    for (var c: u32 = 0u; c < dims.cols; c = c + 1u) {
+        let idx = base + c;
+        let word = weights_packed[idx >> 1u];
+        let bits = select((word & 0xFFFFu) << 16u, word & 0xFFFF0000u, (idx & 1u) != 0u);
+        let w = bitcast<f32>(bits);
+        acc = acc + w * vector[c];
+    }
+    output[row] = acc;
+}
+"#;
+
+/// Preallocated reusable GPU scratch vector capacity (131,072 f32s = 512 KiB per buffer).
+/// Covers vocabularies up to 131K tokens (e.g., SmolLM2 49K, Llama-3 128K) with zero per-token allocations.
+pub const GPU_SCRATCH_MAX_ELEMS: usize = 131_072;
+
 fn pack_bytes_u32(bytes: &[u8]) -> Vec<u32> {
     let mut out = Vec::with_capacity(bytes.len().div_ceil(4).max(1));
     for chunk in bytes.chunks(4) {
@@ -369,17 +479,110 @@ fn pack_u16_u32(vals: &[u16]) -> Vec<u32> {
 }
 
 /// Experimental WGPU compute shader engine for dense `f32` and direct compressed
-/// `INT8_SYM` / `Q4_0 (INT4_SYM)` matrix-vector multiplication (zero dense reconstruction in VRAM).
+/// `FP16` / `BF16` / `INT8_SYM` / `Q4_0 (INT4_SYM)` / `Q4_1 (INT4_ASYM)` matrix-vector
+/// multiplication (zero dense weight reconstruction in VRAM) with preallocated
+/// reusable scratch buffers for zero-allocation per-token inference.
 pub struct WgpuMatvecEngine {
     adapter_name: String,
     backend_name: String,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline_f32: wgpu::ComputePipeline,
+    pipeline_fp16: wgpu::ComputePipeline,
+    pipeline_bf16: wgpu::ComputePipeline,
     bgl_f32: wgpu::BindGroupLayout,
     pipeline_int8: wgpu::ComputePipeline,
     pipeline_q4_0: wgpu::ComputePipeline,
+    pipeline_q4_1: wgpu::ComputePipeline,
     bgl_quant: wgpu::BindGroupLayout,
+    scratch_vec_buf: wgpu::Buffer,
+    scratch_out_buf: wgpu::Buffer,
+    scratch_readback_buf: wgpu::Buffer,
+    exec_lock: Mutex<()>,
+}
+
+/// Format of a persistent GPU-resident matrix uploaded once to VRAM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuMatrixKind {
+    Fp32,
+    Fp16,
+    Bf16,
+    Int8Sym,
+    Int4Sym,
+    Int4Asym,
+}
+
+/// Persistent compressed weight matrix stored once in GPU VRAM with a pre-bound
+/// compute `BindGroup` targeting the engine's reusable scratch buffers.
+///
+/// Executing [`Self::matvec`] uploads only the small input vector (`cols * 4` bytes)
+/// and performs zero weight transfers, zero GPU buffer allocations, and zero bind-group
+/// allocations per token.
+pub struct PersistentGpuMatrix {
+    engine: Arc<WgpuMatvecEngine>,
+    kind: GpuMatrixKind,
+    rows: usize,
+    cols: usize,
+    vram_bytes: u64,
+    bind_group: wgpu::BindGroup,
+    _weight_buffers: Vec<wgpu::Buffer>,
+}
+
+impl PersistentGpuMatrix {
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn kind(&self) -> GpuMatrixKind {
+        self.kind
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.vram_bytes
+    }
+
+    /// Execute `y = W * x` directly on the GPU-resident compressed matrix using
+    /// preallocated reusable scratch buffers (zero weight transfer per call).
+    pub fn matvec(&self, vector: &[f64]) -> Result<Vec<f64>, GpuComputeError> {
+        if vector.len() != self.cols {
+            return Err(GpuComputeError::Matrix(MatrixError::DimensionMismatch {
+                expected: self.cols,
+                actual: vector.len(),
+            }));
+        }
+        let pipeline = match self.kind {
+            GpuMatrixKind::Fp32 => &self.engine.pipeline_f32,
+            GpuMatrixKind::Fp16 => &self.engine.pipeline_fp16,
+            GpuMatrixKind::Bf16 => &self.engine.pipeline_bf16,
+            GpuMatrixKind::Int8Sym => &self.engine.pipeline_int8,
+            GpuMatrixKind::Int4Sym => &self.engine.pipeline_q4_0,
+            GpuMatrixKind::Int4Asym => &self.engine.pipeline_q4_1,
+        };
+        let _guard = self
+            .engine
+            .exec_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let vec_f32: Vec<f32> = vector.iter().map(|&v| v as f32).collect();
+        self.engine.queue.write_buffer(
+            &self.engine.scratch_vec_buf,
+            0,
+            bytemuck::cast_slice(&vec_f32),
+        );
+        let out_bytes = (self.rows * std::mem::size_of::<f32>()) as u64;
+        self.engine.dispatch_and_readback_partial(
+            pipeline,
+            &self.bind_group,
+            self.rows as u32,
+            &self.engine.scratch_out_buf,
+            &self.engine.scratch_readback_buf,
+            out_bytes,
+        )
+    }
 }
 
 impl WgpuMatvecEngine {
@@ -410,6 +613,14 @@ impl WgpuMatvecEngine {
             label: Some("qml-matvec-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_WGSL.into()),
         });
+        let shader_fp16 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-fp16-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_FP16_WGSL.into()),
+        });
+        let shader_bf16 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-bf16-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_BF16_WGSL.into()),
+        });
         let shader_int8 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("qml-matvec-int8-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_INT8_WGSL.into()),
@@ -417,6 +628,10 @@ impl WgpuMatvecEngine {
         let shader_q4_0 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("qml-matvec-q4-0-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_Q4_0_WGSL.into()),
+        });
+        let shader_q4_1 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-q4-1-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_Q4_1_WGSL.into()),
         });
 
         let ro_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -484,6 +699,22 @@ impl WgpuMatvecEngine {
             compilation_options: Default::default(),
             cache: None,
         });
+        let pipeline_fp16 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-fp16-pipeline"),
+            layout: Some(&pl_f32),
+            module: &shader_fp16,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let pipeline_bf16 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-bf16-pipeline"),
+            layout: Some(&pl_f32),
+            module: &shader_bf16,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         let pipeline_int8 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("qml-matvec-int8-pipeline"),
             layout: Some(&pl_quant),
@@ -500,6 +731,34 @@ impl WgpuMatvecEngine {
             compilation_options: Default::default(),
             cache: None,
         });
+        let pipeline_q4_1 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-q4-1-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_q4_1,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let scratch_bytes = (GPU_SCRATCH_MAX_ELEMS * std::mem::size_of::<f32>()) as u64;
+        let scratch_vec_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("qml-scratch-vec"),
+            size: scratch_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scratch_out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("qml-scratch-out"),
+            size: scratch_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let scratch_readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("qml-scratch-readback"),
+            size: scratch_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(Self {
             adapter_name: info.name,
@@ -507,10 +766,17 @@ impl WgpuMatvecEngine {
             device,
             queue,
             pipeline_f32,
+            pipeline_fp16,
+            pipeline_bf16,
             bgl_f32,
             pipeline_int8,
             pipeline_q4_0,
+            pipeline_q4_1,
             bgl_quant,
+            scratch_vec_buf,
+            scratch_out_buf,
+            scratch_readback_buf,
+            exec_lock: Mutex::new(()),
         })
     }
 
@@ -768,7 +1034,345 @@ impl WgpuMatvecEngine {
         )
     }
 
+    fn check_scratch_dims(rows: usize, cols: usize) -> Result<(), GpuComputeError> {
+        if rows > GPU_SCRATCH_MAX_ELEMS {
+            return Err(GpuComputeError::DimensionExceedsScratch {
+                dim: rows,
+                max_dim: GPU_SCRATCH_MAX_ELEMS,
+            });
+        }
+        if cols > GPU_SCRATCH_MAX_ELEMS {
+            return Err(GpuComputeError::DimensionExceedsScratch {
+                dim: cols,
+                max_dim: GPU_SCRATCH_MAX_ELEMS,
+            });
+        }
+        Ok(())
+    }
+
+    /// Upload a dense `f32` matrix persistently to GPU VRAM with a pre-bound compute bind group.
+    pub fn upload_f32(
+        self: &Arc<Self>,
+        matrix: &DenseMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        use wgpu::util::DeviceExt;
+        let uniforms = MatvecUniforms {
+            rows: matrix.rows() as u32,
+            cols: matrix.cols() as u32,
+            group_size: 1,
+            _pad1: 0,
+        };
+        let mat_f32: Vec<f32> = matrix.as_slice().iter().map(|&v| v as f32).collect();
+        let bytes = bytemuck::cast_slice::<f32, u8>(&mat_f32);
+        let uniform_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-f32-dims"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let mat_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-f32-weights"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("persist-f32-bg"),
+            layout: &self.bgl_f32,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: mat_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.scratch_vec_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.scratch_out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        Ok(PersistentGpuMatrix {
+            engine: Arc::clone(self),
+            kind: GpuMatrixKind::Fp32,
+            rows: matrix.rows(),
+            cols: matrix.cols(),
+            vram_bytes: bytes.len() as u64 + std::mem::size_of::<MatvecUniforms>() as u64,
+            bind_group,
+            _weight_buffers: vec![uniform_buf, mat_buf],
+        })
+    }
+
+    /// Upload a packed `FP16` matrix persistently to GPU VRAM (2 bytes/weight, zero FP32 expansion).
+    pub fn upload_fp16(
+        self: &Arc<Self>,
+        matrix: &Fp16Matrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        self.upload_packed_16bit(
+            GpuMatrixKind::Fp16,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.raw_bits(),
+        )
+    }
+
+    /// Upload a packed `BF16` matrix persistently to GPU VRAM (2 bytes/weight, zero FP32 expansion).
+    pub fn upload_bf16(
+        self: &Arc<Self>,
+        matrix: &Bf16Matrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        self.upload_packed_16bit(
+            GpuMatrixKind::Bf16,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.raw_bits(),
+        )
+    }
+
+    fn upload_packed_16bit(
+        self: &Arc<Self>,
+        kind: GpuMatrixKind,
+        rows: usize,
+        cols: usize,
+        raw_bits: &[u16],
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(rows, cols)?;
+        use wgpu::util::DeviceExt;
+        let uniforms = MatvecUniforms {
+            rows: rows as u32,
+            cols: cols as u32,
+            group_size: 1,
+            _pad1: 0,
+        };
+        let packed = pack_u16_u32(raw_bits);
+        let bytes = bytemuck::cast_slice::<u32, u8>(&packed);
+        let uniform_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-16b-dims"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let mat_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-16b-weights"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("persist-16b-bg"),
+            layout: &self.bgl_f32,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: mat_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.scratch_vec_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.scratch_out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        Ok(PersistentGpuMatrix {
+            engine: Arc::clone(self),
+            kind,
+            rows,
+            cols,
+            vram_bytes: bytes.len() as u64 + std::mem::size_of::<MatvecUniforms>() as u64,
+            bind_group,
+            _weight_buffers: vec![uniform_buf, mat_buf],
+        })
+    }
+
+    /// Upload a compressed `INT8_SYM` matrix persistently to GPU VRAM (~1.03 bytes/weight).
+    pub fn upload_int8_sym(
+        self: &Arc<Self>,
+        matrix: &Int8SymMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let code_bytes: Vec<u8> = matrix.codes().iter().map(|&q| q as u8).collect();
+        let packed_codes = pack_bytes_u32(&code_bytes);
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        self.upload_quantized_2buf(
+            GpuMatrixKind::Int8Sym,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed_codes,
+            &packed_scales,
+        )
+    }
+
+    /// Upload a compressed `Q4_0 (INT4_SYM)` matrix persistently to GPU VRAM (~0.56 bytes/weight).
+    pub fn upload_int4_sym(
+        self: &Arc<Self>,
+        matrix: &Int4SymGroupMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let packed_nibbles = pack_bytes_u32(matrix.packed_nibbles());
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        self.upload_quantized_2buf(
+            GpuMatrixKind::Int4Sym,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed_nibbles,
+            &packed_scales,
+        )
+    }
+
+    fn upload_quantized_2buf(
+        self: &Arc<Self>,
+        kind: GpuMatrixKind,
+        rows: usize,
+        cols: usize,
+        group_size: usize,
+        packed_weights: &[u32],
+        packed_scales: &[u32],
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        use wgpu::util::DeviceExt;
+        let uniforms = MatvecUniforms {
+            rows: rows as u32,
+            cols: cols as u32,
+            group_size: group_size as u32,
+            _pad1: 0,
+        };
+        let w_bytes = bytemuck::cast_slice::<u32, u8>(packed_weights);
+        let s_bytes = bytemuck::cast_slice::<u32, u8>(packed_scales);
+        let uniform_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-q-dims"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let weights_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-q-weights"),
+                contents: w_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let scales_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-q-scales"),
+                contents: s_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("persist-q-bg"),
+            layout: &self.bgl_quant,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weights_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scales_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.scratch_vec_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.scratch_out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        Ok(PersistentGpuMatrix {
+            engine: Arc::clone(self),
+            kind,
+            rows,
+            cols,
+            vram_bytes: w_bytes.len() as u64
+                + s_bytes.len() as u64
+                + std::mem::size_of::<MatvecUniforms>() as u64,
+            bind_group,
+            _weight_buffers: vec![uniform_buf, weights_buf, scales_buf],
+        })
+    }
+
+    /// Upload a compressed `Q4_1 (INT4_ASYM)` matrix persistently to GPU VRAM (~0.625 bytes/weight).
+    /// Interleaves `(scale_f16, min_f16)` into a single `u32` per group for 1-instruction `unpack2x16float`.
+    pub fn upload_int4_asym(
+        self: &Arc<Self>,
+        matrix: &Int4AsymGroupMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let packed_nibbles = pack_bytes_u32(matrix.packed_nibbles());
+        let packed_scale_min: Vec<u32> = matrix
+            .scales_f16()
+            .iter()
+            .zip(matrix.mins_f16())
+            .map(|(&s, &m)| u32::from(s) | (u32::from(m) << 16))
+            .collect();
+        self.upload_quantized_2buf(
+            GpuMatrixKind::Int4Asym,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed_nibbles,
+            &packed_scale_min,
+        )
+    }
+
+    /// Upload a [`QuantizedFactor`] (used by SVD and RMQ Shared-Basis/Core latents) persistently to VRAM.
+    pub fn upload_quantized_factor(
+        self: &Arc<Self>,
+        factor: &QuantizedFactor,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        match factor {
+            QuantizedFactor::Fp32(m) => self.upload_f32(m),
+            QuantizedFactor::Fp16(m) => self.upload_fp16(m),
+            QuantizedFactor::Int8Sym(m) => self.upload_int8_sym(m),
+        }
+    }
+
     fn dispatch_and_readback(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        rows: u32,
+        out_buf: &wgpu::Buffer,
+        readback_buf: &wgpu::Buffer,
+        out_bytes: u64,
+    ) -> Result<Vec<f64>, GpuComputeError> {
+        self.dispatch_and_readback_partial(
+            pipeline,
+            bind_group,
+            rows,
+            out_buf,
+            readback_buf,
+            out_bytes,
+        )
+    }
+
+    fn dispatch_and_readback_partial(
         &self,
         pipeline: &wgpu::ComputePipeline,
         bind_group: &wgpu::BindGroup,
@@ -794,7 +1398,7 @@ impl WgpuMatvecEngine {
         encoder.copy_buffer_to_buffer(out_buf, 0, readback_buf, 0, out_bytes);
         self.queue.submit(Some(encoder.finish()));
 
-        let slice = readback_buf.slice(..);
+        let slice = readback_buf.slice(0..out_bytes);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
@@ -890,5 +1494,70 @@ mod tests {
             err4 < 1e-4,
             "WGPU Q4_0 (INT4_SYM) matvec diverged from CPU: max_err={err4}"
         );
+
+        // 4. Persistent GPU-resident compressed operators (FP32, FP16, BF16, INT8, Q4_0, Q4_1)
+        //    reused across multiple input vectors with zero per-call weight uploads.
+        let engine = Arc::new(engine);
+        let fp16 = Fp16Matrix::quantize(&mat);
+        let bf16 = Bf16Matrix::quantize(&mat);
+        let q4_1 = Int4AsymGroupMatrix::quantize(&mat, 32).unwrap();
+
+        let p_f32 = engine.upload_f32(&mat).unwrap();
+        let p_fp16 = engine.upload_fp16(&fp16).unwrap();
+        let p_bf16 = engine.upload_bf16(&bf16).unwrap();
+        let p_q8 = engine.upload_int8_sym(&q8).unwrap();
+        let p_q4_0 = engine.upload_int4_sym(&q4).unwrap();
+        let p_q4_1 = engine.upload_int4_asym(&q4_1).unwrap();
+
+        assert!(p_q4_0.vram_bytes() < p_f32.vram_bytes() / 5);
+        assert!(p_q8.vram_bytes() < p_f32.vram_bytes() / 3);
+        assert!(p_bf16.vram_bytes() <= p_f32.vram_bytes() / 2 + 64);
+
+        let x2: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
+        for probe in [&x, &x2] {
+            let checks: [(&str, Vec<f64>, Vec<f64>); 6] = [
+                (
+                    "FP32",
+                    mat.matvec(probe).unwrap(),
+                    p_f32.matvec(probe).unwrap(),
+                ),
+                (
+                    "FP16",
+                    fp16.matvec(probe).unwrap(),
+                    p_fp16.matvec(probe).unwrap(),
+                ),
+                (
+                    "BF16",
+                    bf16.matvec(probe).unwrap(),
+                    p_bf16.matvec(probe).unwrap(),
+                ),
+                (
+                    "INT8",
+                    q8.matvec(probe).unwrap(),
+                    p_q8.matvec(probe).unwrap(),
+                ),
+                (
+                    "Q4_0",
+                    q4.matvec(probe).unwrap(),
+                    p_q4_0.matvec(probe).unwrap(),
+                ),
+                (
+                    "Q4_1",
+                    q4_1.matvec(probe).unwrap(),
+                    p_q4_1.matvec(probe).unwrap(),
+                ),
+            ];
+            for (name, cpu_y, gpu_y) in checks {
+                let err = cpu_y
+                    .iter()
+                    .zip(&gpu_y)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0_f64, f64::max);
+                assert!(
+                    err < 1e-4,
+                    "Persistent GPU {name} matvec diverged from CPU: max_err={err}"
+                );
+            }
+        }
     }
 }

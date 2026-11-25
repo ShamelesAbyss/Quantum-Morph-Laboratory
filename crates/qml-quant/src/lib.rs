@@ -11,7 +11,7 @@ pub mod rmq;
 
 pub use baselines::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
-    Int8AsymMatrix, Int8SymMatrix, LowRankSvdMatrix, SparseResidual,
+    Int8AsymMatrix, Int8SymMatrix, LowRankSvdMatrix, QuantizedFactor, SparseResidual,
 };
 pub use map::{
     LayerAllocation, LayerCandidate, MapAllocationReport, MapConfig, MapLayerProfile,

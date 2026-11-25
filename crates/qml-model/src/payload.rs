@@ -17,10 +17,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 /// Hard safety ceiling on a single shard index JSON file (16 MiB).
 pub const MAX_SHARD_INDEX_BYTES: u64 = 16 * 1024 * 1024;
-/// Default per-tensor allocation ceiling (256 MiB).
-pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 256 * 1024 * 1024;
-/// Default cumulative payload budget for multi-tensor reads (1 GiB).
-pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+/// Default per-tensor allocation ceiling (2 GiB in decoded f64 — covers 360M–3B embeddings).
+pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Default cumulative payload budget for multi-tensor reads (16 GiB).
+pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Default element count per streaming chunk (65,536 elements = 512 KiB in f64).
 pub const DEFAULT_STREAM_CHUNK_ELEMENTS: usize = 65_536;
 

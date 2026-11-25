@@ -42,10 +42,9 @@ All of the following passed locally on Windows 11 with Rust 1.100.0 (`cargo +1.1
 ## Known limits and blockers
 
 - QMF v0/v1 are experimental research formats and are not yet compatibility-stable across major milestones.
-- WGPU compute kernels (`FP32`, `INT8_SYM`, `Q4_0`) are validated standalone in `qml-hardware` but are not yet wired as persistent GPU-resident model weights inside `QCoreModel` (planned for `v0.2.0-alpha.1 — PROJECT ACCELERATION`).
-- `qml-behavior` (intermediate activation capture, RSA, reversible layer interventions) and scalable whole-model `qml-genesis` with direct Genome-to-QMF export remain to be built (planned for `v0.2.0-alpha.2`).
+- `QCoreBackend::GpuHybrid` currently dispatches persistent compressed linear projections on GPU while keeping lightweight RMSNorm, RoPE, and attention on CPU; full GPU-resident KV-cache & fused attention kernels remain future optimization work.
+- `qml-behavior` (intermediate activation capture, RSA, reversible layer interventions) and scalable whole-model `qml-genesis` with direct Genome-to-QMF export remain to be built (next milestone: `v0.2.0-alpha.2`).
 
 ## Next steps
 
-1. **PROJECT ACCELERATION (`v0.2.0-alpha.1`):** Implement persistent GPU-resident compressed operators (`FP32`, `INT8_SYM`, `Q4_0`, RMQ Shared-Basis/Core) with reusable GPU buffers in `qml-hardware`, integrate `QCoreBackend::GpuHybrid` into `qml-runtime`, `qml generate`, and `qml-desktop`, and validate on a larger openly licensed pretrained model (`SmolLM2-360M-Instruct`, stored locally outside Git).
-2. **PROJECT GENESIS & Q-BEHAVIOR (`v0.2.0-alpha.2`):** Build `qml-behavior` (layer activation capture, cosine/L2 divergence, RSA, reversible interventions) and upgrade `qml-genesis` for role-stratified whole-model search + direct Genome-to-QMF export.
+1. **PROJECT GENESIS & Q-BEHAVIOR (`v0.2.0-alpha.2`):** Build `qml-behavior` (layer activation capture, cosine/L2 divergence, RSA, reversible interventions) and upgrade `qml-genesis` for role-stratified whole-model search + direct Genome-to-QMF export, integrating both into `qml-desktop`.

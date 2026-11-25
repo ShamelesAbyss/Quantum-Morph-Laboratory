@@ -1,0 +1,137 @@
+# Experiment Record: exp-003 — PROJECT ACCELERATION (Persistent GPU-Resident Q-Core on SmolLM2-135M & SmolLM2-360M)
+# All numbers below were measured directly from `qml.exe --release` on Windows 11 x86_64.
+# Pretrained model weights are stored strictly outside Git (Apache-2.0 source checkpoints).
+
+[experiment]
+id = "exp-003-smollm2-360m-gpu"
+title = "Persistent GPU-Resident Compressed Q-Core Inference on SmolLM2-135M & SmolLM2-360M-Instruct"
+date = "2026-11-25"
+milestone = "v0.2.0-alpha.1 — PROJECT ACCELERATION"
+host_os = "Windows 11 Home (26H2) x86_64"
+host_cpu = "Intel Core i9-14900HX (32 logical cores, SSE4.2/AVX/AVX2/FMA/F16C)"
+host_gpu = "NVIDIA GeForce RTX 4070 Laptop GPU (8 GB VRAM, WGPU Vulkan)"
+host_ram_gb = 32
+rust_toolchain = "rustc 1.100.0 (x86_64-pc-windows-msvc)"
+
+[source_models.smollm2_135m]
+repo = "HuggingFaceTB/SmolLM2-135M-Instruct"
+license = "Apache-2.0"
+safetensors_bytes = 269060552
+safetensors_sha256 = "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+parameters = 134515008
+layers = 30
+hidden_size = 576
+vocab_size = 49152
+
+[source_models.smollm2_360m]
+repo = "HuggingFaceTB/SmolLM2-360M-Instruct"
+license = "Apache-2.0"
+safetensors_bytes = 723674912
+safetensors_sha256 = "e6bffe7435d7ddc10fd3b9a9efd429dafbacb1cb17015fb5562664e7532bf86e"
+parameters = 361821120
+layers = 32
+hidden_size = 960
+intermediate_size = 2560
+vocab_size = 49152
+peak_susceptibility_tensor = "model.layers.0.self_attn.o_proj.weight"
+peak_susceptibility_score = 65.31
+
+[[benchmarks_135m]]
+variant = "BF16"
+backend = "Rayon CPU (32 threads)"
+gpu_ops = 0
+vram_weight_mib = 0.0
+tokens_per_second = 7.56
+elapsed_ms = 8070.0
+output_matches_gpu_exactly = true
+
+[[benchmarks_135m]]
+variant = "BF16"
+backend = "WGPU Hybrid (RTX 4070 Vulkan)"
+gpu_ops = 211
+vram_weight_mib = 256.50
+tokens_per_second = 11.67
+elapsed_ms = 5228.2
+speedup_vs_cpu = 1.54
+output_matches_cpu_exactly = true
+
+[[benchmarks_135m]]
+variant = "MAP 4.52 bpp (Quant-Only)"
+backend = "Rayon CPU (32 threads)"
+gpu_ops = 0
+vram_weight_mib = 0.0
+tokens_per_second = 4.18
+elapsed_ms = 14590.1
+output_matches_gpu_exactly = true
+
+[[benchmarks_135m]]
+variant = "MAP 4.52 bpp (Quant-Only)"
+backend = "WGPU Hybrid (RTX 4070 Vulkan)"
+gpu_ops = 211
+vram_weight_mib = 72.30
+tokens_per_second = 11.53
+elapsed_ms = 5289.5
+speedup_vs_cpu = 2.76
+output_matches_cpu_exactly = true
+
+[[benchmarks_360m]]
+variant = "BF16 (Reference)"
+qmf_bytes = 723815411
+complete_qmf_bpp = 16.004
+compression_vs_source = 1.00
+mean_matvec_rel_error = 0.00000
+cpu_tok_per_s = 4.74
+gpu_tok_per_s = 12.10
+gpu_speedup_vs_cpu = 2.55
+gpu_ops = 225
+vram_weight_mib = 690.00
+mean_kl_vs_bf16 = 0.00000
+top1_agreement = 1.000
+
+[[benchmarks_360m]]
+variant = "INT8_SYM (g64)"
+qmf_bytes = 373379870
+complete_qmf_bpp = 8.256
+compression_vs_source = 1.94
+mean_matvec_rel_error = 0.00631
+gpu_tok_per_s = 20.97
+gpu_ops = 225
+vram_weight_mib = 355.78
+mean_kl_vs_bf16 = 0.00706
+logit_rmse_vs_bf16 = 0.14341
+top1_agreement = 0.955
+ppl_ref = 4.483
+ppl_transformed = 4.559
+
+[[benchmarks_360m]]
+variant = "INT4_SYM (Q4_0 g32)"
+qmf_bytes = 203805958
+complete_qmf_bpp = 4.506
+compression_vs_source = 3.55
+mean_matvec_rel_error = 0.10134
+gpu_tok_per_s = 11.65
+gpu_ops = 225
+vram_weight_mib = 194.07
+mean_kl_vs_bf16 = 0.32446
+logit_rmse_vs_bf16 = 1.81034
+top1_agreement = 0.773
+ppl_ref = 5.174
+ppl_transformed = 5.468
+
+[[benchmarks_360m]]
+variant = "MAP Adaptive (Two-Pass Streaming, 4.516 bpp)"
+qmf_bytes = 204256278
+complete_qmf_bpp = 4.516
+compression_vs_source = 3.54
+mean_matvec_rel_error = 0.09001
+cpu_tok_per_s = 2.25
+gpu_tok_per_s = 11.92
+gpu_speedup_vs_cpu = 5.30
+gpu_ops = 225
+vram_weight_mib = 194.49
+mean_kl_vs_bf16 = 0.43276
+logit_rmse_vs_bf16 = 2.05347
+top1_agreement = 0.682
+ppl_ref = 4.563
+ppl_transformed = 6.271
+notes = "Preserved negative/nuanced control: weight-only MAP lowered mean matvec error by 11.2% vs uniform Q4_0 at matched budget, but shifting some layers to INT4_SYM_G128 increased output KL divergence on 360M (0.43276 vs 0.32446), demonstrating the need for activation-aware Q-Behavior sensitivity in v0.2.0-alpha.2."

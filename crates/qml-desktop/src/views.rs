@@ -1447,6 +1447,10 @@ pub fn show_qcore(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Contex
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut app.infer_use_chatml, "Apply ChatML Instruct Template");
+            ui.checkbox(
+                &mut app.infer_use_gpu,
+                "GPU Hybrid (Persistent Compressed VRAM)",
+            );
             ui.label("Max Tokens:");
             ui.add(egui::DragValue::new(&mut app.infer_max_tokens).range(4..=256));
             ui.label("Temperature:");

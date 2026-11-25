@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 qml-core = { path = "../qml-core" }
 qml-format = { path = "../qml-format" }
+qml-hardware = { path = "../qml-hardware" }
 qml-model = { path = "../qml-model" }
 qml-quant = { path = "../qml-quant" }
 serde = { version = "1", features = ["derive"] }

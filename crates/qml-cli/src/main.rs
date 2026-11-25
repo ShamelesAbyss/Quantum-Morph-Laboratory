@@ -1464,12 +1464,26 @@ fn run_generate(args: Vec<String>) -> ExitCode {
     let mut max_tokens: usize = 32;
     let mut temperature: f64 = 0.0;
     let mut use_chat = false;
+    let mut backend = qml_runtime::QCoreBackend::Cpu;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json = true,
             "--chat" => use_chat = true,
+            "--backend" => {
+                i += 1;
+                match args.get(i).map(String::as_str) {
+                    Some("cpu") => backend = qml_runtime::QCoreBackend::Cpu,
+                    Some("gpu") | Some("gpu-hybrid") | Some("auto") => {
+                        backend = qml_runtime::QCoreBackend::GpuHybrid;
+                    }
+                    other => {
+                        eprintln!("invalid --backend value: {other:?} (expected cpu or gpu)");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "--config" => {
                 i += 1;
                 config_path = args.get(i).map(PathBuf::from);
@@ -1511,7 +1525,7 @@ fn run_generate(args: Vec<String>) -> ExitCode {
 
     let (Some(qmf_p), Some(cfg_p), Some(tok_p)) = (qmf_path, config_path, tokenizer_path) else {
         eprintln!(
-            "usage: qml generate MODEL.qmf --config config.json --tokenizer tokenizer.json [--prompt TEXT] [--max-tokens N] [--temperature T] [--chat] [--compare-qmf REF.qmf] [--json]"
+            "usage: qml generate MODEL.qmf --config config.json --tokenizer tokenizer.json [--backend cpu|gpu] [--prompt TEXT] [--max-tokens N] [--temperature T] [--chat] [--compare-qmf REF.qmf] [--json]"
         );
         return ExitCode::from(2);
     };
@@ -1552,13 +1566,15 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         }
     };
     let model_id = qmf_reader.manifest().model_id.clone();
-    let model = match QCoreModel::from_qmf_reader(&mut qmf_reader, cfg.clone()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("could not initialize QCoreModel: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let model =
+        match QCoreModel::from_qmf_reader_with_backend(&mut qmf_reader, cfg.clone(), backend) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("could not initialize QCoreModel: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let stats = model.backend_stats();
 
     let formatted = if use_chat {
         tokenizer.format_chat_prompt(None, &prompt)
@@ -1574,6 +1590,13 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         println!(
             "  Model: {} ({} layers, hidden={}, vocab={})",
             model_id, cfg.num_layers, cfg.hidden_size, cfg.vocab_size
+        );
+        println!(
+            "  Backend: {} (GPU ops={}, CPU ops={}, Compressed VRAM={:.2} MiB)",
+            stats.backend,
+            stats.gpu_resident_operators,
+            stats.cpu_fallback_operators,
+            stats.vram_weight_bytes as f64 / (1024.0 * 1024.0)
         );
         println!(
             "  Prompt tokens: {} | Max new tokens: {} | Temp: {:.2}",

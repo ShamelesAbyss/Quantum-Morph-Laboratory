@@ -11,10 +11,11 @@
 
 use qml_core::{DeterministicRng, MatrixError};
 use qml_format::{QmfArchiveV1, QmfError, QmfFileReader, QmfLatentCache, QmfOperator};
+use qml_hardware::{PersistentGpuMatrix, WgpuMatvecEngine};
 use qml_model::{DType, encode_safetensors};
-use qml_quant::LinearOperator;
+use qml_quant::{LinearOperator, QuantizedFactor, SparseResidual};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -176,30 +177,265 @@ impl KvCache {
     }
 }
 
+/// Execution backend selection for Q-Core inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QCoreBackend {
+    /// Multi-threaded Rayon CPU execution over compressed QMF operators.
+    #[default]
+    Cpu,
+    /// Persistent GPU-resident compressed operators via WGPU compute shaders
+    /// (zero per-token weight transfer or buffer allocation), with automatic
+    /// graceful fallback to CPU if no compatible GPU adapter is present.
+    GpuHybrid,
+}
+
+/// Runtime backend telemetry for an initialized [`QCoreModel`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QCoreBackendStats {
+    pub backend: String,
+    pub gpu_adapter: Option<String>,
+    pub gpu_resident_operators: usize,
+    pub cpu_fallback_operators: usize,
+    pub vram_weight_bytes: u64,
+    pub shared_latents_deduped_gpu: usize,
+}
+
+enum GpuOperator {
+    Single(PersistentGpuMatrix),
+    LowRankSvd {
+        left: PersistentGpuMatrix,
+        right: PersistentGpuMatrix,
+    },
+    RmqSharedBasis {
+        u_shared: Arc<PersistentGpuMatrix>,
+        core: PersistentGpuMatrix,
+        vt_shared: Arc<PersistentGpuMatrix>,
+        sparse_residual: Option<SparseResidual>,
+    },
+    RmqSharedCore {
+        left: PersistentGpuMatrix,
+        shared_core: Arc<PersistentGpuMatrix>,
+        right: PersistentGpuMatrix,
+        sparse_residual: Option<SparseResidual>,
+    },
+}
+
+impl GpuOperator {
+    fn matvec(&self, x: &[f64]) -> Result<Vec<f64>, MatrixError> {
+        let map_err = |_| MatrixError::Empty;
+        match self {
+            Self::Single(m) => m.matvec(x).map_err(map_err),
+            Self::LowRankSvd { left, right } => {
+                let t = right.matvec(x).map_err(map_err)?;
+                left.matvec(&t).map_err(map_err)
+            }
+            Self::RmqSharedBasis {
+                u_shared,
+                core,
+                vt_shared,
+                sparse_residual,
+            } => {
+                let t1 = vt_shared.matvec(x).map_err(map_err)?;
+                let t2 = core.matvec(&t1).map_err(map_err)?;
+                let mut y = u_shared.matvec(&t2).map_err(map_err)?;
+                if let Some(sp) = sparse_residual {
+                    sp.add_matvec_into(x, &mut y)?;
+                }
+                Ok(y)
+            }
+            Self::RmqSharedCore {
+                left,
+                shared_core,
+                right,
+                sparse_residual,
+            } => {
+                let t1 = right.matvec(x).map_err(map_err)?;
+                let t2 = shared_core.matvec(&t1).map_err(map_err)?;
+                let mut y = left.matvec(&t2).map_err(map_err)?;
+                if let Some(sp) = sparse_residual {
+                    sp.add_matvec_into(x, &mut y)?;
+                }
+                Ok(y)
+            }
+        }
+    }
+}
+
+struct RuntimeOperator {
+    cpu: QmfOperator,
+    gpu: Option<GpuOperator>,
+}
+
+impl RuntimeOperator {
+    fn cpu_only(cpu: QmfOperator) -> Self {
+        Self { cpu, gpu: None }
+    }
+
+    fn matvec(&self, x: &[f64]) -> Result<Vec<f64>, MatrixError> {
+        if let Some(gpu) = &self.gpu {
+            gpu.matvec(x)
+        } else {
+            self.cpu.matvec(x)
+        }
+    }
+
+    fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        self.cpu.decode_row(row)
+    }
+}
+
+struct GpuUploadContext {
+    engine: Arc<WgpuMatvecEngine>,
+    latent_gpu_cache: HashMap<usize, Arc<PersistentGpuMatrix>>,
+    vram_weight_bytes: u64,
+    gpu_resident_operators: usize,
+    cpu_fallback_operators: usize,
+}
+
+impl GpuUploadContext {
+    fn new(engine: Arc<WgpuMatvecEngine>) -> Self {
+        Self {
+            engine,
+            latent_gpu_cache: HashMap::new(),
+            vram_weight_bytes: 0,
+            gpu_resident_operators: 0,
+            cpu_fallback_operators: 0,
+        }
+    }
+
+    fn upload_or_cache_latent(
+        &mut self,
+        factor: &Arc<QuantizedFactor>,
+    ) -> Option<Arc<PersistentGpuMatrix>> {
+        let key = Arc::as_ptr(factor) as usize;
+        if let Some(existing) = self.latent_gpu_cache.get(&key) {
+            return Some(Arc::clone(existing));
+        }
+        let uploaded = Arc::new(self.engine.upload_quantized_factor(factor).ok()?);
+        self.vram_weight_bytes += uploaded.vram_bytes();
+        self.latent_gpu_cache.insert(key, Arc::clone(&uploaded));
+        Some(uploaded)
+    }
+
+    fn wrap(&mut self, cpu: QmfOperator) -> RuntimeOperator {
+        let gpu_op = match &cpu {
+            QmfOperator::DenseF32(m) => self.engine.upload_f32(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::DenseF16(m) => self.engine.upload_fp16(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::DenseBf16(m) => self.engine.upload_bf16(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::Int8Sym(m) => self.engine.upload_int8_sym(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::Int4Sym(m) => self.engine.upload_int4_sym(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::Int4Asym(m) => self.engine.upload_int4_asym(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::LowRankSvd(svd) => {
+                let left = self.engine.upload_quantized_factor(svd.left()).ok();
+                let right = self.engine.upload_quantized_factor(svd.right()).ok();
+                match (left, right) {
+                    (Some(l), Some(r)) => {
+                        self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
+                        Some(GpuOperator::LowRankSvd { left: l, right: r })
+                    }
+                    _ => None,
+                }
+            }
+            QmfOperator::RmqSharedBasis {
+                u_shared,
+                core,
+                vt_shared,
+                sparse_residual,
+                ..
+            } => {
+                let u_gpu = self.upload_or_cache_latent(u_shared);
+                let vt_gpu = self.upload_or_cache_latent(vt_shared);
+                let c_gpu = self.engine.upload_quantized_factor(core).ok();
+                match (u_gpu, c_gpu, vt_gpu) {
+                    (Some(u), Some(c), Some(vt)) => {
+                        self.vram_weight_bytes += c.vram_bytes();
+                        Some(GpuOperator::RmqSharedBasis {
+                            u_shared: u,
+                            core: c,
+                            vt_shared: vt,
+                            sparse_residual: sparse_residual.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            QmfOperator::RmqSharedCore {
+                left,
+                shared_core,
+                right,
+                sparse_residual,
+                ..
+            } => {
+                let s_gpu = self.upload_or_cache_latent(shared_core);
+                let l_gpu = self.engine.upload_quantized_factor(left).ok();
+                let r_gpu = self.engine.upload_quantized_factor(right).ok();
+                match (l_gpu, s_gpu, r_gpu) {
+                    (Some(l), Some(s), Some(r)) => {
+                        self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
+                        Some(GpuOperator::RmqSharedCore {
+                            left: l,
+                            shared_core: s,
+                            right: r,
+                            sparse_residual: sparse_residual.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if gpu_op.is_some() {
+            self.gpu_resident_operators += 1;
+        } else {
+            self.cpu_fallback_operators += 1;
+        }
+        RuntimeOperator { cpu, gpu: gpu_op }
+    }
+}
+
 struct TransformerBlock {
     input_norm: Vec<f64>,
-    q_proj: QmfOperator,
-    k_proj: QmfOperator,
-    v_proj: QmfOperator,
-    o_proj: QmfOperator,
+    q_proj: RuntimeOperator,
+    k_proj: RuntimeOperator,
+    v_proj: RuntimeOperator,
+    o_proj: RuntimeOperator,
     post_attn_norm: Vec<f64>,
-    gate_proj: QmfOperator,
-    up_proj: QmfOperator,
-    down_proj: QmfOperator,
+    gate_proj: RuntimeOperator,
+    up_proj: RuntimeOperator,
+    down_proj: RuntimeOperator,
 }
 
 /// Executable decoder-only transformer loaded directly from a QMF v1 container.
 ///
 /// Retains embeddings and linear projections in their native compressed `QmfOperator`
-/// form (zero dense `f64` reconstruction of embeddings or weights) and deduplicates
-/// shared RMQ latent structures across layers via `Arc`.
+/// form (zero dense `f64` reconstruction of embeddings or weights), deduplicates
+/// shared RMQ latent structures across layers via `Arc`, and optionally executes
+/// persistent compressed weights directly in GPU VRAM via WGPU compute shaders.
 pub struct QCoreModel {
     config: TransformerConfig,
-    embed_tokens: Arc<QmfOperator>,
+    embed_tokens: Arc<RuntimeOperator>,
     layers: Vec<TransformerBlock>,
     final_norm: Vec<f64>,
-    lm_head: Arc<QmfOperator>,
+    lm_head: Arc<RuntimeOperator>,
     shared_latents_deduped: usize,
+    backend_stats: QCoreBackendStats,
 }
 
 /// Output of autoregressive generation.
@@ -225,143 +461,114 @@ pub struct InferenceComparison {
 }
 
 impl QCoreModel {
-    /// Load an executable model directly from a validated QMF v1 archive.
-    ///
-    /// Linear projection weights remain in their native compressed `QmfOperator`
-    /// form (INT4, INT8, SVD, RMQ shared-basis + sparse residual, etc.) during inference.
+    /// Load an executable model directly from a validated QMF v1 archive (CPU backend).
     pub fn from_qmf(
         archive: &QmfArchiveV1,
         config: TransformerConfig,
     ) -> Result<Self, RuntimeError> {
-        config.validate()?;
-        let mut latent_cache = QmfLatentCache::new();
-
-        // Keep embeddings in compressed QmfOperator form; decode only 1 row per token on demand.
-        let embed_op =
-            Arc::new(archive.load_operator_cached("model.embed_tokens.weight", &mut latent_cache)?);
-        if embed_op.rows() != config.vocab_size || embed_op.cols() != config.hidden_size {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "embed_tokens shape {}x{} does not match vocab_size={} hidden_size={}",
-                embed_op.rows(),
-                embed_op.cols(),
-                config.vocab_size,
-                config.hidden_size
-            )));
-        }
-
-        let mut layers = Vec::with_capacity(config.num_layers);
-        for l in 0..config.num_layers {
-            layers.push(TransformerBlock {
-                input_norm: archive
-                    .load_vector_f64(&format!("model.layers.{l}.input_layernorm.weight"))?,
-                q_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.self_attn.q_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                k_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.self_attn.k_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                v_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.self_attn.v_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                o_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.self_attn.o_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                post_attn_norm: archive.load_vector_f64(&format!(
-                    "model.layers.{l}.post_attention_layernorm.weight"
-                ))?,
-                gate_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.mlp.gate_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                up_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.mlp.up_proj.weight"),
-                    &mut latent_cache,
-                )?,
-                down_proj: archive.load_operator_cached(
-                    &format!("model.layers.{l}.mlp.down_proj.weight"),
-                    &mut latent_cache,
-                )?,
-            });
-        }
-
-        let final_norm = archive.load_vector_f64("model.norm.weight")?;
-        let lm_head = if config.tie_word_embeddings {
-            Arc::clone(&embed_op)
-        } else {
-            match archive.load_operator_cached("lm_head.weight", &mut latent_cache) {
-                Ok(op) => Arc::new(op),
-                Err(_) => Arc::clone(&embed_op),
-            }
-        };
-
-        Ok(Self {
-            config,
-            embed_tokens: embed_op,
-            layers,
-            final_norm,
-            lm_head,
-            shared_latents_deduped: latent_cache.len(),
-        })
+        Self::from_qmf_with_backend(archive, config, QCoreBackend::Cpu)
     }
 
-    /// Load an executable model lazily from a file-backed [`QmfFileReader`] without
-    /// buffering the entire compressed QMF file payload in RAM first.
+    /// Load an executable model from a validated QMF v1 archive with an explicit backend.
+    pub fn from_qmf_with_backend(
+        archive: &QmfArchiveV1,
+        config: TransformerConfig,
+        backend: QCoreBackend,
+    ) -> Result<Self, RuntimeError> {
+        Self::build_model(
+            config,
+            backend,
+            |name, cache| archive.load_operator_cached(name, cache),
+            |name| archive.load_vector_f64(name),
+        )
+    }
+
+    /// Load an executable model lazily from a file-backed [`QmfFileReader`] (CPU backend).
     pub fn from_qmf_reader<R: std::io::Read + std::io::Seek>(
         reader: &mut QmfFileReader<R>,
         config: TransformerConfig,
     ) -> Result<Self, RuntimeError> {
-        config.validate()?;
-        let mut latent_cache = QmfLatentCache::new();
+        Self::from_qmf_reader_with_backend(reader, config, QCoreBackend::Cpu)
+    }
 
-        let embed_op =
-            Arc::new(reader.load_operator_cached("model.embed_tokens.weight", &mut latent_cache)?);
-        if embed_op.rows() != config.vocab_size || embed_op.cols() != config.hidden_size {
+    /// Load an executable model lazily from a file-backed [`QmfFileReader`] with an explicit
+    /// execution backend (`Cpu` or `GpuHybrid` with persistent VRAM-resident compressed weights).
+    pub fn from_qmf_reader_with_backend<R: std::io::Read + std::io::Seek>(
+        reader: &mut QmfFileReader<R>,
+        config: TransformerConfig,
+        backend: QCoreBackend,
+    ) -> Result<Self, RuntimeError> {
+        let mut latent_cache = QmfLatentCache::new();
+        config.validate()?;
+        let mut gpu_ctx = match backend {
+            QCoreBackend::Cpu => None,
+            QCoreBackend::GpuHybrid => WgpuMatvecEngine::try_new()
+                .ok()
+                .map(|e| GpuUploadContext::new(Arc::new(e))),
+        };
+        let mut wrap_op = |op: QmfOperator| -> RuntimeOperator {
+            if let Some(ctx) = gpu_ctx.as_mut() {
+                ctx.wrap(op)
+            } else {
+                RuntimeOperator::cpu_only(op)
+            }
+        };
+
+        let embed_raw =
+            reader.load_operator_cached("model.embed_tokens.weight", &mut latent_cache)?;
+        if embed_raw.rows() != config.vocab_size || embed_raw.cols() != config.hidden_size {
             return Err(RuntimeError::InvalidConfig(format!(
                 "embed_tokens shape {}x{} does not match vocab_size={} hidden_size={}",
-                embed_op.rows(),
-                embed_op.cols(),
+                embed_raw.rows(),
+                embed_raw.cols(),
                 config.vocab_size,
                 config.hidden_size
             )));
         }
+        // Only upload embed_tokens to VRAM when it is also tied as lm_head (decode_row runs on CPU).
+        let embed_op = if config.tie_word_embeddings {
+            Arc::new(wrap_op(embed_raw))
+        } else {
+            Arc::new(RuntimeOperator::cpu_only(embed_raw))
+        };
 
         let mut layers = Vec::with_capacity(config.num_layers);
         for l in 0..config.num_layers {
             let p = format!("model.layers.{l}");
             layers.push(TransformerBlock {
                 input_norm: reader.load_vector_f64(&format!("{p}.input_layernorm.weight"))?,
-                q_proj: reader.load_operator_cached(
+                q_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.q_proj.weight"),
                     &mut latent_cache,
-                )?,
-                k_proj: reader.load_operator_cached(
+                )?),
+                k_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.k_proj.weight"),
                     &mut latent_cache,
-                )?,
-                v_proj: reader.load_operator_cached(
+                )?),
+                v_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.v_proj.weight"),
                     &mut latent_cache,
-                )?,
-                o_proj: reader.load_operator_cached(
+                )?),
+                o_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.o_proj.weight"),
                     &mut latent_cache,
-                )?,
+                )?),
                 post_attn_norm: reader
                     .load_vector_f64(&format!("{p}.post_attention_layernorm.weight"))?,
-                gate_proj: reader.load_operator_cached(
+                gate_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.mlp.gate_proj.weight"),
                     &mut latent_cache,
-                )?,
-                up_proj: reader
-                    .load_operator_cached(&format!("{p}.mlp.up_proj.weight"), &mut latent_cache)?,
-                down_proj: reader.load_operator_cached(
+                )?),
+                up_proj: wrap_op(
+                    reader.load_operator_cached(
+                        &format!("{p}.mlp.up_proj.weight"),
+                        &mut latent_cache,
+                    )?,
+                ),
+                down_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.mlp.down_proj.weight"),
                     &mut latent_cache,
-                )?,
+                )?),
             });
         }
 
@@ -370,9 +577,32 @@ impl QCoreModel {
             Arc::clone(&embed_op)
         } else {
             match reader.load_operator_cached("lm_head.weight", &mut latent_cache) {
-                Ok(op) => Arc::new(op),
+                Ok(op) => Arc::new(wrap_op(op)),
                 Err(_) => Arc::clone(&embed_op),
             }
+        };
+
+        let backend_stats = match gpu_ctx {
+            Some(ctx) => QCoreBackendStats {
+                backend: format!(
+                    "WGPU Hybrid ({} / {})",
+                    ctx.engine.adapter_name(),
+                    ctx.engine.backend_name()
+                ),
+                gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
+                gpu_resident_operators: ctx.gpu_resident_operators,
+                cpu_fallback_operators: ctx.cpu_fallback_operators,
+                vram_weight_bytes: ctx.vram_weight_bytes,
+                shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
+            },
+            None => QCoreBackendStats {
+                backend: "Rayon Multi-Threaded CPU".to_owned(),
+                gpu_adapter: None,
+                gpu_resident_operators: 0,
+                cpu_fallback_operators: config.num_layers * 7 + 1,
+                vram_weight_bytes: 0,
+                shared_latents_deduped_gpu: 0,
+            },
         };
 
         Ok(Self {
@@ -382,7 +612,136 @@ impl QCoreModel {
             final_norm,
             lm_head,
             shared_latents_deduped: latent_cache.len(),
+            backend_stats,
         })
+    }
+
+    fn build_model<FOp, FVec>(
+        config: TransformerConfig,
+        backend: QCoreBackend,
+        load_op: FOp,
+        load_vec: FVec,
+    ) -> Result<Self, RuntimeError>
+    where
+        FOp: Fn(&str, &mut QmfLatentCache) -> Result<QmfOperator, QmfError>,
+        FVec: Fn(&str) -> Result<Vec<f64>, QmfError>,
+    {
+        config.validate()?;
+        let mut latent_cache = QmfLatentCache::new();
+        let mut gpu_ctx = match backend {
+            QCoreBackend::Cpu => None,
+            QCoreBackend::GpuHybrid => WgpuMatvecEngine::try_new()
+                .ok()
+                .map(|e| GpuUploadContext::new(Arc::new(e))),
+        };
+        let mut wrap_op = |op: QmfOperator| -> RuntimeOperator {
+            if let Some(ctx) = gpu_ctx.as_mut() {
+                ctx.wrap(op)
+            } else {
+                RuntimeOperator::cpu_only(op)
+            }
+        };
+
+        let embed_raw = load_op("model.embed_tokens.weight", &mut latent_cache)?;
+        if embed_raw.rows() != config.vocab_size || embed_raw.cols() != config.hidden_size {
+            return Err(RuntimeError::InvalidConfig(format!(
+                "embed_tokens shape {}x{} does not match vocab_size={} hidden_size={}",
+                embed_raw.rows(),
+                embed_raw.cols(),
+                config.vocab_size,
+                config.hidden_size
+            )));
+        }
+        let embed_op = if config.tie_word_embeddings {
+            Arc::new(wrap_op(embed_raw))
+        } else {
+            Arc::new(RuntimeOperator::cpu_only(embed_raw))
+        };
+
+        let mut layers = Vec::with_capacity(config.num_layers);
+        for l in 0..config.num_layers {
+            layers.push(TransformerBlock {
+                input_norm: load_vec(&format!("model.layers.{l}.input_layernorm.weight"))?,
+                q_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.self_attn.q_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                k_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.self_attn.k_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                v_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.self_attn.v_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                o_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.self_attn.o_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                post_attn_norm: load_vec(&format!(
+                    "model.layers.{l}.post_attention_layernorm.weight"
+                ))?,
+                gate_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.mlp.gate_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                up_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.mlp.up_proj.weight"),
+                    &mut latent_cache,
+                )?),
+                down_proj: wrap_op(load_op(
+                    &format!("model.layers.{l}.mlp.down_proj.weight"),
+                    &mut latent_cache,
+                )?),
+            });
+        }
+
+        let final_norm = load_vec("model.norm.weight")?;
+        let lm_head = if config.tie_word_embeddings {
+            Arc::clone(&embed_op)
+        } else {
+            match load_op("lm_head.weight", &mut latent_cache) {
+                Ok(op) => Arc::new(wrap_op(op)),
+                Err(_) => Arc::clone(&embed_op),
+            }
+        };
+
+        let backend_stats = match gpu_ctx {
+            Some(ctx) => QCoreBackendStats {
+                backend: format!(
+                    "WGPU Hybrid ({} / {})",
+                    ctx.engine.adapter_name(),
+                    ctx.engine.backend_name()
+                ),
+                gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
+                gpu_resident_operators: ctx.gpu_resident_operators,
+                cpu_fallback_operators: ctx.cpu_fallback_operators,
+                vram_weight_bytes: ctx.vram_weight_bytes,
+                shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
+            },
+            None => QCoreBackendStats {
+                backend: "Rayon Multi-Threaded CPU".to_owned(),
+                gpu_adapter: None,
+                gpu_resident_operators: 0,
+                cpu_fallback_operators: config.num_layers * 7 + 1,
+                vram_weight_bytes: 0,
+                shared_latents_deduped_gpu: 0,
+            },
+        };
+
+        Ok(Self {
+            config,
+            embed_tokens: embed_op,
+            layers,
+            final_norm,
+            lm_head,
+            shared_latents_deduped: latent_cache.len(),
+            backend_stats,
+        })
+    }
+
+    pub fn backend_stats(&self) -> &QCoreBackendStats {
+        &self.backend_stats
     }
 
     pub fn shared_latents_deduped(&self) -> usize {
@@ -935,5 +1294,27 @@ mod tests {
         );
         assert!(rmq_report.shared_latent_count >= 14);
         assert!(rmq_report.compression_ratio_vs_source > 1.5);
+
+        // Verify GPU Hybrid backend matches CPU inference logits & generated tokens on RMQ!
+        let rmq_gpu = QCoreModel::from_qmf_with_backend(
+            &rmq_archive,
+            rmq_model.config().clone(),
+            QCoreBackend::GpuHybrid,
+        )
+        .unwrap();
+        let gpu_gen = rmq_gpu.generate(&[1, 5, 12], 6, 0.0, 99).unwrap();
+        assert_eq!(gen1.generated_tokens, gpu_gen.generated_tokens);
+        let gpu_vs_cpu =
+            evaluate_inference_fidelity(&rmq_model, &rmq_gpu, &[1, 5, 12, 3, 19, 8]).unwrap();
+        assert!(
+            gpu_vs_cpu.mean_logit_rmse < 1e-3,
+            "GPU Hybrid Q-Core diverged from CPU: logit_rmse={:.6}",
+            gpu_vs_cpu.mean_logit_rmse
+        );
+        if rmq_gpu.backend_stats().gpu_adapter.is_some() {
+            assert!(rmq_gpu.backend_stats().gpu_resident_operators > 0);
+            assert!(rmq_gpu.backend_stats().shared_latents_deduped_gpu > 0);
+            assert!(rmq_gpu.backend_stats().vram_weight_bytes > 0);
+        }
     }
 }

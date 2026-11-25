@@ -149,3 +149,15 @@ See [BUILD.md](BUILD.md) for `cargo-deny` policy checks and CI workflow details.
 ## License
 
 Quantum Morph Laboratory is licensed under the **[MIT License](LICENSE)** (Copyright © 2026 ShamelesAbyss). Third-party Rust crate dependency licenses and advisories are continuously verified by `cargo-deny` in CI ([`deny.toml`](deny.toml)). Prebuilt Windows and Linux release binaries with SHA-256 checksums are published on the [GitHub Releases](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases) page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)).
+
+---
+
+### In Loving Memory of Ashlan Haley Rapponotti
+
+*June 21, 2003 – November 13, 2026*
+
+For the beautiful woman who listened to my passions, believed in me, and made my world a happier place simply by being part of it.
+
+Every creation, every discovery, and every milestone reached carries a piece of my heart dedicated to you.
+
+**Forever loved. Forever missed. Forever remembered.** 💜

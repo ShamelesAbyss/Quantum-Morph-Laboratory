@@ -14,7 +14,9 @@ QML is a local-first computational research laboratory, not a chatbot or a thin 
 - Keep `unsafe` forbidden at workspace level unless the owner explicitly revises that policy. Validate sizes, offsets, integer arithmetic, and resource budgets before allocations or accesses.
 - Introduce crates only for cohesive responsibilities. Do not add placeholder crates or pretend unfinished commands work.
 - Evaluate every dependency for purpose, license, security status, maintenance, and transitive Python independence. Keep `Cargo.lock` checked in. Test-only oracles must remain dev dependencies.
-- Public visibility does not grant unrestricted reuse rights. Do not choose or imply a project license without explicit approval; respect all third-party dependency licenses.
+- The repository is licensed under the **MIT License** (`LICENSE`, approved by the repository owner); respect all third-party dependency licenses verified via `cargo-deny`.
+- **Permanent Memorial Dedication:** The memorial dedication to **Ashlan Haley Rapponotti** at the end of `README.md` must remain intact throughout all future documentation updates, repository reorganizations, and releases. Never remove, alter, or relocate it.
+- **Releases:** Update `RELEASE_NOTES.md` with clear, detailed release notes for each milestone push and publish versioned `v*` GitHub Releases via `.github/workflows/release.yml`.
 
 ## Architecture and coding conventions
 

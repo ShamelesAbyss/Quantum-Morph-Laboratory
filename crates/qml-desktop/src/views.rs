@@ -11,8 +11,90 @@ use crate::theme::{
 use crate::{ForgeMethodChoice, NavTab, QmlDesktopApp};
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, Points};
+use qml_format::{QmfRepresentation, SharedLatentEncoding};
 use qml_hardware::ResourcePreset;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+fn export_json_report<T: serde::Serialize>(
+    ui: &mut egui::Ui,
+    button_label: &str,
+    default_filename: &str,
+    value: &T,
+) -> Option<String> {
+    if ui.button(button_label).clicked()
+        && let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON Report", &["json"])
+            .set_file_name(default_filename)
+            .save_file()
+    {
+        return match serde_json::to_string_pretty(value)
+            .map_err(|e| e.to_string())
+            .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()))
+        {
+            Ok(()) => Some(format!("Exported JSON report to {}", path.display())),
+            Err(err) => Some(format!("Failed to export JSON report: {err}")),
+        };
+    }
+    None
+}
+
+fn latent_encoding_bytes(enc: &SharedLatentEncoding) -> u64 {
+    match enc {
+        SharedLatentEncoding::Fp32 { data } | SharedLatentEncoding::Fp16 { data } => data.len,
+        SharedLatentEncoding::Int8Sym { scales, codes, .. } => scales.len + codes.len,
+    }
+}
+
+fn representation_summary(rep: &QmfRepresentation) -> (&'static str, u64) {
+    match rep {
+        QmfRepresentation::DenseF32 { data } => ("DENSE_F32", data.len),
+        QmfRepresentation::DenseF16 { data } => ("FP16", data.len),
+        QmfRepresentation::DenseBf16 { data } => ("BF16", data.len),
+        QmfRepresentation::Int8SymGroup { scales, codes, .. } => {
+            ("INT8_SYM", scales.len + codes.len)
+        }
+        QmfRepresentation::Int4SymGroup {
+            scales, nibbles, ..
+        } => ("INT4_SYM (Q4_0)", scales.len + nibbles.len),
+        QmfRepresentation::Int4AsymGroup {
+            scales,
+            mins,
+            nibbles,
+            ..
+        } => ("INT4_ASYM (Q4_1)", scales.len + mins.len + nibbles.len),
+        QmfRepresentation::LowRankSvd { left, right, .. } => (
+            "LOW_RANK_SVD",
+            latent_encoding_bytes(left) + latent_encoding_bytes(right),
+        ),
+        QmfRepresentation::RmqSharedBasis {
+            core,
+            sparse_residual,
+            ..
+        } => {
+            let sp = sparse_residual
+                .as_ref()
+                .map(|s| s.indices.len + s.values_f16.len)
+                .unwrap_or(0);
+            ("RMQ_SHARED_BASIS", latent_encoding_bytes(core) + sp)
+        }
+        QmfRepresentation::RmqSharedCore {
+            left,
+            right,
+            sparse_residual,
+            ..
+        } => {
+            let sp = sparse_residual
+                .as_ref()
+                .map(|s| s.indices.len + s.values_f16.len)
+                .unwrap_or(0);
+            (
+                "RMQ_SHARED_CORE",
+                latent_encoding_bytes(left) + latent_encoding_bytes(right) + sp,
+            )
+        }
+    }
+}
 
 fn section_header(ui: &mut egui::Ui, title: &str, subtitle: &str, badge: Option<(&str, Color32)>) {
     ui.horizontal(|ui| {
@@ -391,6 +473,12 @@ pub fn show_qscope(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
             {
                 app.start_scope_job(ctx.clone());
             }
+            if let Some(rep) = &app.scope_report
+                && let Some(msg) =
+                    export_json_report(ui, "Export JSON...", "qscope-report.json", rep)
+            {
+                app.log(msg);
+            }
         });
     });
 
@@ -767,6 +855,22 @@ pub fn show_qforge(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
                             .range(4.15..=16.0),
                     );
                 }
+                ForgeMethodChoice::RmqAffinityGated => {
+                    ui.label("RMQ Rank:");
+                    ui.add(egui::DragValue::new(&mut app.forge_rank).range(2..=128));
+                    ui.label("Min Affinity:");
+                    ui.add(
+                        egui::DragValue::new(&mut app.forge_affinity_threshold)
+                            .speed(0.02)
+                            .range(0.05..=0.90),
+                    );
+                    ui.label("Sparse %:");
+                    ui.add(
+                        egui::DragValue::new(&mut app.forge_sparse_pct)
+                            .speed(0.1)
+                            .range(0.0..=10.0),
+                    );
+                }
                 ForgeMethodChoice::RmqSharedBasis | ForgeMethodChoice::RmqSharedCore => {
                     ui.label("RMQ Rank:");
                     ui.add(egui::DragValue::new(&mut app.forge_rank).range(2..=128));
@@ -794,14 +898,21 @@ pub fn show_qforge(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
 
     ui.add_space(12.0);
 
+    let mut export_msg: Option<String> = None;
     if let Some((rep, out_path)) = &app.forge_report {
         accent_card().show(ui, |ui| {
-            ui.label(
-                RichText::new("TRANSFORMATION COMPLETE — VERIFIED ROUND-TRIP REPORT")
-                    .color(EMERALD)
-                    .size(12.5)
-                    .strong(),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("TRANSFORMATION COMPLETE — VERIFIED ROUND-TRIP REPORT")
+                        .color(EMERALD)
+                        .size(12.5)
+                        .strong(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    export_msg =
+                        export_json_report(ui, "Export JSON...", "qforge-report.json", rep);
+                });
+            });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 metric_tile(
@@ -848,6 +959,9 @@ pub fn show_qforge(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
             );
         });
     }
+    if let Some(msg) = export_msg {
+        app.log(msg);
+    }
 }
 
 pub fn show_qgenesis(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -887,6 +1001,12 @@ pub fn show_qgenesis(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Con
                 .clicked()
             {
                 app.start_genesis_job(ctx.clone());
+            }
+            if let Some(arch) = &app.genesis_archive
+                && let Some(msg) =
+                    export_json_report(ui, "Export JSON...", "qgenesis-archive.json", arch)
+            {
+                app.log(msg);
             }
         });
     });
@@ -1057,7 +1177,164 @@ pub fn show_qmf_explorer(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
                     ))
                     .color(TEXT_MUTED),
                 );
+                if !manifest.extra_metadata.is_empty() {
+                    ui.add_space(4.0);
+                    let meta_str: Vec<String> = manifest
+                        .extra_metadata
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect();
+                    ui.label(
+                        RichText::new(meta_str.join("  •  "))
+                            .monospace()
+                            .size(11.0)
+                            .color(AMETHYST),
+                    );
+                }
             });
+
+            // Compute per-representation byte and count breakdown
+            let mut rep_stats: BTreeMap<&'static str, (usize, u64)> = BTreeMap::new();
+            for t in &manifest.tensors {
+                let (kind, bytes) = representation_summary(&t.representation);
+                let entry = rep_stats.entry(kind).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += bytes;
+            }
+            let shared_bytes: u64 = manifest
+                .shared_latents
+                .iter()
+                .map(|l| latent_encoding_bytes(&l.encoding))
+                .sum();
+            if shared_bytes > 0 {
+                rep_stats.insert(
+                    "SHARED_LATENTS",
+                    (manifest.shared_latents.len(), shared_bytes),
+                );
+            }
+
+            ui.add_space(8.0);
+            ui.columns(2, |cols| {
+                glass_card().show(&mut cols[0], |ui| {
+                    ui.label(
+                        RichText::new("REPRESENTATION STORAGE BREAKDOWN")
+                            .color(CYAN)
+                            .size(12.0)
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    for (kind, (count, bytes)) in &rep_stats {
+                        let pct = if *payload_bytes > 0 {
+                            (*bytes as f64 / *payload_bytes as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        ui.horizontal(|ui| {
+                            pill_badge(ui, kind, ULTRAVIOLET);
+                            ui.label(
+                                RichText::new(format!(
+                                    "{count} entries  •  {} ({pct:.1}%)",
+                                    format_bytes(*bytes)
+                                ))
+                                .monospace()
+                                .size(11.5)
+                                .color(TEXT_PRIMARY),
+                            );
+                        });
+                    }
+                    ui.add_space(6.0);
+                    let bars: Vec<Bar> = rep_stats
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (_k, (_, bytes)))| {
+                            Bar::new(i as f64, *bytes as f64 / (1024.0 * 1024.0))
+                                .width(0.65)
+                                .fill(CYAN)
+                        })
+                        .collect();
+                    Plot::new("qmf_rep_breakdown_plot")
+                        .height(150.0)
+                        .y_axis_label("MiB")
+                        .show(ui, |plot_ui| {
+                            plot_ui.bar_chart(BarChart::new(bars).name("Payload MiB"));
+                        });
+                });
+
+                glass_card().show(&mut cols[1], |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("TENSOR DIRECTORY")
+                                .color(AMETHYST)
+                                .size(12.0)
+                                .strong(),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.qmf_filter)
+                                .hint_text("Filter tensors..."),
+                        );
+                    });
+                    ui.add_space(6.0);
+                    let filter = app.qmf_filter.to_ascii_lowercase();
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            for t in &manifest.tensors {
+                                if !filter.is_empty()
+                                    && !t.name.to_ascii_lowercase().contains(&filter)
+                                {
+                                    continue;
+                                }
+                                let (kind, bytes) = representation_summary(&t.representation);
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}  {:?}  [{}]  {}",
+                                        t.name,
+                                        t.shape,
+                                        kind,
+                                        format_bytes(bytes)
+                                    ))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(TEXT_PRIMARY),
+                                );
+                            }
+                        });
+                });
+            });
+
+            if !manifest.shared_latents.is_empty() {
+                ui.add_space(8.0);
+                glass_card().show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "SHARED LATENT STRUCTURE TABLE ({} deduplicated Arc factors)",
+                            manifest.shared_latents.len()
+                        ))
+                        .color(EMERALD)
+                        .size(12.0)
+                        .strong(),
+                    );
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            for lat in &manifest.shared_latents {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}  [{} x {}]  {}",
+                                        lat.id,
+                                        lat.rows,
+                                        lat.cols,
+                                        format_bytes(latent_encoding_bytes(&lat.encoding))
+                                    ))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(TEXT_MUTED),
+                                );
+                            }
+                        });
+                });
+            }
         }
         Some(QmfInspection::V0 { rows, cols, path }) => {
             glass_card().show(ui, |ui| {
@@ -1461,24 +1738,47 @@ pub fn show_system_observatory(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: 
             accent_card().show(ui, |ui| {
                 ui.label(
                     RichText::new(format!(
-                        "WGPU SELF-TEST PASSED on {} ({})",
-                        res.adapter_name, res.backend_name
+                        "WGPU MULTI-KERNEL SELF-TEST PASSED on {} ({}) — Matrix {}x{}",
+                        res.adapter_name, res.backend_name, res.matrix_shape.0, res.matrix_shape.1
                     ))
                     .color(EMERALD)
                     .strong(),
                 );
-                ui.label(
-                    RichText::new(format!(
-                        "Matrix {}x{} matvec  •  Max Abs Error vs CPU f64: {:.2e}  •  GPU (incl. staging): {:.2} ms  •  CPU: {:.2} ms",
-                        res.matrix_shape.0,
-                        res.matrix_shape.1,
-                        res.max_abs_error,
-                        res.gpu_elapsed_ms,
-                        res.cpu_elapsed_ms
-                    ))
-                    .color(TEXT_PRIMARY)
-                    .size(12.0),
-                );
+                ui.add_space(6.0);
+                for k in &res.kernels {
+                    egui::Frame::new()
+                        .fill(theme::PANEL_BG)
+                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                pill_badge(
+                                    ui,
+                                    &format!("{:.2}x VRAM", k.vram_compression_vs_f32),
+                                    if k.vram_compression_vs_f32 > 1.5 {
+                                        CYAN
+                                    } else {
+                                        ULTRAVIOLET
+                                    },
+                                );
+                                ui.label(RichText::new(&k.kernel_name).color(TEXT_PRIMARY).strong());
+                            });
+                            ui.label(
+                                RichText::new(format!(
+                                    "VRAM Buffer: {}  •  Max Abs Err vs CPU f64: {:.2e}  •  GPU (incl. staging): {:.2} ms  •  CPU: {:.2} ms",
+                                    format_bytes(k.vram_weight_bytes as u64),
+                                    k.max_abs_error,
+                                    k.gpu_elapsed_ms,
+                                    k.cpu_elapsed_ms
+                                ))
+                                .monospace()
+                                .color(TEXT_MUTED)
+                                .size(11.5),
+                            );
+                        });
+                    ui.add_space(4.0);
+                }
             });
         }
     });

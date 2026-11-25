@@ -45,7 +45,7 @@ COMMANDS:
     version                              Show the CLI version
 
 MORPH METHODS (--method):
-    fp16 | bf16 | int8 | int4 | int4-asym | svd | rmq | map
+    fp16 | bf16 | int8 | int4 | int4-asym | svd | rmq | rmq-core | rmq-gated | map
 
 Imported model files are always opened read-only and never modified. QMF v0/v1,
 RMQ, MAP, Q-Core, and Q-Genesis are active experimental research prototypes."#;
@@ -979,6 +979,12 @@ fn run_morph(args: Vec<String>) -> ExitCode {
             rank,
             sparse_fraction: (sparse_pct / 100.0).clamp(0.0, 0.25),
             factor_precision: FactorPrecision::Int8Sym,
+        },
+        "rmq-gated" => TransformStrategy::RmqAffinityGated {
+            rank,
+            affinity_threshold: 0.25,
+            sparse_fraction: (sparse_pct / 100.0).clamp(0.0, 0.25),
+            fallback_group_size: 32,
         },
         "map" => TransformStrategy::MapAdaptive {
             target_avg_bpp: target_bpp,

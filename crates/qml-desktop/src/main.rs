@@ -10,14 +10,17 @@ use qml_format::QmfArchiveV1;
 use qml_genesis::{GenesisArchive, GenesisConfig, run_genesis};
 use qml_hardware::{HardwareReport, WgpuMatvecEngine, probe_hardware};
 use qml_model::{PayloadBudget, SafetensorsFile};
-use qml_quant::{FactorPrecision, RmqAblationReport, compare_rmq_vs_baselines};
+use qml_quant::{
+    FactorPrecision, Int4SymGroupMatrix, Int8SymMatrix, LinearOperator, RmqAblationReport,
+    compare_rmq_vs_baselines,
+};
 use qml_runtime::{QCoreModel, TransformerConfig, evaluate_inference_fidelity};
 use qml_scope::{ModelScopeReport, ScopeConfig, analyze_safetensors};
 use qml_tokenizer::BpeTokenizer;
 use state::{
-    GpuSelfTestResult, ModelFormat, PersistedState, QmfInspection, WorkerEvent, append_log_line,
-    default_discovery_directories, install_crash_logger, load_persisted_state, probe_model_file,
-    save_persisted_state, scan_directory_for_models,
+    GpuKernelBenchmark, GpuSelfTestResult, ModelFormat, PersistedState, QmfInspection, WorkerEvent,
+    append_log_line, default_discovery_directories, install_crash_logger, load_persisted_state,
+    probe_model_file, save_persisted_state, scan_directory_for_models,
 };
 use std::fs::{self, File};
 use std::io::BufWriter;
@@ -96,19 +99,21 @@ pub enum ForgeMethodChoice {
     Int4Sym,
     Int4Asym,
     MapAdaptive,
+    RmqAffinityGated,
     RmqSharedBasis,
     RmqSharedCore,
     LowRankSvd,
 }
 
 impl ForgeMethodChoice {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Bf16,
         Self::Fp16,
         Self::Int8Sym,
         Self::Int4Sym,
         Self::Int4Asym,
         Self::MapAdaptive,
+        Self::RmqAffinityGated,
         Self::RmqSharedBasis,
         Self::RmqSharedCore,
         Self::LowRankSvd,
@@ -122,6 +127,7 @@ impl ForgeMethodChoice {
             Self::Int4Sym => "INT4 Symmetric (Q4_0 g32)",
             Self::Int4Asym => "INT4 Asymmetric (Q4_1 g32)",
             Self::MapAdaptive => "MAP Adaptive Precision (Experimental)",
+            Self::RmqAffinityGated => "RMQ Affinity-Gated Hybrid (Experimental)",
             Self::RmqSharedBasis => "RMQ Shared-Basis + Sparse (Experimental)",
             Self::RmqSharedCore => "RMQ Shared-Core + Sparse (Experimental)",
             Self::LowRankSvd => "Truncated Low-Rank SVD (Baseline)",
@@ -154,6 +160,7 @@ pub struct QmlDesktopApp {
     pub forge_target_bpp: f64,
     pub forge_rank: usize,
     pub forge_sparse_pct: f64,
+    pub forge_affinity_threshold: f64,
     pub forge_report: Option<(ForgeReport, PathBuf)>,
 
     // Q-Genesis state
@@ -165,6 +172,7 @@ pub struct QmlDesktopApp {
 
     // QMF Explorer state
     pub qmf_inspect_path: String,
+    pub qmf_filter: String,
     pub qmf_inspection: Option<QmfInspection>,
 
     // Q-Core Inference Chamber state
@@ -279,6 +287,7 @@ impl QmlDesktopApp {
             forge_target_bpp: 4.51,
             forge_rank: 16,
             forge_sparse_pct: 1.0,
+            forge_affinity_threshold: 0.25,
             forge_report: None,
 
             genesis_use_synthetic: true,
@@ -288,6 +297,7 @@ impl QmlDesktopApp {
             genesis_archive: None,
 
             qmf_inspect_path: infer_qmf_path.clone(),
+            qmf_filter: String::new(),
             qmf_inspection: None,
 
             infer_qmf_path,
@@ -429,6 +439,12 @@ impl QmlDesktopApp {
                 target_avg_bpp: self.forge_target_bpp,
                 propagation_weight: 0.35,
                 include_svd_rank: None,
+            },
+            ForgeMethodChoice::RmqAffinityGated => TransformStrategy::RmqAffinityGated {
+                rank: self.forge_rank.max(2),
+                affinity_threshold: self.forge_affinity_threshold.clamp(0.05, 0.95),
+                sparse_fraction: (self.forge_sparse_pct / 100.0).clamp(0.0, 0.25),
+                fallback_group_size: 32,
             },
             ForgeMethodChoice::RmqSharedBasis => TransformStrategy::RmqSharedBasis {
                 rank: self.forge_rank.max(2),
@@ -803,6 +819,7 @@ impl QmlDesktopApp {
                     let mut rng = qml_core::DeterministicRng::new(2026);
                     let rows = 512;
                     let cols = 512;
+                    let f32_bytes = rows * cols * 4;
                     let mat = qml_core::DenseMatrix::from_flat(
                         rows,
                         cols,
@@ -811,26 +828,88 @@ impl QmlDesktopApp {
                     .unwrap();
                     let x: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
 
-                    let t_cpu = Instant::now();
-                    let cpu = mat.matvec(&x).unwrap();
-                    let cpu_ms = t_cpu.elapsed().as_secs_f64() * 1000.0;
+                    let run_bench = || -> Result<Vec<GpuKernelBenchmark>, String> {
+                        let mut kernels = Vec::new();
 
-                    let t_gpu = Instant::now();
-                    match engine.matvec(&mat, &x) {
-                        Ok(gpu) => {
-                            let gpu_ms = t_gpu.elapsed().as_secs_f64() * 1000.0;
-                            let max_abs_error = cpu
-                                .iter()
-                                .zip(&gpu)
-                                .map(|(a, b)| (a - b).abs())
-                                .fold(0.0_f64, f64::max);
+                        // 1. Dense FP32 GPU matvec
+                        let t_cpu = Instant::now();
+                        let cpu_f = mat.matvec(&x).map_err(|e| e.to_string())?;
+                        let cpu_f_ms = t_cpu.elapsed().as_secs_f64() * 1000.0;
+                        let t_gpu = Instant::now();
+                        let gpu_f = engine.matvec(&mat, &x).map_err(|e| e.to_string())?;
+                        let gpu_f_ms = t_gpu.elapsed().as_secs_f64() * 1000.0;
+                        let err_f = cpu_f
+                            .iter()
+                            .zip(&gpu_f)
+                            .map(|(a, b)| (a - b).abs())
+                            .fold(0.0_f64, f64::max);
+                        kernels.push(GpuKernelBenchmark {
+                            kernel_name: "Dense FP32 Matvec (WGSL)".to_owned(),
+                            vram_weight_bytes: f32_bytes,
+                            vram_compression_vs_f32: 1.0,
+                            max_abs_error: err_f,
+                            gpu_elapsed_ms: gpu_f_ms,
+                            cpu_elapsed_ms: cpu_f_ms,
+                        });
+
+                        // 2. Direct Compressed INT8_SYM GPU matvec (zero dense reconstruction in VRAM)
+                        let q8 = Int8SymMatrix::quantize(&mat, 64).map_err(|e| e.to_string())?;
+                        let q8_vram = q8.codes().len() + q8.scales_f16().len() * 2;
+                        let t_cpu8 = Instant::now();
+                        let cpu8 = q8.matvec(&x).map_err(|e| e.to_string())?;
+                        let cpu8_ms = t_cpu8.elapsed().as_secs_f64() * 1000.0;
+                        let t_gpu8 = Instant::now();
+                        let gpu8 = engine.matvec_int8_sym(&q8, &x).map_err(|e| e.to_string())?;
+                        let gpu8_ms = t_gpu8.elapsed().as_secs_f64() * 1000.0;
+                        let err8 = cpu8
+                            .iter()
+                            .zip(&gpu8)
+                            .map(|(a, b)| (a - b).abs())
+                            .fold(0.0_f64, f64::max);
+                        kernels.push(GpuKernelBenchmark {
+                            kernel_name: "Direct Compressed INT8_SYM (WGSL unpack2x16float)"
+                                .to_owned(),
+                            vram_weight_bytes: q8_vram,
+                            vram_compression_vs_f32: f32_bytes as f64 / q8_vram as f64,
+                            max_abs_error: err8,
+                            gpu_elapsed_ms: gpu8_ms,
+                            cpu_elapsed_ms: cpu8_ms,
+                        });
+
+                        // 3. Direct Compressed Q4_0 (INT4_SYM) GPU matvec (zero dense reconstruction in VRAM)
+                        let q4 =
+                            Int4SymGroupMatrix::quantize(&mat, 32).map_err(|e| e.to_string())?;
+                        let q4_vram = q4.packed_nibbles().len() + q4.scales_f16().len() * 2;
+                        let t_cpu4 = Instant::now();
+                        let cpu4 = q4.matvec(&x).map_err(|e| e.to_string())?;
+                        let cpu4_ms = t_cpu4.elapsed().as_secs_f64() * 1000.0;
+                        let t_gpu4 = Instant::now();
+                        let gpu4 = engine.matvec_int4_sym(&q4, &x).map_err(|e| e.to_string())?;
+                        let gpu4_ms = t_gpu4.elapsed().as_secs_f64() * 1000.0;
+                        let err4 = cpu4
+                            .iter()
+                            .zip(&gpu4)
+                            .map(|(a, b)| (a - b).abs())
+                            .fold(0.0_f64, f64::max);
+                        kernels.push(GpuKernelBenchmark {
+                            kernel_name: "Direct Compressed Q4_0 INT4 (WGSL nibble+f16)".to_owned(),
+                            vram_weight_bytes: q4_vram,
+                            vram_compression_vs_f32: f32_bytes as f64 / q4_vram as f64,
+                            max_abs_error: err4,
+                            gpu_elapsed_ms: gpu4_ms,
+                            cpu_elapsed_ms: cpu4_ms,
+                        });
+
+                        Ok(kernels)
+                    };
+
+                    match run_bench() {
+                        Ok(kernels) => {
                             let _ = tx.send(WorkerEvent::GpuSelfTestComplete(GpuSelfTestResult {
                                 adapter_name: engine.adapter_name().to_owned(),
                                 backend_name: engine.backend_name().to_owned(),
                                 matrix_shape: (rows, cols),
-                                max_abs_error,
-                                gpu_elapsed_ms: gpu_ms,
-                                cpu_elapsed_ms: cpu_ms,
+                                kernels,
                             }));
                         }
                         Err(err) => {
@@ -932,9 +1011,17 @@ impl QmlDesktopApp {
                     ));
                 }
                 WorkerEvent::GpuSelfTestComplete(res) => {
+                    let worst_err = res
+                        .kernels
+                        .iter()
+                        .map(|k| k.max_abs_error)
+                        .fold(0.0_f64, f64::max);
                     let msg = format!(
-                        "WGPU self-test PASSED on {} ({}): max_abs_err={:.2e} ({:.2} ms).",
-                        res.adapter_name, res.backend_name, res.max_abs_error, res.gpu_elapsed_ms
+                        "WGPU self-test PASSED ({} kernels on {} / {}): worst max_abs_err={:.2e}.",
+                        res.kernels.len(),
+                        res.adapter_name,
+                        res.backend_name,
+                        worst_err
                     );
                     self.gpu_selftest = Some(res);
                     self.busy_label = None;

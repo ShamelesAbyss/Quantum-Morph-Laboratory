@@ -295,15 +295,24 @@ impl QmfInspection {
     }
 }
 
+/// One kernel benchmark entry from the live WGPU compute self-test.
+#[derive(Debug, Clone)]
+pub struct GpuKernelBenchmark {
+    pub kernel_name: String,
+    pub vram_weight_bytes: usize,
+    pub vram_compression_vs_f32: f64,
+    pub max_abs_error: f64,
+    pub gpu_elapsed_ms: f64,
+    pub cpu_elapsed_ms: f64,
+}
+
 /// Result of running the live WGPU compute self-test in System Observatory.
 #[derive(Debug, Clone)]
 pub struct GpuSelfTestResult {
     pub adapter_name: String,
     pub backend_name: String,
     pub matrix_shape: (usize, usize),
-    pub max_abs_error: f64,
-    pub gpu_elapsed_ms: f64,
-    pub cpu_elapsed_ms: f64,
+    pub kernels: Vec<GpuKernelBenchmark>,
 }
 
 /// Events streamed back from background worker threads to the GUI thread.

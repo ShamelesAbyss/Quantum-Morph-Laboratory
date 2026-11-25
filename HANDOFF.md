@@ -23,13 +23,13 @@
 
 ## Validation actually executed on the implementation
 
-All of the following passed locally on Windows 11 with Rust 1.99.1 (`cargo +1.99.1`):
+All of the following passed locally on Windows 11 with Rust 1.100.0 (`cargo +1.100.0`) and `cargo-deny 0.21.0`:
 
-- `cargo +1.99.1 fmt --all -- --check`
-- `cargo +1.99.1 clippy --workspace --all-targets -- -D warnings`
-- `cargo +1.99.1 test --workspace` — 70 tests passed (`qml-core` including NIST SHA-256 vectors, `qml-format` including `Arc` latent deduplication, `RmqSharedCore`, `decode_row`, and streaming header inspection, `qml-model`, `qml-scope`, `qml-quant` including matched-budget MAP vs Q4_0, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`).
-- `cargo +1.99.1 build --workspace`
-- Zero new third-party dependencies added in Phase I (preserves `cargo-deny` policy compliance; CI `dependency-policy` job verifies on push).
+- `cargo +1.100.0 fmt --all -- --check`
+- `cargo +1.100.0 clippy --workspace --all-targets -- -D warnings`
+- `cargo +1.100.0 test --workspace` — all tests across 12 crates passed (including NIST SHA-256 vectors, `Arc` latent deduplication, `RmqSharedCore`, `RmqAffinityGated`, `decode_row`, streaming header inspection, matched-budget MAP, `StreamingDecoder` split multi-byte UTF-8, and RTX 4070 WGPU dense `FP32` + direct compressed `INT8_SYM` & `Q4_0` WGSL compute shader equivalence tests).
+- `cargo deny check` — `advisories ok, bans ok, licenses ok, sources ok` (zero ignored vulnerabilities).
+- `cargo +1.100.0 build --release -p qml-desktop -p qml-cli` — verified native Windows launch of `qml-desktop.exe` with zero panics.
 
 ## Research and design findings
 

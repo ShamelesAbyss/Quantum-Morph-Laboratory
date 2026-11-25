@@ -5,7 +5,7 @@
 //! real SHA-256 provenance hashing, complete on-disk byte accounting, and
 //! direct-execution verification against the original weights.
 
-use qml_core::{DenseMatrix, sha256_hex};
+use qml_core::{DenseMatrix, sha256_hex, truncated_svd};
 use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfV1Builder};
 use qml_model::{PayloadBudget, PayloadError, SafetensorsFile};
 use qml_quant::{
@@ -63,6 +63,16 @@ pub enum TransformStrategy {
         propagation_weight: f64,
         include_svd_rank: Option<usize>,
     },
+    /// Selective Affinity-Gated Hybrid RMQ + Quantization: computes pairwise Grassmannian
+    /// subspace affinity across each same-role cluster, applies RMQ Shared-Basis + sparse
+    /// outlier residual ONLY when mean affinity `>= affinity_threshold`, and routes
+    /// low-affinity clusters (and embeddings/heads) to blockwise `INT4_SYM (Q4_0)`.
+    RmqAffinityGated {
+        rank: usize,
+        affinity_threshold: f64,
+        sparse_fraction: f64,
+        fallback_group_size: usize,
+    },
 }
 
 impl TransformStrategy {
@@ -119,6 +129,12 @@ impl TransformStrategy {
             Self::MapAdaptive { .. } => TransformDescriptor {
                 name: "map_adaptive",
                 assumptions: "Sensitivity + downstream spectral error-propagation greedy byte-budget allocator",
+                deterministic: true,
+                maturity: "experimental-proposal",
+            },
+            Self::RmqAffinityGated { .. } => TransformDescriptor {
+                name: "rmq_affinity_gated",
+                assumptions: "Grassmannian subspace affinity gating: RMQ on correlated clusters, Q4_0/INT8 fallback on uncorrelated layers",
                 deterministic: true,
                 maturity: "experimental-proposal",
             },
@@ -646,6 +662,148 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                 }
             }
         }
+        TransformStrategy::RmqAffinityGated {
+            rank,
+            affinity_threshold,
+            sparse_fraction,
+            fallback_group_size,
+        } => {
+            type ClusterKey = (LayerRole, usize, usize);
+            let mut groups: BTreeMap<ClusterKey, Vec<String>> = BTreeMap::new();
+            for info in &matrix_infos {
+                let (_, role) = classify_tensor_name(&info.name);
+                groups
+                    .entry((role, info.shape[0] as usize, info.shape[1] as usize))
+                    .or_default()
+                    .push(info.name.clone());
+            }
+
+            let mut rmq_clusters_selected = 0usize;
+            let mut fallback_clusters = 0usize;
+            for ((role, rows, cols), names) in groups {
+                let cluster_mats: Vec<DenseMatrix> = names
+                    .iter()
+                    .map(|n| file.read_tensor_matrix(n, budget))
+                    .collect::<Result<_, _>>()?;
+                let probes = deterministic_probe_vectors(cols, 4, seed);
+
+                // Never apply RMQ to embeddings or lm_head; gate other clusters by measured affinity.
+                let eligible = cluster_mats.len() >= 2
+                    && !matches!(role, LayerRole::Embedding | LayerRole::LmHead);
+                let mean_affinity = if eligible {
+                    let probe_r = (*rank).clamp(2, 16).min(rows.min(cols));
+                    let svds: Vec<_> = cluster_mats
+                        .iter()
+                        .take(8)
+                        .enumerate()
+                        .map(|(i, m)| truncated_svd(m, probe_r, seed.wrapping_add(i as u64)))
+                        .collect::<Result<_, _>>()?;
+                    let mut sum_aff = 0.0_f64;
+                    let mut pairs = 0usize;
+                    for a in 0..svds.len() {
+                        let va = svds[a].vt.transpose();
+                        let uat = svds[a].u.transpose();
+                        let vat = va.transpose();
+                        for b in (a + 1)..svds.len() {
+                            let vb = svds[b].vt.transpose();
+                            let k = svds[a].u.cols().min(svds[b].u.cols()).max(1) as f64;
+                            let left = (uat.matmul(&svds[b].u)?.frobenius_norm().powi(2) / k)
+                                .clamp(0.0, 1.0);
+                            let right =
+                                (vat.matmul(&vb)?.frobenius_norm().powi(2) / k).clamp(0.0, 1.0);
+                            sum_aff += 0.5 * (left + right);
+                            pairs += 1;
+                        }
+                    }
+                    if pairs > 0 {
+                        sum_aff / pairs as f64
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                if eligible && mean_affinity >= *affinity_threshold {
+                    rmq_clusters_selected += 1;
+                    let refs: Vec<&DenseMatrix> = cluster_mats.iter().collect();
+                    let r = (*rank).max(1).min(rows.min(cols));
+                    let residual_kind = if *sparse_fraction > 0.0 {
+                        RmqResidualKind::SparseTopFraction {
+                            fraction: *sparse_fraction,
+                        }
+                    } else {
+                        RmqResidualKind::None
+                    };
+                    let cluster = RmqSharedBasisCluster::fit(
+                        &refs,
+                        RmqSharedBasisConfig {
+                            left_rank: r,
+                            right_rank: r,
+                            hooi_iters: 4,
+                            basis_precision: FactorPrecision::Int8Sym,
+                            core_precision: FactorPrecision::Fp16,
+                            residual_kind,
+                            seed,
+                        },
+                    )?;
+                    for (local_i, (name, mat)) in names.iter().zip(&cluster_mats).enumerate() {
+                        let op = cluster.layer(local_i).unwrap();
+                        let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                        sum_frob += ev.relative_frobenius_error;
+                        sum_mv += ev.mean_matvec_rel_error;
+                        mat_count += 1;
+                        tensor_summaries.push(TransformedTensorSummary {
+                            name: name.clone(),
+                            shape: vec![rows, cols],
+                            representation: op.method_name().to_owned(),
+                            relative_frobenius_error: Some(ev.relative_frobenius_error),
+                            mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
+                        });
+                    }
+                    let cluster_id = format!("{}_{rows}x{cols}", role.as_str());
+                    builder.add_rmq_shared_basis_cluster(&cluster_id, &names, &cluster)?;
+                } else {
+                    fallback_clusters += 1;
+                    let g = (*fallback_group_size).max(8);
+                    for (name, mat) in names.iter().zip(&cluster_mats) {
+                        let (rep_name, rel_frob, mv_err) =
+                            if matches!(role, LayerRole::Embedding | LayerRole::LmHead) {
+                                let op = Int8SymMatrix::quantize(mat, 64)?;
+                                let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                                builder.add_int8_sym(name.clone(), &op)?;
+                                (
+                                    "QMF_INT8_SYM",
+                                    ev.relative_frobenius_error,
+                                    ev.mean_matvec_rel_error,
+                                )
+                            } else {
+                                let op = Int4SymGroupMatrix::quantize(mat, g)?;
+                                let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                                builder.add_int4_sym(name.clone(), &op)?;
+                                (
+                                    "QMF_INT4_SYM",
+                                    ev.relative_frobenius_error,
+                                    ev.mean_matvec_rel_error,
+                                )
+                            };
+                        sum_frob += rel_frob;
+                        sum_mv += mv_err;
+                        mat_count += 1;
+                        tensor_summaries.push(TransformedTensorSummary {
+                            name: name.clone(),
+                            shape: vec![rows, cols],
+                            representation: rep_name.to_owned(),
+                            relative_frobenius_error: Some(rel_frob),
+                            mean_matvec_rel_error: Some(mv_err),
+                        });
+                    }
+                }
+            }
+            builder.insert_metadata("rmq_clusters_selected", rmq_clusters_selected.to_string());
+            builder.insert_metadata("fallback_clusters", fallback_clusters.to_string());
+            builder.insert_metadata("affinity_threshold", format!("{affinity_threshold:.4}"));
+        }
     }
 
     let archive = builder.build()?;
@@ -841,5 +999,59 @@ mod tests {
         assert!(payload_bpp <= 6.5);
         assert!(map_report.qmf_serialized_bytes < map_report.source_file_bytes as usize);
         assert!(map_report.mean_matvec_rel_error < 0.15);
+
+        // 4. Affinity-Gated Hybrid RMQ: gates strongly correlated clusters to RMQ and falls back cleanly
+        let gated_strategy = TransformStrategy::RmqAffinityGated {
+            rank: 4,
+            affinity_threshold: 0.50,
+            sparse_fraction: 0.01,
+            fallback_group_size: 32,
+        };
+        let (gated_archive, gated_report) = forge_safetensors_to_qmf(
+            Cursor::new(&model_bytes),
+            "synthetic-4L-gated",
+            "generated-test",
+            "mini_llama",
+            &gated_strategy,
+            &budget,
+            42,
+        )
+        .unwrap();
+        assert!(gated_report.shared_latent_count > 0);
+        assert!(
+            gated_report.mean_matvec_rel_error <= report.mean_matvec_rel_error + 1e-6,
+            "affinity-gated RMQ ({}) should not be worse than blind RMQ ({})",
+            gated_report.mean_matvec_rel_error,
+            report.mean_matvec_rel_error
+        );
+        let mut gated_buf = Vec::new();
+        gated_archive.write_to(&mut gated_buf).unwrap();
+        let gated_cmp =
+            compare_safetensors_and_qmf(Cursor::new(&model_bytes), &gated_buf, &budget, 42)
+                .unwrap();
+        assert_eq!(gated_cmp.tensors_compared, 20);
+        assert!(
+            (gated_cmp.mean_matvec_rel_error - gated_report.mean_matvec_rel_error).abs() < 1e-12
+        );
+
+        // High threshold (0.999) forces all clusters to Q4_0/INT8 fallback (zero shared latents).
+        let strict_gate = TransformStrategy::RmqAffinityGated {
+            rank: 4,
+            affinity_threshold: 0.999,
+            sparse_fraction: 0.01,
+            fallback_group_size: 32,
+        };
+        let (_, fallback_report) = forge_safetensors_to_qmf(
+            Cursor::new(&model_bytes),
+            "synthetic-4L-fallback",
+            "generated-test",
+            "mini_llama",
+            &strict_gate,
+            &budget,
+            42,
+        )
+        .unwrap();
+        assert_eq!(fallback_report.shared_latent_count, 0);
+        assert!(fallback_report.mean_matvec_rel_error < 0.15);
     }
 }

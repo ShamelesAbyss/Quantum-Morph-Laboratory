@@ -52,6 +52,21 @@ impl Fp16Matrix {
     pub fn raw_bits(&self) -> &[u16] {
         &self.data
     }
+
+    /// Decode a single row without reconstructing the full matrix (for compressed embeddings).
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: row,
+            });
+        }
+        let start = row * self.cols;
+        Ok(self.data[start..start + self.cols]
+            .iter()
+            .map(|&bits| f64::from(f16_to_f32(bits)))
+            .collect())
+    }
 }
 
 impl LinearOperator for Fp16Matrix {
@@ -142,6 +157,21 @@ impl Bf16Matrix {
 
     pub fn raw_bits(&self) -> &[u16] {
         &self.data
+    }
+
+    /// Decode a single row without reconstructing the full matrix (for compressed embeddings).
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: row,
+            });
+        }
+        let start = row * self.cols;
+        Ok(self.data[start..start + self.cols]
+            .iter()
+            .map(|&bits| f64::from(bf16_to_f32(bits)))
+            .collect())
     }
 }
 
@@ -275,6 +305,24 @@ impl Int8SymMatrix {
 
     pub fn codes(&self) -> &[i8] {
         &self.codes
+    }
+
+    /// Decode a single row without reconstructing the full matrix.
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: row,
+            });
+        }
+        let base = row * self.cols;
+        Ok((0..self.cols)
+            .map(|c| {
+                let idx = base + c;
+                let scale = f64::from(f16_to_f32(self.scales_f16[idx / self.group_size]));
+                f64::from(self.codes[idx]) * scale
+            })
+            .collect())
     }
 }
 
@@ -549,6 +597,18 @@ impl Int4SymGroupMatrix {
         &self.packed_nibbles
     }
 
+    /// Decode a single row without reconstructing the full matrix.
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: row,
+            });
+        }
+        let base = row * self.cols;
+        Ok((0..self.cols).map(|c| self.decode_at(base + c)).collect())
+    }
+
     #[inline]
     fn decode_at(&self, flat_idx: usize) -> f64 {
         let byte = self.packed_nibbles[flat_idx / 2];
@@ -730,6 +790,18 @@ impl Int4AsymGroupMatrix {
 
     pub fn packed_nibbles(&self) -> &[u8] {
         &self.packed_nibbles
+    }
+
+    /// Decode a single row without reconstructing the full matrix.
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows,
+                actual: row,
+            });
+        }
+        let base = row * self.cols;
+        Ok((0..self.cols).map(|c| self.decode_at(base + c)).collect())
     }
 
     #[inline]

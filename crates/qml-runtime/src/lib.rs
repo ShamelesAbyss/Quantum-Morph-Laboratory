@@ -10,12 +10,13 @@
 //! rigorous reference-vs-transformed logit KL divergence & perplexity evaluation.
 
 use qml_core::{DeterministicRng, MatrixError};
-use qml_format::{QmfArchiveV1, QmfError, QmfOperator};
+use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfOperator};
 use qml_model::{DType, encode_safetensors};
 use qml_quant::LinearOperator;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Architecture hyperparameters for a Llama-style decoder-only transformer.
@@ -30,6 +31,8 @@ pub struct TransformerConfig {
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
     pub max_seq_len: usize,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
 }
 
 impl TransformerConfig {
@@ -148,13 +151,17 @@ struct TransformerBlock {
 }
 
 /// Executable decoder-only transformer loaded directly from a QMF v1 container.
+///
+/// Retains embeddings and linear projections in their native compressed `QmfOperator`
+/// form (zero dense `f64` reconstruction of embeddings or weights) and deduplicates
+/// shared RMQ latent structures across layers via `Arc`.
 pub struct QCoreModel {
     config: TransformerConfig,
-    /// Token embedding rows (`vocab_size × hidden_size`, stored as dense rows for O(1) lookup).
-    embed_tokens: Vec<Vec<f64>>,
+    embed_tokens: Arc<QmfOperator>,
     layers: Vec<TransformerBlock>,
     final_norm: Vec<f64>,
-    lm_head: QmfOperator,
+    lm_head: Arc<QmfOperator>,
+    shared_latents_deduped: usize,
 }
 
 /// Output of autoregressive generation.
@@ -189,60 +196,82 @@ impl QCoreModel {
         config: TransformerConfig,
     ) -> Result<Self, RuntimeError> {
         config.validate()?;
+        let mut latent_cache = QmfLatentCache::new();
 
-        // Embeddings are indexed by row during token lookup; decode rows once.
-        let embed_op = archive.load_operator("model.embed_tokens.weight")?;
-        let embed_dense = embed_op.reconstruct_dense()?;
-        if embed_dense.rows() != config.vocab_size || embed_dense.cols() != config.hidden_size {
+        // Keep embeddings in compressed QmfOperator form; decode only 1 row per token on demand.
+        let embed_op =
+            Arc::new(archive.load_operator_cached("model.embed_tokens.weight", &mut latent_cache)?);
+        if embed_op.rows() != config.vocab_size || embed_op.cols() != config.hidden_size {
             return Err(RuntimeError::InvalidConfig(format!(
                 "embed_tokens shape {}x{} does not match vocab_size={} hidden_size={}",
-                embed_dense.rows(),
-                embed_dense.cols(),
+                embed_op.rows(),
+                embed_op.cols(),
                 config.vocab_size,
                 config.hidden_size
             )));
         }
-        let embed_tokens: Vec<Vec<f64>> = (0..config.vocab_size)
-            .map(|r| {
-                embed_dense.as_slice()[r * config.hidden_size..(r + 1) * config.hidden_size]
-                    .to_vec()
-            })
-            .collect();
 
         let mut layers = Vec::with_capacity(config.num_layers);
         for l in 0..config.num_layers {
             layers.push(TransformerBlock {
                 input_norm: archive
                     .load_vector_f64(&format!("model.layers.{l}.input_layernorm.weight"))?,
-                q_proj: archive
-                    .load_operator(&format!("model.layers.{l}.self_attn.q_proj.weight"))?,
-                k_proj: archive
-                    .load_operator(&format!("model.layers.{l}.self_attn.k_proj.weight"))?,
-                v_proj: archive
-                    .load_operator(&format!("model.layers.{l}.self_attn.v_proj.weight"))?,
-                o_proj: archive
-                    .load_operator(&format!("model.layers.{l}.self_attn.o_proj.weight"))?,
+                q_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.self_attn.q_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                k_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.self_attn.k_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                v_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.self_attn.v_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                o_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.self_attn.o_proj.weight"),
+                    &mut latent_cache,
+                )?,
                 post_attn_norm: archive.load_vector_f64(&format!(
                     "model.layers.{l}.post_attention_layernorm.weight"
                 ))?,
-                gate_proj: archive
-                    .load_operator(&format!("model.layers.{l}.mlp.gate_proj.weight"))?,
-                up_proj: archive.load_operator(&format!("model.layers.{l}.mlp.up_proj.weight"))?,
-                down_proj: archive
-                    .load_operator(&format!("model.layers.{l}.mlp.down_proj.weight"))?,
+                gate_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.mlp.gate_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                up_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.mlp.up_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                down_proj: archive.load_operator_cached(
+                    &format!("model.layers.{l}.mlp.down_proj.weight"),
+                    &mut latent_cache,
+                )?,
             });
         }
 
         let final_norm = archive.load_vector_f64("model.norm.weight")?;
-        let lm_head = archive.load_operator("lm_head.weight")?;
+        let lm_head = if config.tie_word_embeddings {
+            Arc::clone(&embed_op)
+        } else {
+            match archive.load_operator_cached("lm_head.weight", &mut latent_cache) {
+                Ok(op) => Arc::new(op),
+                Err(_) => Arc::clone(&embed_op),
+            }
+        };
 
         Ok(Self {
             config,
-            embed_tokens,
+            embed_tokens: embed_op,
             layers,
             final_norm,
             lm_head,
+            shared_latents_deduped: latent_cache.len(),
         })
+    }
+
+    pub fn shared_latents_deduped(&self) -> usize {
+        self.shared_latents_deduped
     }
 
     pub fn config(&self) -> &TransformerConfig {
@@ -273,7 +302,7 @@ impl QCoreModel {
         let kv_groups = self.config.num_heads / self.config.num_kv_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let mut hidden = self.embed_tokens[token_id].clone();
+        let mut hidden = self.embed_tokens.decode_row(token_id)?;
 
         for (layer_idx, block) in self.layers.iter().enumerate() {
             // Pre-attention RMSNorm
@@ -708,6 +737,7 @@ mod tests {
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.0,
             max_seq_len: 32,
+            tie_word_embeddings: false,
         };
         let model_bytes = generate_synthetic_llama_safetensors(&cfg, 4, 2026).unwrap();
         let budget = PayloadBudget::default();

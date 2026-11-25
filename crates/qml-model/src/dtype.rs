@@ -355,61 +355,55 @@ pub fn decode_chunk_to_f64(dtype: DType, bytes: &[u8], out: &mut Vec<f64>) -> Re
             }
         }
         DType::I16 => {
-            for chunk in bytes.chunks_exact(2) {
-                out.push(f64::from(i16::from_le_bytes([chunk[0], chunk[1]])));
+            for &chunk in bytes.as_chunks::<2>().0 {
+                out.push(f64::from(i16::from_le_bytes(chunk)));
             }
         }
         DType::U16 => {
-            for chunk in bytes.chunks_exact(2) {
-                out.push(f64::from(u16::from_le_bytes([chunk[0], chunk[1]])));
+            for &chunk in bytes.as_chunks::<2>().0 {
+                out.push(f64::from(u16::from_le_bytes(chunk)));
             }
         }
         DType::F16 => {
-            for chunk in bytes.chunks_exact(2) {
-                let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
+            for &chunk in bytes.as_chunks::<2>().0 {
+                let bits = u16::from_le_bytes(chunk);
                 out.push(f64::from(f16_to_f32(bits)));
             }
         }
         DType::BF16 => {
-            for chunk in bytes.chunks_exact(2) {
-                let bits = u16::from_le_bytes([chunk[0], chunk[1]]);
+            for &chunk in bytes.as_chunks::<2>().0 {
+                let bits = u16::from_le_bytes(chunk);
                 out.push(f64::from(bf16_to_f32(bits)));
             }
         }
         DType::I32 => {
-            for chunk in bytes.chunks_exact(4) {
-                out.push(f64::from(i32::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3],
-                ])));
+            for &chunk in bytes.as_chunks::<4>().0 {
+                out.push(f64::from(i32::from_le_bytes(chunk)));
             }
         }
         DType::U32 => {
-            for chunk in bytes.chunks_exact(4) {
-                out.push(f64::from(u32::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3],
-                ])));
+            for &chunk in bytes.as_chunks::<4>().0 {
+                out.push(f64::from(u32::from_le_bytes(chunk)));
             }
         }
         DType::F32 => {
-            for chunk in bytes.chunks_exact(4) {
-                out.push(f64::from(f32::from_le_bytes([
-                    chunk[0], chunk[1], chunk[2], chunk[3],
-                ])));
+            for &chunk in bytes.as_chunks::<4>().0 {
+                out.push(f64::from(f32::from_le_bytes(chunk)));
             }
         }
         DType::I64 => {
-            for chunk in bytes.chunks_exact(8) {
-                out.push(i64::from_le_bytes(chunk.try_into().expect("8 bytes")) as f64);
+            for &chunk in bytes.as_chunks::<8>().0 {
+                out.push(i64::from_le_bytes(chunk) as f64);
             }
         }
         DType::U64 => {
-            for chunk in bytes.chunks_exact(8) {
-                out.push(u64::from_le_bytes(chunk.try_into().expect("8 bytes")) as f64);
+            for &chunk in bytes.as_chunks::<8>().0 {
+                out.push(u64::from_le_bytes(chunk) as f64);
             }
         }
         DType::F64 => {
-            for chunk in bytes.chunks_exact(8) {
-                out.push(f64::from_le_bytes(chunk.try_into().expect("8 bytes")));
+            for &chunk in bytes.as_chunks::<8>().0 {
+                out.push(f64::from_le_bytes(chunk));
             }
         }
         _ => unreachable!("checked supports_f64_decode above"),

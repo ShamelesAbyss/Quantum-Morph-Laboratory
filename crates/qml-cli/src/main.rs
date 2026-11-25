@@ -983,6 +983,11 @@ fn run_morph(args: Vec<String>) -> ExitCode {
             basis_precision: FactorPrecision::Int8Sym,
             core_precision: FactorPrecision::Fp16,
         },
+        "rmq-core" => TransformStrategy::RmqSharedCore {
+            rank,
+            sparse_fraction: (sparse_pct / 100.0).clamp(0.0, 0.25),
+            factor_precision: FactorPrecision::Int8Sym,
+        },
         "map" => TransformStrategy::MapAdaptive {
             target_avg_bpp: target_bpp,
             propagation_weight: 0.35,
@@ -1158,6 +1163,7 @@ fn run_infer_demo(args: Vec<String>) -> ExitCode {
         rms_norm_eps: 1e-5,
         rope_theta: 10_000.0,
         max_seq_len: 32,
+        tie_word_embeddings: false,
     };
     let model_bytes = generate_synthetic_llama_safetensors(&cfg, 4, 2026).unwrap();
     let budget = PayloadBudget::default();

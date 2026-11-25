@@ -34,3 +34,10 @@
   - Added NSGA-II-style elite capping (`pop_size / 2` spaced across BPP) to `qml-genesis` so every generation breeds fresh crossover/mutated genomes.
   - Recorded measured release-mode Windows 11 / Intel i9-14900HX experimental data in `experiments/exp-001-rmq-map-qcore-baseline.toml`.
   - Created custom deep-obsidian/ultraviolet/cyan SVG visual identity (`assets/hero.svg`, `assets/architecture.svg`, `assets/benchmarks.svg`) and refreshed `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `research/novelty-ledger.md`, and `HANDOFF.md`.
+- **Project Singularity — Phase I (Audit Remediation & Core Hardening):**
+  - Resolved Rust 1.99+ strict Clippy `clippy::chunks_exact_to_as_chunks` warnings in `qml-model` and `qml-format` using `as_chunks::<N>().0`.
+  - Implemented pure safe Rust FIPS 180-4 SHA-256 (`qml_core::sha256`) verified against NIST vectors, and replaced placeholder hashes in `experiments/exp-001-rmq-map-qcore-baseline.toml` and `ForgeReport`/`CompareReport`.
+  - Upgraded QMF v1 with configurable multi-GB `QmfBudget` (default 8 GiB), streaming header-only `inspect_qmf_v1_header`, `QmfLatentCache` (`Arc<QuantizedFactor>` runtime deduplication), first-class `RmqSharedCore` serialization/execution, and on-demand `decode_row`.
+  - Refactored `qml-forge` to operate strictly tensor-by-tensor (single-tensor methods) and cluster-by-cluster (RMQ methods), bounding peak transformation memory, and added `--method rmq-core` to `qml-cli`.
+  - Eliminated dense `f64` embedding table reconstruction in `qml-runtime` (`QCoreModel` now performs on-demand `embed_tokens.decode_row(token_id)` and supports `tie_word_embeddings` + `QmfLatentCache`).
+  - Added matched-exact-byte-budget MAP vs uniform Q4_0 unit test in `qml-quant`.

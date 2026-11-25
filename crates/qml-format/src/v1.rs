@@ -8,21 +8,70 @@
 //! **Status:** Experimental format; not compatibility-stable. CRC-32 checks
 //! detect accidental corruption only and do not provide cryptographic authentication.
 
-use crate::{Crc32, MAX_QMF_FILE_BYTES, QMF_CHECKSUM_BYTES, QMF_MAGIC, QmfError, crc32};
+use crate::{Crc32, QMF_CHECKSUM_BYTES, QMF_MAGIC, QmfError, crc32};
 use qml_core::{DenseMatrix, MatrixError};
 use qml_quant::baselines::{QuantizedFactor, SparseResidual};
 use qml_quant::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
-    Int8SymMatrix, LinearOperator, LowRankSvdMatrix, RmqSharedBasisCluster, StorageBreakdown,
+    Int8SymMatrix, LinearOperator, LowRankSvdMatrix, RmqSharedBasisCluster, RmqSharedCoreCluster,
+    StorageBreakdown,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::Arc;
 
 pub const QMF_V1_VERSION: u16 = 1;
 pub const QMF_V1_HEADER_BYTES: usize = 32;
 pub const QMF_V1_MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
+/// Default QMF v1 file-size budget (8 GiB) replacing the legacy 256 MiB prototype ceiling.
+pub const DEFAULT_QMF_V1_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const QMF_V1_FLAG_LITTLE_ENDIAN: u16 = 0x0001;
+
+/// Explicit resource budget for bounded QMF v1 serialization, parsing, and streaming access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QmfBudget {
+    pub max_manifest_bytes: usize,
+    pub max_file_bytes: u64,
+}
+
+impl Default for QmfBudget {
+    fn default() -> Self {
+        Self {
+            max_manifest_bytes: QMF_V1_MAX_MANIFEST_BYTES,
+            max_file_bytes: DEFAULT_QMF_V1_MAX_FILE_BYTES,
+        }
+    }
+}
+
+/// Deduplicating cache of decoded shared latent factors (`Arc<QuantizedFactor>`) so
+/// multiple layer operators genuinely share a single decoded copy in memory.
+#[derive(Debug, Default, Clone)]
+pub struct QmfLatentCache {
+    decoded: BTreeMap<String, Arc<QuantizedFactor>>,
+}
+
+impl QmfLatentCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.decoded.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.decoded.is_empty()
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Arc<QuantizedFactor>> {
+        self.decoded.get(id)
+    }
+
+    pub fn insert(&mut self, id: String, factor: Arc<QuantizedFactor>) {
+        self.decoded.insert(id, factor);
+    }
+}
 
 /// Slice descriptor referencing a contiguous byte span inside the QMF v1 payload section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +155,13 @@ pub enum QmfRepresentation {
         left_rank: usize,
         right_rank: usize,
         core: SharedLatentEncoding,
+        sparse_residual: Option<SparseResidualDesc>,
+    },
+    RmqSharedCore {
+        s_latent_id: String,
+        rank: usize,
+        left: SharedLatentEncoding,
+        right: SharedLatentEncoding,
         sparse_residual: Option<SparseResidualDesc>,
     },
 }
@@ -482,6 +538,61 @@ impl QmfV1Builder {
         Ok(())
     }
 
+    /// Add an entire RMQ shared-core cluster (`W_l ≈ A_l * S * B_l + R_l`), storing `S` ONCE
+    /// in the shared latent table and referencing it across every member layer.
+    pub fn add_rmq_shared_core_cluster(
+        &mut self,
+        cluster_id: &str,
+        layer_names: &[String],
+        cluster: &RmqSharedCoreCluster,
+    ) -> Result<(), QmfError> {
+        if layer_names.len() != cluster.left_transforms.len() {
+            return Err(QmfError::InvalidManifest(
+                "layer_names length does not match RMQ shared-core cluster count".to_owned(),
+            ));
+        }
+        let s_id = format!("{cluster_id}.s_core");
+        if !self.latent_ids.insert(s_id.clone()) {
+            return Err(QmfError::InvalidManifest(format!(
+                "duplicate shared latent cluster {cluster_id:?}"
+            )));
+        }
+        let s_enc = self.encode_factor(&cluster.shared_core);
+        self.manifest.shared_latents.push(SharedLatentEntry {
+            id: s_id.clone(),
+            rows: cluster.rank,
+            cols: cluster.rank,
+            encoding: s_enc,
+        });
+
+        for (idx, name) in layer_names.iter().enumerate() {
+            self.check_unique_tensor(name)?;
+            let left_enc = self.encode_factor(&cluster.left_transforms[idx]);
+            let right_enc = self.encode_factor(&cluster.right_transforms[idx]);
+            let sparse_residual = match &cluster.residuals[idx] {
+                qml_quant::rmq::RmqResidual::None => None,
+                qml_quant::rmq::RmqResidual::Sparse(sp) => self.encode_sparse(sp),
+                qml_quant::rmq::RmqResidual::Int4Sym(_) => {
+                    return Err(QmfError::InvalidManifest(
+                        "INT4 residual serialization in RMQ v1 not yet enabled".to_owned(),
+                    ));
+                }
+            };
+            self.manifest.tensors.push(QmfTensorEntry {
+                name: name.clone(),
+                shape: vec![cluster.rows, cluster.cols],
+                representation: QmfRepresentation::RmqSharedCore {
+                    s_latent_id: s_id.clone(),
+                    rank: cluster.rank,
+                    left: left_enc,
+                    right: right_enc,
+                    sparse_residual,
+                },
+            });
+        }
+        Ok(())
+    }
+
     pub fn build(mut self) -> Result<QmfArchiveV1, QmfError> {
         self.manifest.shared_latents.sort_by(|a, b| a.id.cmp(&b.id));
         self.manifest.tensors.sort_by(|a, b| a.name.cmp(&b.name));
@@ -495,6 +606,9 @@ impl QmfV1Builder {
 }
 
 /// Executable linear operator loaded directly from a validated QMF v1 archive (no dense rebuild).
+///
+/// Shared latent factors (`u_shared`, `vt_shared`, `shared_core`) are held via `Arc` so
+/// multiple layers referencing the same latent table entry genuinely share one decoded copy in RAM.
 #[derive(Debug, Clone)]
 pub enum QmfOperator {
     DenseF32(DenseMatrix),
@@ -507,11 +621,55 @@ pub enum QmfOperator {
     RmqSharedBasis {
         rows: usize,
         cols: usize,
-        u_shared: QuantizedFactor,
+        u_shared: Arc<QuantizedFactor>,
         core: QuantizedFactor,
-        vt_shared: QuantizedFactor,
+        vt_shared: Arc<QuantizedFactor>,
         sparse_residual: Option<SparseResidual>,
     },
+    RmqSharedCore {
+        rows: usize,
+        cols: usize,
+        left: QuantizedFactor,
+        shared_core: Arc<QuantizedFactor>,
+        right: QuantizedFactor,
+        sparse_residual: Option<SparseResidual>,
+    },
+}
+
+impl QmfOperator {
+    /// Decode a single row on demand without reconstructing the full dense matrix.
+    ///
+    /// Used by Q-Core for compressed token embedding lookup (`O(hidden_size)` memory).
+    pub fn decode_row(&self, row: usize) -> Result<Vec<f64>, MatrixError> {
+        if row >= self.rows() {
+            return Err(MatrixError::DimensionMismatch {
+                expected: self.rows(),
+                actual: row,
+            });
+        }
+        match self {
+            Self::DenseF32(m) => {
+                let start = row * m.cols();
+                Ok(m.as_slice()[start..start + m.cols()].to_vec())
+            }
+            Self::DenseF16(m) => m.decode_row(row),
+            Self::DenseBf16(m) => m.decode_row(row),
+            Self::Int8Sym(m) => m.decode_row(row),
+            Self::Int4Sym(m) => m.decode_row(row),
+            Self::Int4Asym(m) => m.decode_row(row),
+            Self::LowRankSvd(_) | Self::RmqSharedBasis { .. } | Self::RmqSharedCore { .. } => {
+                let mut basis = vec![0.0_f64; self.cols()];
+                let mut out = Vec::with_capacity(self.cols());
+                for c in 0..self.cols() {
+                    basis[c] = 1.0;
+                    let col_vec = self.matvec(&basis)?;
+                    out.push(col_vec[row]);
+                    basis[c] = 0.0;
+                }
+                Ok(out)
+            }
+        }
+    }
 }
 
 impl LinearOperator for QmfOperator {
@@ -532,6 +690,14 @@ impl LinearOperator for QmfOperator {
                 sparse_residual: None,
                 ..
             } => "QMF_RMQ_SHARED_BASIS",
+            Self::RmqSharedCore {
+                sparse_residual: Some(_),
+                ..
+            } => "QMF_RMQ_SHARED_CORE+SPARSE",
+            Self::RmqSharedCore {
+                sparse_residual: None,
+                ..
+            } => "QMF_RMQ_SHARED_CORE",
         }
     }
 
@@ -544,7 +710,7 @@ impl LinearOperator for QmfOperator {
             Self::Int4Sym(m) => m.rows(),
             Self::Int4Asym(m) => m.rows(),
             Self::LowRankSvd(m) => m.rows(),
-            Self::RmqSharedBasis { rows, .. } => *rows,
+            Self::RmqSharedBasis { rows, .. } | Self::RmqSharedCore { rows, .. } => *rows,
         }
     }
 
@@ -557,7 +723,7 @@ impl LinearOperator for QmfOperator {
             Self::Int4Sym(m) => m.cols(),
             Self::Int4Asym(m) => m.cols(),
             Self::LowRankSvd(m) => m.cols(),
-            Self::RmqSharedBasis { cols, .. } => *cols,
+            Self::RmqSharedBasis { cols, .. } | Self::RmqSharedCore { cols, .. } => *cols,
         }
     }
 
@@ -580,6 +746,21 @@ impl LinearOperator for QmfOperator {
                 let vtx = vt_shared.matvec(vector)?;
                 let c_vtx = core.matvec(&vtx)?;
                 let mut y = u_shared.matvec(&c_vtx)?;
+                if let Some(sp) = sparse_residual {
+                    sp.add_matvec_into(vector, &mut y)?;
+                }
+                Ok(y)
+            }
+            Self::RmqSharedCore {
+                left,
+                shared_core,
+                right,
+                sparse_residual,
+                ..
+            } => {
+                let bx = right.matvec(vector)?;
+                let s_bx = shared_core.matvec(&bx)?;
+                let mut y = left.matvec(&s_bx)?;
                 if let Some(sp) = sparse_residual {
                     sp.add_matvec_into(vector, &mut y)?;
                 }
@@ -608,6 +789,25 @@ impl LinearOperator for QmfOperator {
                 let c = core.reconstruct_dense()?;
                 let vt = vt_shared.reconstruct_dense()?;
                 let base = u.matmul(&c)?.matmul(&vt)?;
+                if let Some(sp) = sparse_residual {
+                    let mut data = base.as_slice().to_vec();
+                    sp.add_dense_into(&mut data);
+                    DenseMatrix::from_flat(base.rows(), base.cols(), data)
+                } else {
+                    Ok(base)
+                }
+            }
+            Self::RmqSharedCore {
+                left,
+                shared_core,
+                right,
+                sparse_residual,
+                ..
+            } => {
+                let a = left.reconstruct_dense()?;
+                let s = shared_core.reconstruct_dense()?;
+                let b = right.reconstruct_dense()?;
+                let base = a.matmul(&s)?.matmul(&b)?;
                 if let Some(sp) = sparse_residual {
                     let mut data = base.as_slice().to_vec();
                     sp.add_dense_into(&mut data);
@@ -649,6 +849,24 @@ impl LinearOperator for QmfOperator {
                     header_bytes: 24,
                 }
             }
+            Self::RmqSharedCore {
+                left,
+                right,
+                sparse_residual,
+                ..
+            } => {
+                let (lp, ls) = left.raw_storage_bytes();
+                let (rp, rs) = right.raw_storage_bytes();
+                let sp_bytes = sparse_residual
+                    .as_ref()
+                    .map_or(0, SparseResidual::entry_bytes);
+                StorageBreakdown {
+                    payload_bytes: 0,
+                    scale_metadata_bytes: ls + rs,
+                    structure_bytes: lp + rp + sp_bytes,
+                    header_bytes: 24,
+                }
+            }
         }
     }
 }
@@ -662,22 +880,33 @@ impl QmfArchiveV1 {
         self.payload.len()
     }
 
-    /// Write deterministic QMF v1 bytes (header + JSON manifest + binary payload + CRC-32).
+    /// Write deterministic QMF v1 bytes (header + JSON manifest + binary payload + CRC-32)
+    /// under [`QmfBudget::default`] (up to 8 GiB).
     pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<usize, QmfError> {
+        self.write_to_with_budget(writer, &QmfBudget::default())
+    }
+
+    /// Write deterministic QMF v1 bytes enforcing an explicit [`QmfBudget`].
+    pub fn write_to_with_budget<W: Write>(
+        &self,
+        writer: &mut W,
+        budget: &QmfBudget,
+    ) -> Result<usize, QmfError> {
         self.validate_internal()?;
         let manifest_bytes = serde_json::to_vec(&self.manifest)
             .map_err(|e| QmfError::InvalidManifest(e.to_string()))?;
-        if manifest_bytes.len() > QMF_V1_MAX_MANIFEST_BYTES {
+        if manifest_bytes.len() > budget.max_manifest_bytes {
             return Err(QmfError::PayloadTooLarge);
         }
-        let total = QMF_V1_HEADER_BYTES
-            .checked_add(manifest_bytes.len())
-            .and_then(|v| v.checked_add(self.payload.len()))
-            .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES))
+        let total_u64 = (QMF_V1_HEADER_BYTES as u64)
+            .checked_add(manifest_bytes.len() as u64)
+            .and_then(|v| v.checked_add(self.payload.len() as u64))
+            .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES as u64))
             .ok_or(QmfError::PayloadTooLarge)?;
-        if total > MAX_QMF_FILE_BYTES {
+        if total_u64 > budget.max_file_bytes {
             return Err(QmfError::PayloadTooLarge);
         }
+        let total = usize::try_from(total_u64).map_err(|_| QmfError::PayloadTooLarge)?;
 
         let mut header = [0_u8; QMF_V1_HEADER_BYTES];
         header[0..4].copy_from_slice(&QMF_MAGIC);
@@ -698,18 +927,27 @@ impl QmfArchiveV1 {
         Ok(total)
     }
 
-    /// Bounded read and full integrity verification of a QMF v1 stream.
+    /// Bounded read and full integrity verification of a QMF v1 stream using [`QmfBudget::default`].
     pub fn read_from<R: Read>(reader: R) -> Result<Self, QmfError> {
-        let limit = (MAX_QMF_FILE_BYTES as u64) + 1;
+        Self::read_from_with_budget(reader, &QmfBudget::default())
+    }
+
+    /// Bounded read and full integrity verification enforcing an explicit [`QmfBudget`].
+    pub fn read_from_with_budget<R: Read>(reader: R, budget: &QmfBudget) -> Result<Self, QmfError> {
+        let limit = budget.max_file_bytes.saturating_add(1);
         let mut bytes = Vec::new();
         reader.take(limit).read_to_end(&mut bytes)?;
-        if bytes.len() > MAX_QMF_FILE_BYTES {
+        if bytes.len() as u64 > budget.max_file_bytes {
             return Err(QmfError::PayloadTooLarge);
         }
-        Self::from_bytes(&bytes)
+        Self::from_bytes_with_budget(&bytes, budget)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, QmfError> {
+        Self::from_bytes_with_budget(bytes, &QmfBudget::default())
+    }
+
+    pub fn from_bytes_with_budget(bytes: &[u8], budget: &QmfBudget) -> Result<Self, QmfError> {
         if bytes.len() < QMF_V1_HEADER_BYTES + QMF_CHECKSUM_BYTES {
             return Err(QmfError::LengthMismatch {
                 expected: QMF_V1_HEADER_BYTES + QMF_CHECKSUM_BYTES,
@@ -735,19 +973,19 @@ impl QmfArchiveV1 {
         }
         let manifest_len =
             usize::try_from(manifest_len_u64).map_err(|_| QmfError::PayloadTooLarge)?;
-        if manifest_len > QMF_V1_MAX_MANIFEST_BYTES {
+        if manifest_len > budget.max_manifest_bytes {
             return Err(QmfError::PayloadTooLarge);
         }
-        let payload_len =
-            usize::try_from(payload_len_u64).map_err(|_| QmfError::PayloadTooLarge)?;
-        let expected_total = QMF_V1_HEADER_BYTES
-            .checked_add(manifest_len)
-            .and_then(|v| v.checked_add(payload_len))
-            .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES))
+        let expected_total_u64 = (QMF_V1_HEADER_BYTES as u64)
+            .checked_add(manifest_len_u64)
+            .and_then(|v| v.checked_add(payload_len_u64))
+            .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES as u64))
             .ok_or(QmfError::PayloadTooLarge)?;
-        if expected_total > MAX_QMF_FILE_BYTES {
+        if expected_total_u64 > budget.max_file_bytes {
             return Err(QmfError::PayloadTooLarge);
         }
+        let expected_total =
+            usize::try_from(expected_total_u64).map_err(|_| QmfError::PayloadTooLarge)?;
         if bytes.len() != expected_total {
             return Err(QmfError::LengthMismatch {
                 expected: expected_total,
@@ -859,6 +1097,26 @@ impl QmfArchiveV1 {
                         let _ = self.blob_slice(sp.values_f16)?;
                     }
                 }
+                QmfRepresentation::RmqSharedCore {
+                    s_latent_id,
+                    left,
+                    right,
+                    sparse_residual,
+                    ..
+                } => {
+                    if !latent_ids.contains(s_latent_id.as_str()) {
+                        return Err(QmfError::InvalidManifest(format!(
+                            "tensor {:?} references missing shared core id {s_latent_id:?}",
+                            tensor.name
+                        )));
+                    }
+                    self.validate_latent_encoding(left)?;
+                    self.validate_latent_encoding(right)?;
+                    if let Some(sp) = sparse_residual {
+                        let _ = self.blob_slice(sp.indices)?;
+                        let _ = self.blob_slice(sp.values_f16)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -943,6 +1201,17 @@ impl QmfArchiveV1 {
 
     /// Load a 2D tensor directly as an executable [`QmfOperator`] without dense reconstruction.
     pub fn load_operator(&self, name: &str) -> Result<QmfOperator, QmfError> {
+        let mut cache = QmfLatentCache::new();
+        self.load_operator_cached(name, &mut cache)
+    }
+
+    /// Load a 2D tensor as an executable [`QmfOperator`], deduplicating shared latent structures
+    /// across layers via [`QmfLatentCache`] (`Arc<QuantizedFactor>`).
+    pub fn load_operator_cached(
+        &self,
+        name: &str,
+        latent_cache: &mut QmfLatentCache,
+    ) -> Result<QmfOperator, QmfError> {
         let entry = self
             .manifest
             .tensors
@@ -954,6 +1223,25 @@ impl QmfArchiveV1 {
         }
         let rows = entry.shape[0];
         let cols = entry.shape[1];
+
+        let mut get_or_decode_latent = |id: &str| -> Result<Arc<QuantizedFactor>, QmfError> {
+            if let Some(existing) = latent_cache.get(id) {
+                return Ok(Arc::clone(existing));
+            }
+            let latent_entry = self
+                .manifest
+                .shared_latents
+                .iter()
+                .find(|l| l.id == id)
+                .ok_or_else(|| QmfError::InvalidManifest(format!("missing latent {id:?}")))?;
+            let decoded = Arc::new(self.decode_factor(
+                latent_entry.rows,
+                latent_entry.cols,
+                &latent_entry.encoding,
+            )?);
+            latent_cache.insert(id.to_owned(), Arc::clone(&decoded));
+            Ok(decoded)
+        };
 
         match &entry.representation {
             QmfRepresentation::DenseF32 { data } => {
@@ -1037,25 +1325,8 @@ impl QmfArchiveV1 {
                 core,
                 sparse_residual,
             } => {
-                let u_entry = self
-                    .manifest
-                    .shared_latents
-                    .iter()
-                    .find(|l| l.id == *u_latent_id)
-                    .ok_or_else(|| {
-                        QmfError::InvalidManifest(format!("missing latent {u_latent_id:?}"))
-                    })?;
-                let vt_entry = self
-                    .manifest
-                    .shared_latents
-                    .iter()
-                    .find(|l| l.id == *vt_latent_id)
-                    .ok_or_else(|| {
-                        QmfError::InvalidManifest(format!("missing latent {vt_latent_id:?}"))
-                    })?;
-                let u_shared = self.decode_factor(u_entry.rows, u_entry.cols, &u_entry.encoding)?;
-                let vt_shared =
-                    self.decode_factor(vt_entry.rows, vt_entry.cols, &vt_entry.encoding)?;
+                let u_shared = get_or_decode_latent(u_latent_id)?;
+                let vt_shared = get_or_decode_latent(vt_latent_id)?;
                 let core_factor = self.decode_factor(*left_rank, *right_rank, core)?;
                 let sparse = match sparse_residual {
                     Some(desc) => {
@@ -1074,8 +1345,92 @@ impl QmfArchiveV1 {
                     sparse_residual: sparse,
                 })
             }
+            QmfRepresentation::RmqSharedCore {
+                s_latent_id,
+                rank,
+                left,
+                right,
+                sparse_residual,
+            } => {
+                let shared_core = get_or_decode_latent(s_latent_id)?;
+                let left_factor = self.decode_factor(rows, *rank, left)?;
+                let right_factor = self.decode_factor(*rank, cols, right)?;
+                let sparse = match sparse_residual {
+                    Some(desc) => {
+                        let idx = decode_u32_vec(self.blob_slice(desc.indices)?)?;
+                        let vals = decode_u16_vec(self.blob_slice(desc.values_f16)?)?;
+                        Some(SparseResidual::from_parts(rows, cols, idx, vals)?)
+                    }
+                    None => None,
+                };
+                Ok(QmfOperator::RmqSharedCore {
+                    rows,
+                    cols,
+                    left: left_factor,
+                    shared_core,
+                    right: right_factor,
+                    sparse_residual: sparse,
+                })
+            }
         }
     }
+}
+
+/// Streaming, bounded header-only inspector for multi-GB QMF v1 files.
+pub fn inspect_qmf_v1_header<R: Read + Seek>(
+    mut reader: R,
+    budget: &QmfBudget,
+) -> Result<(QmfManifest, u64, u64), QmfError> {
+    let file_bytes = reader.seek(SeekFrom::End(0))?;
+    if file_bytes < (QMF_V1_HEADER_BYTES + QMF_CHECKSUM_BYTES) as u64 {
+        return Err(QmfError::LengthMismatch {
+            expected: QMF_V1_HEADER_BYTES + QMF_CHECKSUM_BYTES,
+            actual: file_bytes as usize,
+        });
+    }
+    if file_bytes > budget.max_file_bytes {
+        return Err(QmfError::PayloadTooLarge);
+    }
+    reader.seek(SeekFrom::Start(0))?;
+    let mut header = [0_u8; QMF_V1_HEADER_BYTES];
+    reader.read_exact(&mut header)?;
+    if header[0..4] != QMF_MAGIC {
+        return Err(QmfError::InvalidMagic);
+    }
+    let version = u16::from_le_bytes([header[4], header[5]]);
+    if version != QMF_V1_VERSION {
+        return Err(QmfError::UnsupportedVersion(version));
+    }
+    let flags = u16::from_le_bytes([header[6], header[7]]);
+    if flags != QMF_V1_FLAG_LITTLE_ENDIAN {
+        return Err(QmfError::NonZeroReservedField);
+    }
+    let manifest_len_u64 = u64::from_le_bytes(header[8..16].try_into().expect("8-byte slice"));
+    let payload_len_u64 = u64::from_le_bytes(header[16..24].try_into().expect("8-byte slice"));
+    let reserved = u64::from_le_bytes(header[24..32].try_into().expect("8-byte slice"));
+    if reserved != 0 {
+        return Err(QmfError::NonZeroReservedField);
+    }
+    let manifest_len = usize::try_from(manifest_len_u64).map_err(|_| QmfError::PayloadTooLarge)?;
+    if manifest_len > budget.max_manifest_bytes {
+        return Err(QmfError::PayloadTooLarge);
+    }
+    let expected = (QMF_V1_HEADER_BYTES as u64)
+        .checked_add(manifest_len_u64)
+        .and_then(|v| v.checked_add(payload_len_u64))
+        .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES as u64))
+        .ok_or(QmfError::PayloadTooLarge)?;
+    if expected != file_bytes {
+        return Err(QmfError::LengthMismatch {
+            expected: expected as usize,
+            actual: file_bytes as usize,
+        });
+    }
+    let mut manifest_bytes = vec![0_u8; manifest_len];
+    reader.read_exact(&mut manifest_bytes)?;
+    let manifest: QmfManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| QmfError::InvalidManifest(e.to_string()))?;
+    Ok((manifest, file_bytes, payload_len_u64))
 }
 
 fn decode_u16_vec(raw: &[u8]) -> Result<Vec<u16>, QmfError> {
@@ -1085,8 +1440,10 @@ fn decode_u16_vec(raw: &[u8]) -> Result<Vec<u16>, QmfError> {
         ));
     }
     Ok(raw
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&c| u16::from_le_bytes(c))
         .collect())
 }
 
@@ -1097,8 +1454,10 @@ fn decode_u32_vec(raw: &[u8]) -> Result<Vec<u32>, QmfError> {
         ));
     }
     Ok(raw
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&c| u32::from_le_bytes(c))
         .collect())
 }
 
@@ -1109,8 +1468,8 @@ fn decode_f32_vec(raw: &[u8]) -> Result<Vec<f64>, QmfError> {
         ));
     }
     let mut out = Vec::with_capacity(raw.len() / 4);
-    for (idx, c) in raw.chunks_exact(4).enumerate() {
-        let v = f64::from(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+    for (idx, &c) in raw.as_chunks::<4>().0.iter().enumerate() {
+        let v = f64::from(f32::from_le_bytes(c));
         if !v.is_finite() {
             return Err(QmfError::Matrix(MatrixError::NonFiniteValue { index: idx }));
         }
@@ -1226,5 +1585,109 @@ mod tests {
             QmfArchiveV1::from_bytes(&corrupt),
             Err(QmfError::ChecksumMismatch)
         ));
+
+        // Verify Arc deduplication via QmfLatentCache across both RMQ layers!
+        let mut cache = QmfLatentCache::new();
+        let op0 = reloaded.load_operator_cached("l0.q", &mut cache).unwrap();
+        let op1 = reloaded.load_operator_cached("l1.q", &mut cache).unwrap();
+        assert_eq!(cache.len(), 2);
+        if let (
+            QmfOperator::RmqSharedBasis {
+                u_shared: u0,
+                vt_shared: vt0,
+                ..
+            },
+            QmfOperator::RmqSharedBasis {
+                u_shared: u1,
+                vt_shared: vt1,
+                ..
+            },
+        ) = (&op0, &op1)
+        {
+            assert!(Arc::ptr_eq(u0, u1), "u_shared must be deduplicated via Arc");
+            assert!(
+                Arc::ptr_eq(vt0, vt1),
+                "vt_shared must be deduplicated via Arc"
+            );
+        } else {
+            panic!("expected RmqSharedBasis operators");
+        }
+
+        // Verify compressed single-row decoding matches dense reconstruction!
+        let row3 = op_q4.decode_row(3).unwrap();
+        let dense_q4 = op_q4.reconstruct_dense().unwrap();
+        for (c, &val) in row3.iter().enumerate() {
+            assert!((val - dense_q4.get(3, c).unwrap()).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn qmf_v1_round_trips_shared_core_rmq_and_header_inspection() {
+        let mut rng = DeterministicRng::new(9001);
+        let m0 =
+            DenseMatrix::from_flat(16, 16, (0..256).map(|_| rng.next_normal()).collect()).unwrap();
+        let m1 =
+            DenseMatrix::from_flat(16, 16, (0..256).map(|_| rng.next_normal()).collect()).unwrap();
+        let cluster = RmqSharedCoreCluster::fit(
+            &[&m0, &m1],
+            4,
+            FactorPrecision::Int8Sym,
+            RmqResidualKind::SparseTopFraction { fraction: 0.02 },
+            19,
+        )
+        .unwrap();
+
+        let mut builder = QmfV1Builder::new(
+            "shared-core-test",
+            "safetensors",
+            "synthetic",
+            "test",
+            "rmq_shared_core",
+            19,
+        );
+        builder
+            .add_rmq_shared_core_cluster(
+                "attn_v",
+                &["l0.v".to_owned(), "l1.v".to_owned()],
+                &cluster,
+            )
+            .unwrap();
+        let archive = builder.build().unwrap();
+        let mut buf = Vec::new();
+        archive.write_to(&mut buf).unwrap();
+
+        // Streaming header-only inspection without loading payload.
+        let (hdr_manifest, file_len, payload_len) =
+            inspect_qmf_v1_header(std::io::Cursor::new(&buf), &QmfBudget::default()).unwrap();
+        assert_eq!(file_len as usize, buf.len());
+        assert_eq!(payload_len as usize, archive.payload_bytes());
+        assert_eq!(hdr_manifest.shared_latents.len(), 1);
+
+        let reloaded = QmfArchiveV1::from_bytes(&buf).unwrap();
+        let mut cache = QmfLatentCache::new();
+        let op0 = reloaded.load_operator_cached("l0.v", &mut cache).unwrap();
+        let op1 = reloaded.load_operator_cached("l1.v", &mut cache).unwrap();
+        if let (
+            QmfOperator::RmqSharedCore {
+                shared_core: s0, ..
+            },
+            QmfOperator::RmqSharedCore {
+                shared_core: s1, ..
+            },
+        ) = (&op0, &op1)
+        {
+            assert!(
+                Arc::ptr_eq(s0, s1),
+                "shared_core must be deduplicated via Arc"
+            );
+        } else {
+            panic!("expected RmqSharedCore operators");
+        }
+        let x: Vec<f64> = (0..16).map(|i| i as f64 * 0.1).collect();
+        let expected = cluster.layer(0).unwrap().matvec(&x).unwrap();
+        let actual = op0.matvec(&x).unwrap();
+        for (a, b) in expected.iter().zip(actual) {
+            assert!((a - b).abs() < 1e-12);
+        }
     }
 }

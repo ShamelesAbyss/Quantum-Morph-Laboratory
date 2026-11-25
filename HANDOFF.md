@@ -5,8 +5,8 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **Milestone VI — Robust Outlier-Peeling RMQ, NSGA-II Q-Genesis Elite Capping, Release Benchmarks, Custom SVG Identity & Documentation Overhaul**.
-- The workspace now contains 9 cohesive crates (`qml-core`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`); zero new external dependencies were introduced and no Python runtime dependency exists anywhere in the graph.
+- Active takeover milestone: **PROJECT SINGULARITY — Phase I (Audit Deficiency Remediation: Rust 1.99+ Clippy, Multi-GB QMF v1, Streaming Q-Forge, Compressed Embeddings, Shared-Core RMQ, Pure-Rust SHA-256, Matched-Budget MAP)**.
+- The workspace currently contains 9 cohesive crates (`qml-core`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`); zero new external dependencies were introduced in Phase I and no Python runtime dependency exists anywhere in the graph.
 - No project license has been selected. All workspace crates are marked `publish = false`; do not add a project license without owner approval.
 
 ## Implemented capabilities
@@ -23,13 +23,13 @@
 
 ## Validation actually executed on the implementation
 
-All of the following passed locally on Windows 11 with Rust 1.94.0:
+All of the following passed locally on Windows 11 with Rust 1.99.1 (`cargo +1.99.1`):
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace` — 67 tests passed (15 `qml-core`, 7 `qml-format`, 24 `qml-model` unit + 2 Safetensors oracle, 2 `qml-scope`, 7 `qml-quant`, 1 `qml-forge`, 1 `qml-runtime`, 1 `qml-genesis`, 7 `qml-cli` integration).
-- `cargo build --workspace`
-- Zero new third-party dependencies added (preserves `cargo-deny` policy compliance; CI `dependency-policy` job verifies on push).
+- `cargo +1.99.1 fmt --all -- --check`
+- `cargo +1.99.1 clippy --workspace --all-targets -- -D warnings`
+- `cargo +1.99.1 test --workspace` — 70 tests passed (`qml-core` including NIST SHA-256 vectors, `qml-format` including `Arc` latent deduplication, `RmqSharedCore`, `decode_row`, and streaming header inspection, `qml-model`, `qml-scope`, `qml-quant` including matched-budget MAP vs Q4_0, `qml-forge`, `qml-runtime`, `qml-genesis`, `qml-cli`).
+- `cargo +1.99.1 build --workspace`
+- Zero new third-party dependencies added in Phase I (preserves `cargo-deny` policy compliance; CI `dependency-policy` job verifies on push).
 
 ## Research and design findings
 

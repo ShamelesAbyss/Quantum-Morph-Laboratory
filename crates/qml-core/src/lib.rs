@@ -5,9 +5,11 @@
 //! truncated-SVD approximation.
 
 pub mod rng;
+pub mod sha256;
 pub mod svd;
 
 pub use rng::DeterministicRng;
+pub use sha256::{Sha256, sha256_hex, sha256_reader};
 pub use svd::{
     SpectrumMetrics, SvdResult, exact_thin_svd, randomized_svd, spectrum_metrics_from_values,
     subspace_affinity_columns, truncated_svd,

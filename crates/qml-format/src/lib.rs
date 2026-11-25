@@ -7,9 +7,11 @@
 pub mod v1;
 
 pub use v1::{
-    BlobRef, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES, QMF_V1_MAX_MANIFEST_BYTES,
-    QMF_V1_VERSION, QmfArchiveV1, QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry,
-    QmfV1Builder, SharedLatentEncoding, SharedLatentEntry, SparseResidualDesc, peek_qmf_version,
+    BlobRef, DEFAULT_QMF_V1_MAX_FILE_BYTES, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES,
+    QMF_V1_MAX_MANIFEST_BYTES, QMF_V1_VERSION, QmfArchiveV1, QmfBudget, QmfLatentCache,
+    QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry, QmfV1Builder,
+    SharedLatentEncoding, SharedLatentEntry, SparseResidualDesc, inspect_qmf_v1_header,
+    peek_qmf_version,
 };
 
 use qml_core::{MatrixError, RankOneFactors};

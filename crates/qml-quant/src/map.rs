@@ -324,4 +324,41 @@ mod tests {
             report.uniform_int4_g32_weighted_error
         );
     }
+
+    #[test]
+    fn map_matched_exact_byte_budget_against_uniform_q4_0() {
+        let mut rng = DeterministicRng::new(2026);
+        let mut l0_data: Vec<f64> = (0..32 * 32).map(|_| rng.next_normal() * 0.4).collect();
+        l0_data[0] = 20.0;
+        let l0 = DenseMatrix::from_flat(32, 32, l0_data).unwrap();
+        let u = DenseMatrix::from_flat(32, 3, (0..96).map(|_| rng.next_normal() * 0.1).collect())
+            .unwrap();
+        let v = DenseMatrix::from_flat(3, 32, (0..96).map(|_| rng.next_normal() * 0.1).collect())
+            .unwrap();
+        let l1 = u.matmul(&v).unwrap();
+        let l2 = l1.scale(0.9).unwrap();
+        let l3 = l1.scale(0.7).unwrap();
+        let layers = [("l0", &l0), ("l1", &l1), ("l2", &l2), ("l3", &l3)];
+
+        // Exact matched budget: Q4_0 uses 4.65625 bpp on 32x32 matrices -> set MAP target <= Q4_0!
+        let cfg = MapConfig {
+            target_avg_bpp: 4.65,
+            propagation_weight: 0.35,
+            include_svd_rank: Some(4),
+            seed: 42,
+        };
+        let report = allocate_adaptive_precision(&layers, &cfg).unwrap();
+        assert!(
+            report.actual_total_bytes <= report.uniform_int4_g32_bytes,
+            "MAP bytes ({}) must be <= uniform Q4_0 bytes ({}) for matched-budget comparison",
+            report.actual_total_bytes,
+            report.uniform_int4_g32_bytes
+        );
+        assert!(
+            report.importance_weighted_error < report.uniform_int4_g32_weighted_error,
+            "At matched byte budget, MAP ({:.4}) should beat uniform Q4_0 ({:.4})",
+            report.importance_weighted_error,
+            report.uniform_int4_g32_weighted_error
+        );
+    }
 }

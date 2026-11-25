@@ -30,8 +30,8 @@ backend = "CPU reference (100% safe Rust, release profile, SSE4.2/AVX/AVX2/FMA/F
 [software]
 qml_version = "0.1.0"
 rustc_version = "1.94.0 (4a4ef493e 2026-03-02)"
-git_commit = "e1c26ec + outlier-peeling RMQ & genesis elite cap"
-dependency_lock_hash_sha256 = "see Cargo.lock"
+git_commit = "e3ccafac67c09e6b28ef57b8e63bdccf45e72f1b"
+dependency_lock_hash_sha256 = "de5d1694d96f86badd20f1dee0a6324a224aa72ac9987b94326879361192cf16"
 
 [evaluation]
 methodology = "Complete byte-for-byte storage accounting (scales, zero-points, shared bases, cores, sparse COO indices, JSON manifests, CRC-32) + direct compressed matvec error + autoregressive KL divergence and perplexity vs FP16 reference."

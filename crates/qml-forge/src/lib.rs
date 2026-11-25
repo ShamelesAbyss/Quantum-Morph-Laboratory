@@ -1,16 +1,17 @@
-//! Q-Forge — Modular Model Transformation Engine for Quantum Morph Laboratory.
+//! Q-Forge — Memory-Bounded Model Transformation Engine for Quantum Morph Laboratory.
 //!
 //! Transforms immutable Safetensors models into experimental QMF v1 artifacts
-//! with full parameter provenance, complete on-disk byte accounting, and
+//! with tensor-by-tensor and cluster-by-cluster bounded memory execution,
+//! real SHA-256 provenance hashing, complete on-disk byte accounting, and
 //! direct-execution verification against the original weights.
 
-use qml_core::DenseMatrix;
-use qml_format::{QmfArchiveV1, QmfError, QmfV1Builder};
+use qml_core::{DenseMatrix, sha256_hex};
+use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfV1Builder};
 use qml_model::{PayloadBudget, PayloadError, SafetensorsFile};
 use qml_quant::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
     Int8SymMatrix, LinearOperator, LowRankSvdMatrix, MapConfig, RmqResidualKind,
-    RmqSharedBasisCluster, RmqSharedBasisConfig, allocate_adaptive_precision,
+    RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, allocate_adaptive_precision,
     deterministic_probe_vectors, evaluate_operator,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
@@ -40,15 +41,22 @@ pub enum TransformStrategy {
         precision: FactorPrecision,
     },
     /// Clusters same-role, same-shape 2D tensors across layers into shared-basis RMQ
-    /// representations (`U_shared * C_l * V_sharedᵀ + SparseResidual`); unclustered 2D
-    /// matrices fall back to `Int8Sym(64)` and 1D vectors remain `DenseF32`.
+    /// representations (`U_shared * C_l * V_sharedᵀ + SparseResidual`); processed one
+    /// cluster at a time to bound working RAM.
     RmqSharedBasis {
         rank: usize,
         sparse_fraction: f64,
         basis_precision: FactorPrecision,
         core_precision: FactorPrecision,
     },
-    /// Runs Morphological Adaptive Precision (MAP) across all 2D tensors under a global
+    /// Clusters same-role, same-shape 2D tensors across layers into shared-core RMQ
+    /// representations (`A_l * S * B_l + SparseResidual`); processed one cluster at a time.
+    RmqSharedCore {
+        rank: usize,
+        sparse_fraction: f64,
+        factor_precision: FactorPrecision,
+    },
+    /// Runs Morphological Adaptive Precision (MAP) across 2D tensors under a global
     /// target average bits-per-parameter budget.
     MapAdaptive {
         target_avg_bpp: f64,
@@ -62,43 +70,49 @@ impl TransformStrategy {
         match self {
             Self::Fp16 => TransformDescriptor {
                 name: "fp16",
-                assumptions: "IEEE-754 binary16 range [-65504, 65504]",
+                assumptions: "IEEE-754 binary16 range [-65504, 65504]; tensor-by-tensor streaming",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::Bf16 => TransformDescriptor {
                 name: "bf16",
-                assumptions: "BFloat16 dynamic range with 7-bit mantissa",
+                assumptions: "BFloat16 dynamic range with 7-bit mantissa; tensor-by-tensor streaming",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::Int8Sym { .. } => TransformDescriptor {
                 name: "int8_sym",
-                assumptions: "Symmetric groupwise uniform quantization with f16 scales",
+                assumptions: "Symmetric groupwise uniform quantization with f16 scales; tensor-by-tensor",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::Int4Sym { .. } => TransformDescriptor {
                 name: "int4_sym",
-                assumptions: "GGML Q4_0-style symmetric packed 4-bit blocks with f16 scales",
+                assumptions: "GGML Q4_0-style symmetric packed 4-bit blocks with f16 scales; tensor-by-tensor",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::Int4Asym { .. } => TransformDescriptor {
                 name: "int4_asym",
-                assumptions: "GGML Q4_1-style affine packed 4-bit blocks with f16 scale+min",
+                assumptions: "GGML Q4_1-style affine packed 4-bit blocks with f16 scale+min; tensor-by-tensor",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::LowRankSvd { .. } => TransformDescriptor {
                 name: "low_rank_svd",
-                assumptions: "Per-layer truncated SVD with symmetrically scaled quantized factors",
+                assumptions: "Per-layer truncated SVD with symmetrically scaled quantized factors; tensor-by-tensor",
                 deterministic: true,
                 maturity: "conventional-baseline",
             },
             Self::RmqSharedBasis { .. } => TransformDescriptor {
                 name: "rmq_shared_basis",
-                assumptions: "Cross-layer 2D-HOOI shared orthonormal bases + layer cores + optional sparse residual; assumes cross-layer subspace overlap",
+                assumptions: "Cluster-by-cluster 2D-HOOI shared orthonormal bases + outlier peeling + sparse residual",
+                deterministic: true,
+                maturity: "experimental-proposal",
+            },
+            Self::RmqSharedCore { .. } => TransformDescriptor {
+                name: "rmq_shared_core",
+                assumptions: "Cluster-by-cluster shared spectral core S with layer-specific A_l, B_l + sparse residual",
                 deterministic: true,
                 maturity: "experimental-proposal",
             },
@@ -139,6 +153,7 @@ pub struct ForgeReport {
     pub random_seed: u64,
     pub source_file_bytes: u64,
     pub qmf_serialized_bytes: usize,
+    pub qmf_sha256: String,
     pub total_parameters: u64,
     pub effective_qmf_bpp: f64,
     pub compression_ratio_vs_source: f64,
@@ -155,6 +170,7 @@ pub struct ForgeReport {
 pub struct CompareReport {
     pub qmf_model_id: String,
     pub transformation: String,
+    pub qmf_sha256: String,
     pub tensors_compared: usize,
     pub source_file_bytes: u64,
     pub qmf_file_bytes: usize,
@@ -203,6 +219,10 @@ impl From<qml_core::MatrixError> for ForgeError {
 }
 
 /// Transform a read-only Safetensors stream into a validated QMF v1 archive and report.
+///
+/// Single-tensor strategies (`Fp16`, `Bf16`, `Int8Sym`, `Int4Sym`, `Int4Asym`, `LowRankSvd`)
+/// execute strictly **tensor-by-tensor** (holding only one decoded matrix in memory at a time).
+/// RMQ strategies execute **cluster-by-cluster** (holding only one role cluster at a time).
 pub fn forge_safetensors_to_qmf<R: Read + Seek>(
     reader: R,
     model_id: &str,
@@ -228,71 +248,132 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
     builder.insert_metadata("assumptions", descriptor.assumptions);
     builder.insert_metadata("maturity", descriptor.maturity);
 
-    // Load 2D matrices and 1D/other vectors within the explicit PayloadBudget.
-    let mut matrices: Vec<(String, DenseMatrix)> = Vec::new();
-    let mut vectors: Vec<(String, Vec<usize>, Vec<f32>)> = Vec::new();
     let mut total_params = 0_u64;
+    let mut tensor_summaries: Vec<TransformedTensorSummary> =
+        Vec::with_capacity(meta.tensors.len());
+    let mut sum_frob = 0.0_f64;
+    let mut sum_mv = 0.0_f64;
+    let mut mat_count = 0_usize;
 
+    // Separate tensor names by dimensionality using metadata only (zero payload loaded yet).
+    let mut matrix_infos = Vec::new();
+    let mut vector_infos = Vec::new();
     for info in &meta.tensors {
         let count = qml_model::tensor_element_count(info)?;
         total_params = total_params.saturating_add(count);
         if info.shape.len() == 2 && info.shape[0] > 0 && info.shape[1] > 0 {
-            let mat = file.read_tensor_matrix(&info.name, budget)?;
-            matrices.push((info.name.clone(), mat));
+            matrix_infos.push(info.clone());
         } else {
-            let vals = file.read_tensor_f64(&info.name, budget)?;
-            let shape_usize: Vec<usize> = info.shape.iter().map(|&d| d as usize).collect();
-            let f32_vals: Vec<f32> = vals.into_iter().map(|v| v as f32).collect();
-            vectors.push((info.name.clone(), shape_usize, f32_vals));
+            vector_infos.push(info.clone());
         }
     }
 
-    for (name, shape, vals) in &vectors {
-        builder.add_dense_f32(name.clone(), shape.clone(), vals)?;
+    // 1. Stream 1D/non-2D vectors one by one and drop immediately after encoding.
+    for info in &vector_infos {
+        let vals = file.read_tensor_f64(&info.name, budget)?;
+        let shape_usize: Vec<usize> = info.shape.iter().map(|&d| d as usize).collect();
+        let f32_vals: Vec<f32> = vals.into_iter().map(|v| v as f32).collect();
+        builder.add_dense_f32(info.name.clone(), shape_usize.clone(), &f32_vals)?;
+        tensor_summaries.push(TransformedTensorSummary {
+            name: info.name.clone(),
+            shape: shape_usize,
+            representation: "QMF_DENSE_F32".to_owned(),
+            relative_frobenius_error: Some(0.0),
+            mean_matvec_rel_error: None,
+        });
     }
 
+    // 2. Transform 2D matrices with memory-bounded streaming per strategy.
     match strategy {
-        TransformStrategy::Fp16 => {
-            for (name, mat) in &matrices {
-                builder.add_fp16(name.clone(), &Fp16Matrix::quantize(mat))?;
-            }
-        }
-        TransformStrategy::Bf16 => {
-            for (name, mat) in &matrices {
-                builder.add_bf16(name.clone(), &Bf16Matrix::quantize(mat))?;
-            }
-        }
-        TransformStrategy::Int8Sym { group_size } => {
-            for (name, mat) in &matrices {
-                builder.add_int8_sym(name.clone(), &Int8SymMatrix::quantize(mat, *group_size)?)?;
-            }
-        }
-        TransformStrategy::Int4Sym { group_size } => {
-            for (name, mat) in &matrices {
-                builder.add_int4_sym(
-                    name.clone(),
-                    &Int4SymGroupMatrix::quantize(mat, *group_size)?,
-                )?;
-            }
-        }
-        TransformStrategy::Int4Asym { group_size } => {
-            for (name, mat) in &matrices {
-                builder.add_int4_asym(
-                    name.clone(),
-                    &Int4AsymGroupMatrix::quantize(mat, *group_size)?,
-                )?;
-            }
-        }
-        TransformStrategy::LowRankSvd { rank, precision } => {
-            for (idx, (name, mat)) in matrices.iter().enumerate() {
-                let r = (*rank).max(1).min(mat.rows().min(mat.cols()));
-                let svd = LowRankSvdMatrix::from_matrix(
-                    mat,
-                    r,
-                    *precision,
-                    seed.wrapping_add(idx as u64),
-                )?;
-                builder.add_low_rank_svd(name.clone(), &svd)?;
+        TransformStrategy::Fp16
+        | TransformStrategy::Bf16
+        | TransformStrategy::Int8Sym { .. }
+        | TransformStrategy::Int4Sym { .. }
+        | TransformStrategy::Int4Asym { .. }
+        | TransformStrategy::LowRankSvd { .. } => {
+            for (idx, info) in matrix_infos.iter().enumerate() {
+                let mat = file.read_tensor_matrix(&info.name, budget)?;
+                let probes = deterministic_probe_vectors(mat.cols(), 4, seed);
+                let (rep_name, rel_frob, mv_err) = match strategy {
+                    TransformStrategy::Fp16 => {
+                        let op = Fp16Matrix::quantize(&mat);
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_fp16(info.name.clone(), &op)?;
+                        (
+                            "QMF_FP16".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::Bf16 => {
+                        let op = Bf16Matrix::quantize(&mat);
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_bf16(info.name.clone(), &op)?;
+                        (
+                            "QMF_BF16".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::Int8Sym { group_size } => {
+                        let op = Int8SymMatrix::quantize(&mat, *group_size)?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_int8_sym(info.name.clone(), &op)?;
+                        (
+                            "QMF_INT8_SYM".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::Int4Sym { group_size } => {
+                        let op = Int4SymGroupMatrix::quantize(&mat, *group_size)?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_int4_sym(info.name.clone(), &op)?;
+                        (
+                            "QMF_INT4_SYM".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::Int4Asym { group_size } => {
+                        let op = Int4AsymGroupMatrix::quantize(&mat, *group_size)?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_int4_asym(info.name.clone(), &op)?;
+                        (
+                            "QMF_INT4_ASYM".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::LowRankSvd { rank, precision } => {
+                        let r = (*rank).max(1).min(mat.rows().min(mat.cols()));
+                        let op = LowRankSvdMatrix::from_matrix(
+                            &mat,
+                            r,
+                            *precision,
+                            seed.wrapping_add(idx as u64),
+                        )?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_low_rank_svd(info.name.clone(), &op)?;
+                        (
+                            "QMF_SVD".to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                sum_frob += rel_frob;
+                sum_mv += mv_err;
+                mat_count += 1;
+                tensor_summaries.push(TransformedTensorSummary {
+                    name: info.name.clone(),
+                    shape: vec![mat.rows(), mat.cols()],
+                    representation: rep_name,
+                    relative_frobenius_error: Some(rel_frob),
+                    mean_matvec_rel_error: Some(mv_err),
+                });
+                // `mat` drops here before loading the next tensor!
             }
         }
         TransformStrategy::RmqSharedBasis {
@@ -301,21 +382,24 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
             basis_precision,
             core_precision,
         } => {
-            // Group 2D matrices by (LayerRole, rows, cols); clusters of size >= 2 share bases!
+            // Group metadata by (LayerRole, rows, cols) and process ONE cluster at a time!
             type ClusterKey = (LayerRole, usize, usize);
-            let mut groups: BTreeMap<ClusterKey, Vec<usize>> = BTreeMap::new();
-            for (idx, (name, mat)) in matrices.iter().enumerate() {
-                let (_, role) = classify_tensor_name(name);
+            let mut groups: BTreeMap<ClusterKey, Vec<String>> = BTreeMap::new();
+            for info in &matrix_infos {
+                let (_, role) = classify_tensor_name(&info.name);
                 groups
-                    .entry((role, mat.rows(), mat.cols()))
+                    .entry((role, info.shape[0] as usize, info.shape[1] as usize))
                     .or_default()
-                    .push(idx);
+                    .push(info.name.clone());
             }
-            for ((role, rows, cols), indices) in groups {
-                if indices.len() >= 2 {
-                    let refs: Vec<&DenseMatrix> = indices.iter().map(|&i| &matrices[i].1).collect();
-                    let names: Vec<String> =
-                        indices.iter().map(|&i| matrices[i].0.clone()).collect();
+            for ((role, rows, cols), names) in groups {
+                let cluster_mats: Vec<DenseMatrix> = names
+                    .iter()
+                    .map(|n| file.read_tensor_matrix(n, budget))
+                    .collect::<Result<_, _>>()?;
+                let probes = deterministic_probe_vectors(cols, 4, seed);
+                if cluster_mats.len() >= 2 {
+                    let refs: Vec<&DenseMatrix> = cluster_mats.iter().collect();
                     let r = (*rank).max(1).min(rows.min(cols));
                     let residual_kind = if *sparse_fraction > 0.0 {
                         RmqResidualKind::SparseTopFraction {
@@ -336,13 +420,109 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             seed,
                         },
                     )?;
+                    for (local_i, (name, mat)) in names.iter().zip(&cluster_mats).enumerate() {
+                        let op = cluster.layer(local_i).unwrap();
+                        let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                        sum_frob += ev.relative_frobenius_error;
+                        sum_mv += ev.mean_matvec_rel_error;
+                        mat_count += 1;
+                        tensor_summaries.push(TransformedTensorSummary {
+                            name: name.clone(),
+                            shape: vec![rows, cols],
+                            representation: op.method_name().to_owned(),
+                            relative_frobenius_error: Some(ev.relative_frobenius_error),
+                            mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
+                        });
+                    }
                     let cluster_id = format!("{}_{rows}x{cols}", role.as_str());
                     builder.add_rmq_shared_basis_cluster(&cluster_id, &names, &cluster)?;
                 } else {
-                    for idx in indices {
-                        let (name, mat) = &matrices[idx];
-                        builder.add_int8_sym(name.clone(), &Int8SymMatrix::quantize(mat, 64)?)?;
+                    let mat = &cluster_mats[0];
+                    let op = Int8SymMatrix::quantize(mat, 64)?;
+                    let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                    builder.add_int8_sym(names[0].clone(), &op)?;
+                    sum_frob += ev.relative_frobenius_error;
+                    sum_mv += ev.mean_matvec_rel_error;
+                    mat_count += 1;
+                    tensor_summaries.push(TransformedTensorSummary {
+                        name: names[0].clone(),
+                        shape: vec![rows, cols],
+                        representation: "QMF_INT8_SYM".to_owned(),
+                        relative_frobenius_error: Some(ev.relative_frobenius_error),
+                        mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
+                    });
+                }
+                // Entire cluster drops here before loading the next role cluster!
+            }
+        }
+        TransformStrategy::RmqSharedCore {
+            rank,
+            sparse_fraction,
+            factor_precision,
+        } => {
+            type ClusterKey = (LayerRole, usize, usize);
+            let mut groups: BTreeMap<ClusterKey, Vec<String>> = BTreeMap::new();
+            for info in &matrix_infos {
+                let (_, role) = classify_tensor_name(&info.name);
+                groups
+                    .entry((role, info.shape[0] as usize, info.shape[1] as usize))
+                    .or_default()
+                    .push(info.name.clone());
+            }
+            for ((role, rows, cols), names) in groups {
+                let cluster_mats: Vec<DenseMatrix> = names
+                    .iter()
+                    .map(|n| file.read_tensor_matrix(n, budget))
+                    .collect::<Result<_, _>>()?;
+                let probes = deterministic_probe_vectors(cols, 4, seed);
+                if cluster_mats.len() >= 2 {
+                    let refs: Vec<&DenseMatrix> = cluster_mats.iter().collect();
+                    let r = (*rank).max(1).min(rows.min(cols));
+                    let residual_kind = if *sparse_fraction > 0.0 {
+                        RmqResidualKind::SparseTopFraction {
+                            fraction: *sparse_fraction,
+                        }
+                    } else {
+                        RmqResidualKind::None
+                    };
+                    let cluster = RmqSharedCoreCluster::fit(
+                        &refs,
+                        r,
+                        *factor_precision,
+                        residual_kind,
+                        seed,
+                    )?;
+                    for (local_i, (name, mat)) in names.iter().zip(&cluster_mats).enumerate() {
+                        let op = cluster.layer(local_i).unwrap();
+                        let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                        sum_frob += ev.relative_frobenius_error;
+                        sum_mv += ev.mean_matvec_rel_error;
+                        mat_count += 1;
+                        tensor_summaries.push(TransformedTensorSummary {
+                            name: name.clone(),
+                            shape: vec![rows, cols],
+                            representation: op.method_name().to_owned(),
+                            relative_frobenius_error: Some(ev.relative_frobenius_error),
+                            mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
+                        });
                     }
+                    let cluster_id = format!("{}_{rows}x{cols}", role.as_str());
+                    builder.add_rmq_shared_core_cluster(&cluster_id, &names, &cluster)?;
+                } else {
+                    let mat = &cluster_mats[0];
+                    let op = Int8SymMatrix::quantize(mat, 64)?;
+                    let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                    builder.add_int8_sym(names[0].clone(), &op)?;
+                    sum_frob += ev.relative_frobenius_error;
+                    sum_mv += ev.mean_matvec_rel_error;
+                    mat_count += 1;
+                    tensor_summaries.push(TransformedTensorSummary {
+                        name: names[0].clone(),
+                        shape: vec![rows, cols],
+                        representation: "QMF_INT8_SYM".to_owned(),
+                        relative_frobenius_error: Some(ev.relative_frobenius_error),
+                        mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
+                    });
                 }
             }
         }
@@ -351,7 +531,15 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
             propagation_weight,
             include_svd_rank,
         } => {
-            if !matrices.is_empty() {
+            if !matrix_infos.is_empty() {
+                let mut matrices: Vec<(String, DenseMatrix)> =
+                    Vec::with_capacity(matrix_infos.len());
+                for info in &matrix_infos {
+                    matrices.push((
+                        info.name.clone(),
+                        file.read_tensor_matrix(&info.name, budget)?,
+                    ));
+                }
                 let pairs: Vec<(&str, &DenseMatrix)> =
                     matrices.iter().map(|(n, m)| (n.as_str(), m)).collect();
                 let map_cfg = MapConfig {
@@ -363,35 +551,98 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                 let plan = allocate_adaptive_precision(&pairs, &map_cfg)?;
                 for (idx, alloc) in plan.allocations.iter().enumerate() {
                     let (name, mat) = &matrices[idx];
-                    match alloc.selected.method.as_str() {
-                        "FP16" => builder.add_fp16(name.clone(), &Fp16Matrix::quantize(mat))?,
-                        "BF16" => builder.add_bf16(name.clone(), &Bf16Matrix::quantize(mat))?,
-                        "INT8_SYM" => builder
-                            .add_int8_sym(name.clone(), &Int8SymMatrix::quantize(mat, 64)?)?,
-                        "INT4_ASYM_G32(Q4_1)" => builder.add_int4_asym(
-                            name.clone(),
-                            &Int4AsymGroupMatrix::quantize(mat, 32)?,
-                        )?,
-                        "INT4_SYM_G128" => builder
-                            .add_int4_sym(name.clone(), &Int4SymGroupMatrix::quantize(mat, 128)?)?,
+                    let probes = deterministic_probe_vectors(mat.cols(), 4, seed);
+                    let (rep_name, rel_frob, mv_err) = match alloc.selected.method.as_str() {
+                        "FP16" => {
+                            let op = Fp16Matrix::quantize(mat);
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_fp16(name.clone(), &op)?;
+                            (
+                                "QMF_FP16",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
+                        "BF16" => {
+                            let op = Bf16Matrix::quantize(mat);
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_bf16(name.clone(), &op)?;
+                            (
+                                "QMF_BF16",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
+                        "INT8_SYM" => {
+                            let op = Int8SymMatrix::quantize(mat, 64)?;
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_int8_sym(name.clone(), &op)?;
+                            (
+                                "QMF_INT8_SYM",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
+                        "INT4_ASYM_G32(Q4_1)" => {
+                            let op = Int4AsymGroupMatrix::quantize(mat, 32)?;
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_int4_asym(name.clone(), &op)?;
+                            (
+                                "QMF_INT4_ASYM",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
+                        "INT4_SYM_G128" => {
+                            let op = Int4SymGroupMatrix::quantize(mat, 128)?;
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_int4_sym(name.clone(), &op)?;
+                            (
+                                "QMF_INT4_SYM",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
                         "SVD_INT8" => {
                             let r = include_svd_rank
                                 .unwrap_or(8)
                                 .max(1)
                                 .min(mat.rows().min(mat.cols()));
-                            builder.add_low_rank_svd(
-                                name.clone(),
-                                &LowRankSvdMatrix::from_matrix(
-                                    mat,
-                                    r,
-                                    FactorPrecision::Int8Sym,
-                                    seed + idx as u64,
-                                )?,
+                            let op = LowRankSvdMatrix::from_matrix(
+                                mat,
+                                r,
+                                FactorPrecision::Int8Sym,
+                                seed + idx as u64,
                             )?;
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_low_rank_svd(name.clone(), &op)?;
+                            (
+                                "QMF_SVD",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
                         }
-                        _ => builder
-                            .add_int4_sym(name.clone(), &Int4SymGroupMatrix::quantize(mat, 32)?)?,
-                    }
+                        _ => {
+                            let op = Int4SymGroupMatrix::quantize(mat, 32)?;
+                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            builder.add_int4_sym(name.clone(), &op)?;
+                            (
+                                "QMF_INT4_SYM",
+                                ev.relative_frobenius_error,
+                                ev.mean_matvec_rel_error,
+                            )
+                        }
+                    };
+                    sum_frob += rel_frob;
+                    sum_mv += mv_err;
+                    mat_count += 1;
+                    tensor_summaries.push(TransformedTensorSummary {
+                        name: name.clone(),
+                        shape: vec![mat.rows(), mat.cols()],
+                        representation: rep_name.to_owned(),
+                        relative_frobenius_error: Some(rel_frob),
+                        mean_matvec_rel_error: Some(mv_err),
+                    });
                 }
             }
         }
@@ -400,38 +651,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
     let archive = builder.build()?;
     let mut serialized = Vec::new();
     let qmf_bytes = archive.write_to(&mut serialized)?;
-    // Reload from exact serialized bytes to guarantee 100% round-trip fidelity in reported metrics.
+    let qmf_sha256 = sha256_hex(&serialized);
     let verified = QmfArchiveV1::from_bytes(&serialized)?;
-
-    let mut tensor_summaries = Vec::with_capacity(verified.manifest().tensors.len());
-    let mut sum_frob = 0.0_f64;
-    let mut sum_mv = 0.0_f64;
-    let mut mat_count = 0_usize;
-
-    for (name, mat) in &matrices {
-        let op = verified.load_operator(name)?;
-        let probes = deterministic_probe_vectors(mat.cols(), 6, seed);
-        let ev = evaluate_operator(mat, &op, &probes, 0)?;
-        sum_frob += ev.relative_frobenius_error;
-        sum_mv += ev.mean_matvec_rel_error;
-        mat_count += 1;
-        tensor_summaries.push(TransformedTensorSummary {
-            name: name.clone(),
-            shape: vec![mat.rows(), mat.cols()],
-            representation: op.method_name().to_owned(),
-            relative_frobenius_error: Some(ev.relative_frobenius_error),
-            mean_matvec_rel_error: Some(ev.mean_matvec_rel_error),
-        });
-    }
-    for (name, shape, _) in &vectors {
-        tensor_summaries.push(TransformedTensorSummary {
-            name: name.clone(),
-            shape: shape.clone(),
-            representation: "QMF_DENSE_F32".to_owned(),
-            relative_frobenius_error: Some(0.0),
-            mean_matvec_rel_error: None,
-        });
-    }
     tensor_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
     let effective_qmf_bpp = if total_params > 0 {
@@ -445,6 +666,7 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
         random_seed: seed,
         source_file_bytes: meta.file_bytes,
         qmf_serialized_bytes: qmf_bytes,
+        qmf_sha256,
         total_parameters: total_params,
         effective_qmf_bpp,
         compression_ratio_vs_source: meta.file_bytes as f64 / qmf_bytes.max(1) as f64,
@@ -476,6 +698,8 @@ pub fn compare_safetensors_and_qmf<R: Read + Seek>(
     let mut source = SafetensorsFile::open(source_reader, budget)?;
     let meta = source.metadata().clone();
     let archive = QmfArchiveV1::from_bytes(qmf_bytes)?;
+    let qmf_sha256 = sha256_hex(qmf_bytes);
+    let mut latent_cache = QmfLatentCache::new();
 
     let mut total_params = 0_u64;
     let mut compared = 0_usize;
@@ -488,8 +712,8 @@ pub fn compare_safetensors_and_qmf<R: Read + Seek>(
         total_params = total_params.saturating_add(qml_model::tensor_element_count(info)?);
         if info.shape.len() == 2 && info.shape[0] > 0 && info.shape[1] > 0 {
             let orig = source.read_tensor_matrix(&info.name, budget)?;
-            let op = archive.load_operator(&info.name)?;
-            let probes = deterministic_probe_vectors(orig.cols(), 6, seed);
+            let op = archive.load_operator_cached(&info.name, &mut latent_cache)?;
+            let probes = deterministic_probe_vectors(orig.cols(), 4, seed);
             let ev = evaluate_operator(&orig, &op, &probes, 0)?;
             sum_frob += ev.relative_frobenius_error;
             if ev.relative_frobenius_error > max_frob {
@@ -506,6 +730,7 @@ pub fn compare_safetensors_and_qmf<R: Read + Seek>(
     Ok(CompareReport {
         qmf_model_id: archive.manifest().model_id.clone(),
         transformation: archive.manifest().transformation.clone(),
+        qmf_sha256,
         tensors_compared: compared,
         source_file_bytes: meta.file_bytes,
         qmf_file_bytes: qmf_bytes.len(),
@@ -537,7 +762,7 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn forge_transforms_synthetic_transformer_with_rmq_and_map_and_verifies_via_compare() {
+    fn forge_transforms_synthetic_transformer_with_rmq_basis_core_and_map() {
         let model_bytes = generate_synthetic_transformer_safetensors(4, 32, 64, 4, 77).unwrap();
         let budget = PayloadBudget::default();
 
@@ -559,21 +784,43 @@ mod tests {
         )
         .unwrap();
 
-        assert!(report.shared_latent_count >= 8); // U+Vt for each of the 4 attn roles + up_proj
-        assert!(
-            report.compression_ratio_vs_source > 2.0,
-            "expected >2x complete QMF file compression, got {:.2}x",
-            report.compression_ratio_vs_source
-        );
+        assert_eq!(report.qmf_sha256.len(), 64);
+        assert!(report.shared_latent_count >= 8);
+        assert!(report.compression_ratio_vs_source > 2.0);
 
         let mut qmf_buf = Vec::new();
         archive.write_to(&mut qmf_buf).unwrap();
         let cmp =
             compare_safetensors_and_qmf(Cursor::new(&model_bytes), &qmf_buf, &budget, 42).unwrap();
-        assert_eq!(cmp.tensors_compared, 20); // 4 layers * 5 2D matrices
+        assert_eq!(cmp.qmf_sha256, report.qmf_sha256);
+        assert_eq!(cmp.tensors_compared, 20);
         assert!((cmp.mean_matvec_rel_error - report.mean_matvec_rel_error).abs() < 1e-12);
 
-        // 2. MAP Adaptive transformation -> QMF v1
+        // 2. RMQ Shared-Core transformation -> QMF v1
+        let core_strategy = TransformStrategy::RmqSharedCore {
+            rank: 4,
+            sparse_fraction: 0.01,
+            factor_precision: FactorPrecision::Int8Sym,
+        };
+        let (core_archive, core_report) = forge_safetensors_to_qmf(
+            Cursor::new(&model_bytes),
+            "synthetic-4L-core",
+            "generated-test",
+            "mini_llama",
+            &core_strategy,
+            &budget,
+            42,
+        )
+        .unwrap();
+        assert!(core_report.shared_latent_count >= 4);
+        let mut core_buf = Vec::new();
+        core_archive.write_to(&mut core_buf).unwrap();
+        let core_cmp =
+            compare_safetensors_and_qmf(Cursor::new(&model_bytes), &core_buf, &budget, 42).unwrap();
+        assert_eq!(core_cmp.tensors_compared, 20);
+        assert!((core_cmp.mean_matvec_rel_error - core_report.mean_matvec_rel_error).abs() < 1e-12);
+
+        // 3. MAP Adaptive transformation -> QMF v1
         let map_strategy = TransformStrategy::MapAdaptive {
             target_avg_bpp: 6.0,
             propagation_weight: 0.35,
@@ -589,19 +836,10 @@ mod tests {
             42,
         )
         .unwrap();
-        // Verify payload strictly obeys MAP budget while total file accounts for JSON manifest overhead.
         let payload_bpp =
             (map_archive.payload_bytes() as f64 * 8.0) / map_report.total_parameters as f64;
-        assert!(
-            payload_bpp <= 6.5,
-            "expected MAP payload bpp <= 6.5, got {payload_bpp:.3}"
-        );
-        assert!(
-            map_report.qmf_serialized_bytes < map_report.source_file_bytes as usize,
-            "expected complete QMF file ({}) smaller than source ({})",
-            map_report.qmf_serialized_bytes,
-            map_report.source_file_bytes
-        );
+        assert!(payload_bpp <= 6.5);
+        assert!(map_report.qmf_serialized_bytes < map_report.source_file_bytes as usize);
         assert!(map_report.mean_matvec_rel_error < 0.15);
     }
 }

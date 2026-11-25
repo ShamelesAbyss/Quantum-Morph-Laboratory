@@ -722,6 +722,7 @@ impl QmlDesktopApp {
                 )));
                 ctx.request_repaint();
 
+                let mut stream_dec = tokenizer.streaming_decoder(true);
                 let gen_res = model
                     .generate_with_callback(
                         &prompt_ids,
@@ -733,13 +734,20 @@ impl QmlDesktopApp {
                             if cancel.load(Ordering::SeqCst) {
                                 return false;
                             }
-                            let piece = tokenizer.decode_token(tok_id as u32, true);
-                            let _ = tx.send(WorkerEvent::InferToken(piece));
-                            ctx.request_repaint();
+                            let piece = stream_dec.push(tok_id as u32);
+                            if !piece.is_empty() {
+                                let _ = tx.send(WorkerEvent::InferToken(piece));
+                                ctx.request_repaint();
+                            }
                             true
                         },
                     )
                     .map_err(|e| e.to_string())?;
+                let tail = stream_dec.flush();
+                if !tail.is_empty() {
+                    let _ = tx.send(WorkerEvent::InferToken(tail));
+                    ctx.request_repaint();
+                }
 
                 let fidelity = if !compare_path.is_empty() && PathBuf::from(&compare_path).is_file()
                 {

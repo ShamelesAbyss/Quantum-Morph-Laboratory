@@ -8,6 +8,7 @@ publish = false
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 qml-core = { path = "../qml-core" }
+qml-quant = { path = "../qml-quant" }
 serde = { version = "1", features = ["derive"] }
 sysinfo = "0.33"
 wgpu = "24"

@@ -1594,6 +1594,7 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         let _ = std::io::stdout().flush();
     }
 
+    let mut stream_dec = tokenizer.streaming_decoder(true);
     let generation = match model.generate_with_callback(
         &prompt_ids,
         max_tokens,
@@ -1602,9 +1603,11 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         42,
         |tok_id| {
             if !json {
-                let piece = tokenizer.decode_token(tok_id as u32, true);
-                print!("{piece}");
-                let _ = std::io::stdout().flush();
+                let piece = stream_dec.push(tok_id as u32);
+                if !piece.is_empty() {
+                    print!("{piece}");
+                    let _ = std::io::stdout().flush();
+                }
             }
             true
         },
@@ -1616,6 +1619,10 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         }
     };
     if !json {
+        let tail = stream_dec.flush();
+        if !tail.is_empty() {
+            print!("{tail}");
+        }
         println!();
     }
 

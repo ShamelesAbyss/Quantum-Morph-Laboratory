@@ -6,6 +6,7 @@
 //! GPU adapter is available (such as on headless CI runners).
 
 use qml_core::{DenseMatrix, MatrixError};
+use qml_quant::{Int4SymGroupMatrix, Int8SymMatrix, LinearOperator};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use sysinfo::System;
@@ -228,7 +229,7 @@ impl From<MatrixError> for GpuComputeError {
 struct MatvecUniforms {
     rows: u32,
     cols: u32,
-    _pad0: u32,
+    group_size: u32,
     _pad1: u32,
 }
 
@@ -236,7 +237,7 @@ const MATVEC_WGSL: &str = r#"
 struct Dims {
     rows: u32,
     cols: u32,
-    _pad0: u32,
+    group_size: u32,
     _pad1: u32,
 };
 
@@ -260,14 +261,125 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-/// Experimental WGPU compute shader engine for dense `f32` matrix-vector multiplication.
+const MATVEC_INT8_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> codes_packed: array<u32>;
+@group(0) @binding(2) var<storage, read> scales_packed: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+fn decode_f16_scale(g: u32) -> f32 {
+    let pair = unpack2x16float(scales_packed[g >> 1u]);
+    return select(pair.x, pair.y, (g & 1u) != 0u);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    var acc: f32 = 0.0;
+    let base = row * dims.cols;
+    for (var c: u32 = 0u; c < dims.cols; c = c + 1u) {
+        let idx = base + c;
+        let word = codes_packed[idx >> 2u];
+        let q = extractBits(i32(word), (idx & 3u) * 8u, 8u);
+        let scale = decode_f16_scale(idx / dims.group_size);
+        acc = acc + (f32(q) * scale) * vector[c];
+    }
+    output[row] = acc;
+}
+"#;
+
+const MATVEC_Q4_0_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> nibbles_packed: array<u32>;
+@group(0) @binding(2) var<storage, read> scales_packed: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+fn decode_f16_scale(g: u32) -> f32 {
+    let pair = unpack2x16float(scales_packed[g >> 1u]);
+    return select(pair.x, pair.y, (g & 1u) != 0u);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    var acc: f32 = 0.0;
+    let base = row * dims.cols;
+    for (var c: u32 = 0u; c < dims.cols; c = c + 1u) {
+        let idx = base + c;
+        let word = nibbles_packed[idx >> 3u];
+        let nibble = (word >> ((idx & 7u) * 4u)) & 0xFu;
+        let q = i32(nibble) - 8;
+        let scale = decode_f16_scale(idx / dims.group_size);
+        acc = acc + (f32(q) * scale) * vector[c];
+    }
+    output[row] = acc;
+}
+"#;
+
+fn pack_bytes_u32(bytes: &[u8]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(4).max(1));
+    for chunk in bytes.chunks(4) {
+        let mut word = [0u8; 4];
+        word[..chunk.len()].copy_from_slice(chunk);
+        out.push(u32::from_le_bytes(word));
+    }
+    if out.is_empty() {
+        out.push(0);
+    }
+    out
+}
+
+fn pack_u16_u32(vals: &[u16]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(vals.len().div_ceil(2).max(1));
+    for chunk in vals.chunks(2) {
+        let lo = u32::from(chunk[0]);
+        let hi = if chunk.len() > 1 {
+            u32::from(chunk[1])
+        } else {
+            0
+        };
+        out.push(lo | (hi << 16));
+    }
+    if out.is_empty() {
+        out.push(0);
+    }
+    out
+}
+
+/// Experimental WGPU compute shader engine for dense `f32` and direct compressed
+/// `INT8_SYM` / `Q4_0 (INT4_SYM)` matrix-vector multiplication (zero dense reconstruction in VRAM).
 pub struct WgpuMatvecEngine {
     adapter_name: String,
     backend_name: String,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::ComputePipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    pipeline_f32: wgpu::ComputePipeline,
+    bgl_f32: wgpu::BindGroupLayout,
+    pipeline_int8: wgpu::ComputePipeline,
+    pipeline_q4_0: wgpu::ComputePipeline,
+    bgl_quant: wgpu::BindGroupLayout,
 }
 
 impl WgpuMatvecEngine {
@@ -294,67 +406,96 @@ impl WgpuMatvecEngine {
         ))
         .map_err(|e| GpuComputeError::DeviceRequestFailed(e.to_string()))?;
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let shader_f32 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("qml-matvec-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_WGSL.into()),
         });
+        let shader_int8 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-int8-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_INT8_WGSL.into()),
+        });
+        let shader_q4_0 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-q4-0-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_Q4_0_WGSL.into()),
+        });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("qml-matvec-bgl"),
+        let ro_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let rw_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let uniform_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        let bgl_f32 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("qml-matvec-f32-bgl"),
+            entries: &[uniform_entry, ro_storage(1), ro_storage(2), rw_storage(3)],
+        });
+        let bgl_quant = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("qml-matvec-quant-bgl"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniform_entry,
+                ro_storage(1),
+                ro_storage(2),
+                ro_storage(3),
+                rw_storage(4),
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("qml-matvec-pl"),
-            bind_group_layouts: &[&bind_group_layout],
+        let pl_f32 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("qml-matvec-f32-pl"),
+            bind_group_layouts: &[&bgl_f32],
+            push_constant_ranges: &[],
+        });
+        let pl_quant = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("qml-matvec-quant-pl"),
+            bind_group_layouts: &[&bgl_quant],
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("qml-matvec-pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
+        let pipeline_f32 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-f32-pipeline"),
+            layout: Some(&pl_f32),
+            module: &shader_f32,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let pipeline_int8 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-int8-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_int8,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let pipeline_q4_0 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-q4-0-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_q4_0,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
@@ -365,8 +506,11 @@ impl WgpuMatvecEngine {
             backend_name: format!("{:?}", info.backend),
             device,
             queue,
-            pipeline,
-            bind_group_layout,
+            pipeline_f32,
+            bgl_f32,
+            pipeline_int8,
+            pipeline_q4_0,
+            bgl_quant,
         })
     }
 
@@ -397,7 +541,7 @@ impl WgpuMatvecEngine {
         let uniforms = MatvecUniforms {
             rows,
             cols,
-            _pad0: 0,
+            group_size: 1,
             _pad1: 0,
         };
         let mat_f32: Vec<f32> = matrix.as_slice().iter().map(|&v| v as f32).collect();
@@ -439,8 +583,8 @@ impl WgpuMatvecEngine {
         });
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("qml-matvec-bg"),
-            layout: &self.bind_group_layout,
+            label: Some("qml-matvec-f32-bg"),
+            layout: &self.bgl_f32,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -461,6 +605,178 @@ impl WgpuMatvecEngine {
             ],
         });
 
+        self.dispatch_and_readback(
+            &self.pipeline_f32,
+            &bind_group,
+            rows,
+            &out_buf,
+            &readback_buf,
+            out_bytes,
+        )
+    }
+
+    /// Executes direct compressed `INT8_SYM` matrix-vector multiplication on the GPU
+    /// without ever reconstructing dense floating-point weights in VRAM.
+    pub fn matvec_int8_sym(
+        &self,
+        matrix: &Int8SymMatrix,
+        vector: &[f64],
+    ) -> Result<Vec<f64>, GpuComputeError> {
+        if vector.len() != matrix.cols() {
+            return Err(GpuComputeError::Matrix(MatrixError::DimensionMismatch {
+                expected: matrix.cols(),
+                actual: vector.len(),
+            }));
+        }
+        let code_bytes: Vec<u8> = matrix.codes().iter().map(|&q| q as u8).collect();
+        let packed_codes = pack_bytes_u32(&code_bytes);
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        self.run_quantized_matvec(
+            &self.pipeline_int8,
+            matrix.rows() as u32,
+            matrix.cols() as u32,
+            matrix.group_size() as u32,
+            &packed_codes,
+            &packed_scales,
+            vector,
+        )
+    }
+
+    /// Executes direct compressed `Q4_0 (INT4_SYM)` matrix-vector multiplication on the GPU
+    /// without ever reconstructing dense floating-point weights in VRAM.
+    pub fn matvec_int4_sym(
+        &self,
+        matrix: &Int4SymGroupMatrix,
+        vector: &[f64],
+    ) -> Result<Vec<f64>, GpuComputeError> {
+        if vector.len() != matrix.cols() {
+            return Err(GpuComputeError::Matrix(MatrixError::DimensionMismatch {
+                expected: matrix.cols(),
+                actual: vector.len(),
+            }));
+        }
+        let packed_nibbles = pack_bytes_u32(matrix.packed_nibbles());
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        self.run_quantized_matvec(
+            &self.pipeline_q4_0,
+            matrix.rows() as u32,
+            matrix.cols() as u32,
+            matrix.group_size() as u32,
+            &packed_nibbles,
+            &packed_scales,
+            vector,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_quantized_matvec(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        rows: u32,
+        cols: u32,
+        group_size: u32,
+        packed_weights: &[u32],
+        packed_scales: &[u32],
+        vector: &[f64],
+    ) -> Result<Vec<f64>, GpuComputeError> {
+        use wgpu::util::DeviceExt;
+
+        let uniforms = MatvecUniforms {
+            rows,
+            cols,
+            group_size,
+            _pad1: 0,
+        };
+        let vec_f32: Vec<f32> = vector.iter().map(|&v| v as f32).collect();
+        let out_bytes = (rows as usize * std::mem::size_of::<f32>()) as u64;
+
+        let uniform_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quant-dims"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let weights_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quant-weights"),
+                contents: bytemuck::cast_slice(packed_weights),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let scales_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quant-scales"),
+                contents: bytemuck::cast_slice(packed_scales),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let vec_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("quant-vector"),
+                contents: bytemuck::cast_slice(&vec_f32),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quant-output"),
+            size: out_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quant-readback"),
+            size: out_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("qml-matvec-quant-bg"),
+            layout: &self.bgl_quant,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weights_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scales_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: vec_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: out_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        self.dispatch_and_readback(
+            pipeline,
+            &bind_group,
+            rows,
+            &out_buf,
+            &readback_buf,
+            out_bytes,
+        )
+    }
+
+    fn dispatch_and_readback(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        rows: u32,
+        out_buf: &wgpu::Buffer,
+        readback_buf: &wgpu::Buffer,
+        out_bytes: u64,
+    ) -> Result<Vec<f64>, GpuComputeError> {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -471,11 +787,11 @@ impl WgpuMatvecEngine {
                 label: Some("qml-matvec-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.dispatch_workgroups(rows.div_ceil(64), 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&out_buf, 0, &readback_buf, 0, out_bytes);
+        encoder.copy_buffer_to_buffer(out_buf, 0, readback_buf, 0, out_bytes);
         self.queue.submit(Some(encoder.finish()));
 
         let slice = readback_buf.slice(..);
@@ -541,6 +857,51 @@ mod tests {
             "WGPU matvec on {} ({}) diverged from CPU: max_err={max_err}",
             engine.adapter_name(),
             engine.backend_name()
+        );
+    }
+
+    #[test]
+    fn wgpu_compressed_int8_and_q4_0_match_cpu_reference_when_adapter_available() {
+        let Ok(engine) = WgpuMatvecEngine::try_new() else {
+            return;
+        };
+        let mut rng = DeterministicRng::new(777);
+        let rows = 128;
+        let cols = 96;
+        let mat = DenseMatrix::from_flat(
+            rows,
+            cols,
+            (0..rows * cols).map(|_| rng.next_normal() * 0.25).collect(),
+        )
+        .unwrap();
+        let x: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
+
+        // Direct compressed INT8_SYM on GPU vs CPU
+        let q8 = Int8SymMatrix::quantize(&mat, 64).unwrap();
+        let cpu8 = q8.matvec(&x).unwrap();
+        let gpu8 = engine.matvec_int8_sym(&q8, &x).unwrap();
+        let err8 = cpu8
+            .iter()
+            .zip(&gpu8)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            err8 < 1e-4,
+            "WGPU INT8_SYM matvec diverged from CPU: max_err={err8}"
+        );
+
+        // Direct compressed Q4_0 (INT4_SYM) on GPU vs CPU
+        let q4 = Int4SymGroupMatrix::quantize(&mat, 32).unwrap();
+        let cpu4 = q4.matvec(&x).unwrap();
+        let gpu4 = engine.matvec_int4_sym(&q4, &x).unwrap();
+        let err4 = cpu4
+            .iter()
+            .zip(&gpu4)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            err4 < 1e-4,
+            "WGPU Q4_0 (INT4_SYM) matvec diverged from CPU: max_err={err4}"
         );
     }
 }

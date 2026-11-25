@@ -404,6 +404,90 @@ impl BpeTokenizer {
     pub fn decode_token(&self, id: u32, skip_special_tokens: bool) -> String {
         self.decode(&[id], skip_special_tokens)
     }
+
+    /// Creates a stateful [`StreamingDecoder`] that buffers partial multi-byte UTF-8
+    /// sequences across token boundaries (preventing replacement glyphs on Greek
+    /// symbols, math notation, or emojis split across BPE tokens).
+    pub fn streaming_decoder(&self, skip_special_tokens: bool) -> StreamingDecoder<'_> {
+        StreamingDecoder {
+            tokenizer: self,
+            skip_special_tokens,
+            pending_bytes: Vec::new(),
+        }
+    }
+}
+
+/// Stateful incremental UTF-8 decoder for token-by-token BPE streaming.
+pub struct StreamingDecoder<'a> {
+    tokenizer: &'a BpeTokenizer,
+    skip_special_tokens: bool,
+    pending_bytes: Vec<u8>,
+}
+
+impl<'a> StreamingDecoder<'a> {
+    /// Push the next generated token ID and return any newly completed UTF-8 text.
+    pub fn push(&mut self, id: u32) -> String {
+        let mut out = String::new();
+        if let Some(special) = self.tokenizer.special_ids.get(&id) {
+            out.push_str(&self.flush());
+            if !self.skip_special_tokens {
+                out.push_str(special);
+            }
+            return out;
+        }
+        if let Some(tok) = self.tokenizer.id_to_token.get(id as usize) {
+            for ch in tok.chars() {
+                if let Some(&b) = self.tokenizer.char_to_byte.get(&ch) {
+                    self.pending_bytes.push(b);
+                } else {
+                    out.push_str(&self.flush());
+                    out.push(ch);
+                }
+            }
+        }
+        self.drain_valid_utf8(&mut out);
+        out
+    }
+
+    /// Flush any remaining buffered bytes at end-of-stream.
+    pub fn flush(&mut self) -> String {
+        if self.pending_bytes.is_empty() {
+            return String::new();
+        }
+        let text = String::from_utf8_lossy(&self.pending_bytes).into_owned();
+        self.pending_bytes.clear();
+        text
+    }
+
+    fn drain_valid_utf8(&mut self, out: &mut String) {
+        loop {
+            match std::str::from_utf8(&self.pending_bytes) {
+                Ok(valid) => {
+                    out.push_str(valid);
+                    self.pending_bytes.clear();
+                    break;
+                }
+                Err(err) => {
+                    let valid_up_to = err.valid_up_to();
+                    if valid_up_to > 0 {
+                        if let Ok(prefix) = std::str::from_utf8(&self.pending_bytes[..valid_up_to])
+                        {
+                            out.push_str(prefix);
+                        }
+                        self.pending_bytes.drain(..valid_up_to);
+                    }
+                    if let Some(invalid_len) = err.error_len() {
+                        // Truly invalid byte sequence; emit replacement and continue.
+                        out.push('\u{FFFD}');
+                        self.pending_bytes.drain(..invalid_len);
+                    } else {
+                        // Incomplete multi-byte UTF-8 sequence; wait for next token.
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn detect_individual_digits(pre_tokenizer: Option<&serde_json::Value>) -> bool {
@@ -649,5 +733,30 @@ mod tests {
         for b in 0u8..=255u8 {
             assert_eq!(c2b.get(&b2c[b as usize]), Some(&b));
         }
+    }
+
+    #[test]
+    fn streaming_decoder_buffers_split_multibyte_utf8() {
+        // Greek capital Sigma 'Σ' is UTF-8 [0xCE, 0xA3]; split across two byte tokens.
+        let (b2c, _) = gpt2_byte_unicode_tables();
+        let c1 = b2c[0xCE];
+        let c2 = b2c[0xA3];
+        let json = format!(
+            r#"{{
+                "version": "1.0",
+                "added_tokens": [],
+                "model": {{
+                    "type": "BPE",
+                    "vocab": {{ "{c1}": 0, "{c2}": 1, "!": 2 }},
+                    "merges": []
+                }}
+            }}"#
+        );
+        let tok = BpeTokenizer::from_json_bytes(json.as_bytes()).unwrap();
+        let mut dec = tok.streaming_decoder(true);
+        assert_eq!(dec.push(0), "");
+        assert_eq!(dec.push(1), "Σ");
+        assert_eq!(dec.push(2), "!");
+        assert_eq!(dec.flush(), "");
     }
 }

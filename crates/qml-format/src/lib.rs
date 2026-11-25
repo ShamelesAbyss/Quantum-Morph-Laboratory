@@ -1,8 +1,16 @@
-//! Experimental QMF v0 container for one rank-one `f64` matrix representation.
+//! Experimental QMF containers (`v0` single rank-one prototype and `v1`
+//! generalized multi-tensor container with shared latent tables).
 //!
-//! This is deliberately a narrow prototype, not a stable model format. It uses
-//! bounded input, explicit version/type fields, little-endian values, and CRC-32
-//! for accidental-corruption detection. CRC-32 is not authentication.
+//! Both versions remain experimental and not compatibility-stable. CRC-32
+//! verifies accidental corruption only and is not cryptographic authentication.
+
+pub mod v1;
+
+pub use v1::{
+    BlobRef, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES, QMF_V1_MAX_MANIFEST_BYTES,
+    QMF_V1_VERSION, QmfArchiveV1, QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry,
+    QmfV1Builder, SharedLatentEncoding, SharedLatentEntry, SparseResidualDesc, peek_qmf_version,
+};
 
 use qml_core::{MatrixError, RankOneFactors};
 use std::error::Error;
@@ -29,6 +37,7 @@ pub enum QmfError {
     LengthMismatch { expected: usize, actual: usize },
     ChecksumMismatch,
     Matrix(MatrixError),
+    InvalidManifest(String),
 }
 
 impl Display for QmfError {
@@ -51,6 +60,7 @@ impl Display for QmfError {
             ),
             Self::ChecksumMismatch => write!(f, "QMF CRC-32 checksum mismatch"),
             Self::Matrix(error) => write!(f, "invalid QMF matrix factors: {error}"),
+            Self::InvalidManifest(msg) => write!(f, "invalid QMF v1 manifest: {msg}"),
         }
     }
 }
@@ -240,14 +250,14 @@ fn validate_dimensions(rows: usize, cols: usize) -> Result<(), QmfError> {
     Ok(())
 }
 
-struct Crc32(u32);
+pub(crate) struct Crc32(u32);
 
 impl Crc32 {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(!0_u32)
     }
 
-    fn update(&mut self, bytes: &[u8]) {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
         for byte in bytes {
             self.0 ^= u32::from(*byte);
             for _ in 0..8 {
@@ -257,12 +267,12 @@ impl Crc32 {
         }
     }
 
-    fn finish(self) -> u32 {
+    pub(crate) fn finish(self) -> u32 {
         !self.0
     }
 }
 
-fn crc32(bytes: &[u8]) -> u32 {
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut checksum = Crc32::new();
     checksum.update(bytes);
     checksum.finish()

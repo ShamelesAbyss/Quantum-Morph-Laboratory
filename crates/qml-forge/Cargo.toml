@@ -1,0 +1,16 @@
+[package]
+name = "qml-forge"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+qml-core = { path = "../qml-core" }
+qml-format = { path = "../qml-format" }
+qml-model = { path = "../qml-model" }
+qml-quant = { path = "../qml-quant" }
+qml-scope = { path = "../qml-scope" }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

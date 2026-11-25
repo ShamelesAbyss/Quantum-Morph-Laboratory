@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 qml-core = { path = "../qml-core" }
+qml-model = { path = "../qml-model" }
+qml-quant = { path = "../qml-quant" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints]
 workspace = true

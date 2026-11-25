@@ -5,7 +5,8 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `/home/ubuntu/Quantum-Morph-Laboratory`
-- Current local commit: `e90cbb7` (`Add bounded Safetensors metadata inspection`); push is pending.
+- Safetensors implementation commit: `e90cbb7` (`Add bounded Safetensors metadata inspection`).
+- Verified milestone head: `a16490d` (`Update handoff for Safetensors inspection milestone`); GitHub Actions run `45582096501` passed on this SHA.
 - The complete original directive and both continuations are preserved in `MASTER_DEVELOPMENT_DIRECTIVE.md`.
 - Rust stable 1.100.0 is installed in this sandbox. Cargo may require `source "$HOME/.cargo/env"` in a fresh shell.
 - The workspace contains `qml-core`, `qml-format`, `qml-model`, and `qml-cli`; no Python runtime dependency is present in the normal or development dependency graph.
@@ -15,11 +16,11 @@
 
 `qml-core` provides validated dense-matrix primitives and a deterministic conventional largest-pivot rank-one baseline, including direct factorized matrix-vector multiplication and Frobenius reconstruction error. `qml-format` provides a bounded reader and deterministic writer for an experimental single-rank-one-`f64` QMF v0 file; this is not a general model format and CRC-32 is not authentication. The synthetic demo is not a pretrained-model result.
 
-`qml-model` provides a bounded, read-only Safetensors metadata inspector. It reads the 8-byte prefix and at most 16 MiB of header, seeks to determine file length, and never reads/maps payload bytes. It rejects malformed/duplicate JSON keys, unknown tensor fields and dtypes, excessive rank/tensor counts, arithmetic overflow, unaligned sub-byte tensors, invalid offsets, gaps/overlaps, and file-length mismatch. Results are deterministically sorted. `qml inspect-safetensors PATH` emits text; `qml inspect-safetensors --json PATH` emits JSON. It does not validate tensor values, identify architecture, or transform models.
+`qml-model` provides a bounded, read-only Safetensors metadata inspector. It reads the 8-byte prefix and at most 16 MiB of header, seeks to determine file length, and never reads or maps payload bytes. It rejects malformed/duplicate JSON keys, unknown tensor fields and dtypes, excessive rank/tensor counts, arithmetic overflow, unaligned sub-byte tensors, invalid offsets, gaps/overlaps, and file-length mismatch. Results are deterministically sorted. `qml inspect-safetensors PATH` emits text; `qml inspect-safetensors --json PATH` emits JSON. It does not validate tensor values, identify architecture, or transform models.
 
-The generated F32 and F4 fixtures are differentially checked against the exact-pinned Safetensors 0.8.0 crate in development tests. Property-based shape tests and CLI integration tests use synthetic bytes only. Research and design rationale are in `research/safetensors-inspection.md` and `docs/decisions/0001-bounded-safetensors-inspection.md`.
+Generated F32 and F4 fixtures are differentially checked against the exact-pinned Safetensors 0.8.0 crate in development tests. Property-based shape tests and CLI integration tests use synthetic bytes only. Research and design rationale are in `research/safetensors-inspection.md` and `docs/decisions/0001-bounded-safetensors-inspection.md`.
 
-## Validation actually executed on `e90cbb7`
+## Validation actually executed on the implementation
 
 All of the following passed locally after the final parser edits:
 
@@ -31,7 +32,7 @@ All of the following passed locally after the final parser edits:
 - `git diff --check` and a Node-based scan of 35 Markdown files — all relative links resolved; all three directive-part markers were present.
 - `cargo tree --workspace -e normal,dev` search found no Python/PyO3-related dependencies.
 
-The previous successful GitHub Actions run was `45369660967` on the earlier commit; it passed on Ubuntu and Windows. CI for `e90cbb7` has not run yet because the commit has not been pushed. The updated workflow builds and tests on Ubuntu and Windows, and runs `cargo deny check` on Ubuntu.
+GitHub Actions run `45582096501` passed on `a16490d9bfff5326cd02f073bcbb7b1597157999`. Both `ubuntu-latest` and `windows-latest` passed formatting, tests, workspace build, and Clippy. The Ubuntu dependency-policy job passed cargo-deny advisory, ban, license, and source checks. The run reported a non-failing `actions/checkout@v4` Node.js 20 deprecation warning; it did not affect job results.
 
 ## Research and design findings
 
@@ -39,15 +40,10 @@ The Safetensors file structure, dtype bit sizes, offset rules, and upstream-pars
 
 ## Known limits and blockers
 
-- No Safetensors payload reader, tensor-value analysis, model architecture/configuration reader, GGUF support, quantizer, transformation pipeline, inference runtime, or GUI is implemented.
-- The prior-art review remains incomplete. No QML novelty, model-compression advantage, or real-model result is claimed.
-- QMF v0 is experimental and unsuitable for important artifacts.
-- No pretrained weights or private datasets are in the repository or fixtures.
-- This commit is local on `main` and awaits push and CI confirmation.
+No Safetensors payload reader, tensor-value analysis, model architecture/configuration reader, GGUF support, quantizer, transformation pipeline, inference runtime, or GUI is implemented. The prior-art review remains incomplete. No QML novelty, model-compression advantage, or real-model result is claimed. QMF v0 is experimental and unsuitable for important artifacts. No pretrained weights or private datasets are in the repository or fixtures.
 
 ## Next steps
 
-1. Push `e90cbb7` and the handoff update to `origin/main`; do not use branches or rewrite history.
-2. Verify the new GitHub Actions workflow on both `ubuntu-latest` and `windows-latest`, plus the Ubuntu dependency-policy job. Record actual run IDs and results here.
-3. Keep the next milestone scoped to a separately bounded Safetensors payload reader for legally appropriate/generated small fixtures, or other user-approved research work. Preserve read-only-by-default behavior, add resource-budget tests, and do not commit model weights.
-4. Continue the remaining source-backed prior-art review and keep the novelty ledger explicit about unresolved overlap.
+1. Continue on `main`; verify the working tree and current SHA before editing.
+2. Keep the next milestone scoped to a separately bounded Safetensors payload reader for legally appropriate/generated small fixtures, or other user-approved research work. Preserve read-only-by-default behavior, add resource-budget tests, and do not commit model weights.
+3. Continue the remaining source-backed prior-art review and keep the novelty ledger explicit about unresolved overlap.

@@ -41,11 +41,11 @@ All of the following passed locally on Windows 11 with Rust 1.100.0 (`cargo +1.1
 
 ## Known limits and blockers
 
-All current benchmarks were executed on deterministic synthetic fixtures (no pretrained LLM checkpoint has yet been evaluated end-to-end). GPU backends (WGPU/CUDA), SIMD-vectorized/multithreaded kernels, real BPE tokenizers, Q-Behavior, and the native desktop GUI (`qml-desktop`) remain to be built. QMF v0/v1 are experimental and not compatibility-stable. No project license has been selected.
+- QMF v0/v1 are experimental research formats and are not yet compatibility-stable across major milestones.
+- WGPU compute kernels (`FP32`, `INT8_SYM`, `Q4_0`) are validated standalone in `qml-hardware` but are not yet wired as persistent GPU-resident model weights inside `QCoreModel` (planned for `v0.2.0-alpha.1 — PROJECT ACCELERATION`).
+- `qml-behavior` (intermediate activation capture, RSA, reversible layer interventions) and scalable whole-model `qml-genesis` with direct Genome-to-QMF export remain to be built (planned for `v0.2.0-alpha.2`).
 
 ## Next steps
 
-1. Continue on `main`; verify `git status` and CI results on GitHub Actions (`Rust CI` + `dependency-policy`).
-2. Validate Q-Scope, RMQ, MAP, Q-Forge, and Q-Core on a small openly licensed pretrained Transformer downloaded locally (outside Git, e.g., SmolLM-135M or GPT-2 small): measure real cross-layer Grassmannian subspace affinity, actual RMQ vs Q4_0/AWQ tradeoffs, and WikiText perplexity.
-3. Add real BPE/SentencePiece tokenizer support and memory-mapped QMF v1 streaming for multi-GB models, plus `rayon`/SIMD CPU acceleration and WGPU/CUDA GPU kernel prototypes targeting the RTX 4070 Laptop 8 GB VRAM budget.
-4. Implement `qml-behavior` and the native Rust desktop laboratory (`qml-desktop`) once real pretrained model pipelines are validated.
+1. **PROJECT ACCELERATION (`v0.2.0-alpha.1`):** Implement persistent GPU-resident compressed operators (`FP32`, `INT8_SYM`, `Q4_0`, RMQ Shared-Basis/Core) with reusable GPU buffers in `qml-hardware`, integrate `QCoreBackend::GpuHybrid` into `qml-runtime`, `qml generate`, and `qml-desktop`, and validate on a larger openly licensed pretrained model (`SmolLM2-360M-Instruct`, stored locally outside Git).
+2. **PROJECT GENESIS & Q-BEHAVIOR (`v0.2.0-alpha.2`):** Build `qml-behavior` (layer activation capture, cosine/L2 divergence, RSA, reversible interventions) and upgrade `qml-genesis` for role-stratified whole-model search + direct Genome-to-QMF export.

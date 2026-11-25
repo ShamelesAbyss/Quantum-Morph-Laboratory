@@ -8,8 +8,8 @@ pub mod v1;
 
 pub use v1::{
     BlobRef, DEFAULT_QMF_V1_MAX_FILE_BYTES, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES,
-    QMF_V1_MAX_MANIFEST_BYTES, QMF_V1_VERSION, QmfArchiveV1, QmfBudget, QmfLatentCache,
-    QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry, QmfV1Builder,
+    QMF_V1_MAX_MANIFEST_BYTES, QMF_V1_VERSION, QmfArchiveV1, QmfBudget, QmfFileReader,
+    QmfLatentCache, QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry, QmfV1Builder,
     SharedLatentEncoding, SharedLatentEntry, SparseResidualDesc, inspect_qmf_v1_header,
     peek_qmf_version,
 };
@@ -40,6 +40,7 @@ pub enum QmfError {
     ChecksumMismatch,
     Matrix(MatrixError),
     InvalidManifest(String),
+    SourceOutputAlias(String),
 }
 
 impl Display for QmfError {
@@ -63,6 +64,9 @@ impl Display for QmfError {
             Self::ChecksumMismatch => write!(f, "QMF CRC-32 checksum mismatch"),
             Self::Matrix(error) => write!(f, "invalid QMF matrix factors: {error}"),
             Self::InvalidManifest(msg) => write!(f, "invalid QMF v1 manifest: {msg}"),
+            Self::SourceOutputAlias(msg) => {
+                write!(f, "refusing to overwrite source model file: {msg}")
+            }
         }
     }
 }

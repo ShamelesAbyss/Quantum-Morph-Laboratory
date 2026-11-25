@@ -9,7 +9,7 @@
 //! detect accidental corruption only and do not provide cryptographic authentication.
 
 use crate::{Crc32, QMF_CHECKSUM_BYTES, QMF_MAGIC, QmfError, crc32};
-use qml_core::{DenseMatrix, MatrixError};
+use qml_core::{DenseMatrix, MatrixError, Sha256};
 use qml_quant::baselines::{QuantizedFactor, SparseResidual};
 use qml_quant::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
@@ -927,6 +927,111 @@ impl QmfArchiveV1 {
         Ok(total)
     }
 
+    /// Atomically publish a QMF v1 file via a sibling temporary file, computing CRC-32
+    /// and FIPS 180-4 SHA-256 in a single streaming pass without duplicating the payload
+    /// in RAM, and refusing to overwrite `source_path` if it aliases `output_path`.
+    pub fn write_to_file_atomic(
+        &self,
+        output_path: &std::path::Path,
+        source_path: Option<&std::path::Path>,
+        budget: &QmfBudget,
+    ) -> Result<(usize, String), QmfError> {
+        // 1. Protect source model files from accidental overwrite / path aliasing.
+        if let Some(src) = source_path
+            && paths_alias(src, output_path)
+        {
+            return Err(QmfError::SourceOutputAlias(format!(
+                "output path {} aliases immutable source {}",
+                output_path.display(),
+                src.display()
+            )));
+        }
+
+        self.validate_internal()?;
+        let manifest_bytes = serde_json::to_vec(&self.manifest)
+            .map_err(|e| QmfError::InvalidManifest(e.to_string()))?;
+        if manifest_bytes.len() > budget.max_manifest_bytes {
+            return Err(QmfError::PayloadTooLarge);
+        }
+        let total_u64 = (QMF_V1_HEADER_BYTES as u64)
+            .checked_add(manifest_bytes.len() as u64)
+            .and_then(|v| v.checked_add(self.payload.len() as u64))
+            .and_then(|v| v.checked_add(QMF_CHECKSUM_BYTES as u64))
+            .ok_or(QmfError::PayloadTooLarge)?;
+        if total_u64 > budget.max_file_bytes {
+            return Err(QmfError::PayloadTooLarge);
+        }
+        let total = usize::try_from(total_u64).map_err(|_| QmfError::PayloadTooLarge)?;
+
+        if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let tmp_name = format!(
+            "{}.qml-tmp-{}",
+            output_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("artifact"),
+            std::process::id()
+        );
+        let tmp_path = output_path.with_file_name(tmp_name);
+
+        let write_result = (|| -> Result<String, QmfError> {
+            let file = std::fs::File::create(&tmp_path)?;
+            let mut writer = std::io::BufWriter::new(file);
+
+            let mut header = [0_u8; QMF_V1_HEADER_BYTES];
+            header[0..4].copy_from_slice(&QMF_MAGIC);
+            header[4..6].copy_from_slice(&QMF_V1_VERSION.to_le_bytes());
+            header[6..8].copy_from_slice(&QMF_V1_FLAG_LITTLE_ENDIAN.to_le_bytes());
+            header[8..16].copy_from_slice(&(manifest_bytes.len() as u64).to_le_bytes());
+            header[16..24].copy_from_slice(&(self.payload.len() as u64).to_le_bytes());
+            header[24..32].copy_from_slice(&0_u64.to_le_bytes());
+
+            let mut checksum = Crc32::new();
+            let mut sha = Sha256::new();
+
+            writer.write_all(&header)?;
+            checksum.update(&header);
+            sha.update(&header);
+
+            writer.write_all(&manifest_bytes)?;
+            checksum.update(&manifest_bytes);
+            sha.update(&manifest_bytes);
+
+            writer.write_all(&self.payload)?;
+            checksum.update(&self.payload);
+            sha.update(&self.payload);
+
+            let crc_bytes = checksum.finish().to_le_bytes();
+            writer.write_all(&crc_bytes)?;
+            sha.update(&crc_bytes);
+
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            Ok(sha.finalize_hex())
+        })();
+
+        match write_result {
+            Ok(sha_hex) => {
+                // On Windows, `rename` may fail if destination already exists; remove after temp is fully synced.
+                if output_path.exists() {
+                    let _ = std::fs::remove_file(output_path);
+                }
+                if let Err(err) = std::fs::rename(&tmp_path, output_path) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(QmfError::Io(err));
+                }
+                Ok((total, sha_hex))
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                Err(err)
+            }
+        }
+    }
+
     /// Bounded read and full integrity verification of a QMF v1 stream using [`QmfBudget::default`].
     pub fn read_from<R: Read>(reader: R) -> Result<Self, QmfError> {
         Self::read_from_with_budget(reader, &QmfBudget::default())
@@ -1376,6 +1481,380 @@ impl QmfArchiveV1 {
     }
 }
 
+fn paths_alias(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    if let (Ok(ca), Ok(cb)) = (std::fs::canonicalize(a), std::fs::canonicalize(b))
+        && ca == cb
+    {
+        return true;
+    }
+    // Check parent canonicalization + case-insensitive filename on Windows when `b` does not exist yet.
+    if let (Some(fa), Some(fb)) = (a.file_name(), b.file_name()) {
+        let same_name = if cfg!(windows) {
+            fa.to_string_lossy()
+                .eq_ignore_ascii_case(&fb.to_string_lossy())
+        } else {
+            fa == fb
+        };
+        if same_name
+            && let (Some(pa), Some(pb)) = (a.parent(), b.parent())
+            && let (Ok(cpa), Ok(cpb)) = (std::fs::canonicalize(pa), std::fs::canonicalize(pb))
+            && cpa == cpb
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// File-backed, out-of-core QMF v1 reader that holds only the JSON manifest in memory
+/// and lazily seeks/decodes individual tensors on demand without loading the full payload.
+pub struct QmfFileReader<R: Read + Seek> {
+    reader: R,
+    manifest: QmfManifest,
+    manifest_bytes: u64,
+    payload_bytes: u64,
+    payload_base_offset: u64,
+    file_bytes: u64,
+}
+
+impl<R: Read + Seek> QmfFileReader<R> {
+    /// Open a seekable QMF v1 stream using only header + manifest memory.
+    pub fn open(mut reader: R, budget: &QmfBudget) -> Result<Self, QmfError> {
+        let (manifest, file_bytes, payload_bytes) = inspect_qmf_v1_header(&mut reader, budget)?;
+        let payload_base_offset = file_bytes
+            .checked_sub(QMF_CHECKSUM_BYTES as u64)
+            .and_then(|v| v.checked_sub(payload_bytes))
+            .ok_or(QmfError::PayloadTooLarge)?;
+        let manifest_bytes = payload_base_offset
+            .checked_sub(QMF_V1_HEADER_BYTES as u64)
+            .ok_or(QmfError::PayloadTooLarge)?;
+        Ok(Self {
+            reader,
+            manifest,
+            manifest_bytes,
+            payload_bytes,
+            payload_base_offset,
+            file_bytes,
+        })
+    }
+
+    pub fn manifest(&self) -> &QmfManifest {
+        &self.manifest
+    }
+
+    pub fn manifest_bytes(&self) -> u64 {
+        self.manifest_bytes
+    }
+
+    pub fn payload_bytes(&self) -> u64 {
+        self.payload_bytes
+    }
+
+    /// Stream the entire file in 64 KiB chunks to verify the trailing whole-file CRC-32
+    /// and return its exact FIPS 180-4 SHA-256 hex digest in O(1) RAM.
+    pub fn verify_integrity_streaming(&mut self) -> Result<String, QmfError> {
+        self.reader.seek(SeekFrom::Start(0))?;
+        let data_len = self
+            .file_bytes
+            .checked_sub(QMF_CHECKSUM_BYTES as u64)
+            .ok_or(QmfError::ChecksumMismatch)?;
+        let mut crc = Crc32::new();
+        let mut sha = Sha256::new();
+        let mut buf = [0_u8; 64 * 1024];
+        let mut remaining = data_len;
+        while remaining > 0 {
+            let to_read = (remaining as usize).min(buf.len());
+            self.reader.read_exact(&mut buf[..to_read])?;
+            crc.update(&buf[..to_read]);
+            sha.update(&buf[..to_read]);
+            remaining -= to_read as u64;
+        }
+        let mut trailer = [0_u8; QMF_CHECKSUM_BYTES];
+        self.reader.read_exact(&mut trailer)?;
+        sha.update(&trailer);
+        let expected_crc = u32::from_le_bytes(trailer);
+        if crc.finish() != expected_crc {
+            return Err(QmfError::ChecksumMismatch);
+        }
+        Ok(sha.finalize_hex())
+    }
+
+    fn read_blob(&mut self, blob: BlobRef) -> Result<Vec<u8>, QmfError> {
+        let end = blob
+            .offset
+            .checked_add(blob.len)
+            .ok_or(QmfError::PayloadTooLarge)?;
+        if end > self.payload_bytes {
+            return Err(QmfError::InvalidManifest(
+                "blob range exceeds QMF payload bounds".to_owned(),
+            ));
+        }
+        let len = usize::try_from(blob.len).map_err(|_| QmfError::PayloadTooLarge)?;
+        let abs_offset = self
+            .payload_base_offset
+            .checked_add(blob.offset)
+            .ok_or(QmfError::PayloadTooLarge)?;
+        self.reader.seek(SeekFrom::Start(abs_offset))?;
+        let mut buf = vec![0_u8; len];
+        self.reader.read_exact(&mut buf)?;
+        if crc32(&buf) != blob.crc32 {
+            return Err(QmfError::ChecksumMismatch);
+        }
+        Ok(buf)
+    }
+
+    fn decode_factor(
+        &mut self,
+        rows: usize,
+        cols: usize,
+        enc: &SharedLatentEncoding,
+    ) -> Result<QuantizedFactor, QmfError> {
+        match enc {
+            SharedLatentEncoding::Fp32 { data } => {
+                let raw = self.read_blob(*data)?;
+                let vals = decode_f32_vec(&raw)?;
+                Ok(QuantizedFactor::Fp32(DenseMatrix::from_flat(
+                    rows, cols, vals,
+                )?))
+            }
+            SharedLatentEncoding::Fp16 { data } => {
+                let raw = self.read_blob(*data)?;
+                let bits = decode_u16_vec(&raw)?;
+                Ok(QuantizedFactor::Fp16(Fp16Matrix::from_raw(
+                    rows, cols, bits,
+                )?))
+            }
+            SharedLatentEncoding::Int8Sym {
+                group_size,
+                scales,
+                codes,
+            } => {
+                let scales_vec = decode_u16_vec(&self.read_blob(*scales)?)?;
+                let codes_vec: Vec<i8> = self
+                    .read_blob(*codes)?
+                    .into_iter()
+                    .map(|b| b as i8)
+                    .collect();
+                Ok(QuantizedFactor::Int8Sym(Int8SymMatrix::from_parts(
+                    rows,
+                    cols,
+                    *group_size,
+                    scales_vec,
+                    codes_vec,
+                )?))
+            }
+        }
+    }
+
+    /// Lazily load a 1D vector tensor directly from disk without buffering other tensors.
+    pub fn load_vector_f64(&mut self, name: &str) -> Result<Vec<f64>, QmfError> {
+        let entry = self
+            .manifest
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .cloned()
+            .ok_or_else(|| QmfError::InvalidManifest(format!("tensor {name:?} not found")))?;
+        match &entry.representation {
+            QmfRepresentation::DenseF32 { data } => decode_f32_vec(&self.read_blob(*data)?),
+            QmfRepresentation::DenseF16 { data } => Ok(decode_u16_vec(&self.read_blob(*data)?)?
+                .into_iter()
+                .map(|b| f64::from(qml_model::f16_to_f32(b)))
+                .collect()),
+            QmfRepresentation::DenseBf16 { data } => Ok(decode_u16_vec(&self.read_blob(*data)?)?
+                .into_iter()
+                .map(|b| f64::from(qml_model::bf16_to_f32(b)))
+                .collect()),
+            _ => Err(QmfError::InvalidManifest(format!(
+                "tensor {name:?} is not a dense vector representation"
+            ))),
+        }
+    }
+
+    /// Lazily load a single 2D tensor as an executable [`QmfOperator`] directly from the file,
+    /// deduplicating shared latents via [`QmfLatentCache`].
+    pub fn load_operator_cached(
+        &mut self,
+        name: &str,
+        latent_cache: &mut QmfLatentCache,
+    ) -> Result<QmfOperator, QmfError> {
+        let entry = self
+            .manifest
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .cloned()
+            .ok_or_else(|| QmfError::InvalidManifest(format!("tensor {name:?} not found")))?;
+        if entry.shape.len() != 2 {
+            return Err(QmfError::InvalidDimensions);
+        }
+        let rows = entry.shape[0];
+        let cols = entry.shape[1];
+
+        match &entry.representation {
+            QmfRepresentation::DenseF32 { data } => {
+                let vals = decode_f32_vec(&self.read_blob(*data)?)?;
+                Ok(QmfOperator::DenseF32(DenseMatrix::from_flat(
+                    rows, cols, vals,
+                )?))
+            }
+            QmfRepresentation::DenseF16 { data } => {
+                let bits = decode_u16_vec(&self.read_blob(*data)?)?;
+                Ok(QmfOperator::DenseF16(Fp16Matrix::from_raw(
+                    rows, cols, bits,
+                )?))
+            }
+            QmfRepresentation::DenseBf16 { data } => {
+                let bits = decode_u16_vec(&self.read_blob(*data)?)?;
+                Ok(QmfOperator::DenseBf16(Bf16Matrix::from_raw(
+                    rows, cols, bits,
+                )?))
+            }
+            QmfRepresentation::Int8SymGroup {
+                group_size,
+                scales,
+                codes,
+            } => {
+                let scales_vec = decode_u16_vec(&self.read_blob(*scales)?)?;
+                let codes_vec: Vec<i8> = self
+                    .read_blob(*codes)?
+                    .into_iter()
+                    .map(|b| b as i8)
+                    .collect();
+                Ok(QmfOperator::Int8Sym(Int8SymMatrix::from_parts(
+                    rows,
+                    cols,
+                    *group_size,
+                    scales_vec,
+                    codes_vec,
+                )?))
+            }
+            QmfRepresentation::Int4SymGroup {
+                group_size,
+                scales,
+                nibbles,
+            } => {
+                let scales_vec = decode_u16_vec(&self.read_blob(*scales)?)?;
+                let nibbles_vec = self.read_blob(*nibbles)?;
+                Ok(QmfOperator::Int4Sym(Int4SymGroupMatrix::from_parts(
+                    rows,
+                    cols,
+                    *group_size,
+                    scales_vec,
+                    nibbles_vec,
+                )?))
+            }
+            QmfRepresentation::Int4AsymGroup {
+                group_size,
+                scales,
+                mins,
+                nibbles,
+            } => {
+                let scales_vec = decode_u16_vec(&self.read_blob(*scales)?)?;
+                let mins_vec = decode_u16_vec(&self.read_blob(*mins)?)?;
+                let nibbles_vec = self.read_blob(*nibbles)?;
+                Ok(QmfOperator::Int4Asym(Int4AsymGroupMatrix::from_parts(
+                    rows,
+                    cols,
+                    *group_size,
+                    scales_vec,
+                    mins_vec,
+                    nibbles_vec,
+                )?))
+            }
+            QmfRepresentation::LowRankSvd { rank, left, right } => {
+                let l = self.decode_factor(rows, *rank, left)?;
+                let r = self.decode_factor(*rank, cols, right)?;
+                Ok(QmfOperator::LowRankSvd(LowRankSvdMatrix::from_factors(
+                    l, r,
+                )?))
+            }
+            QmfRepresentation::RmqSharedBasis {
+                u_latent_id,
+                vt_latent_id,
+                left_rank,
+                right_rank,
+                core,
+                sparse_residual,
+            } => {
+                let u_shared = self.load_or_cache_latent(u_latent_id, latent_cache)?;
+                let vt_shared = self.load_or_cache_latent(vt_latent_id, latent_cache)?;
+                let core_factor = self.decode_factor(*left_rank, *right_rank, core)?;
+                let sparse = match sparse_residual {
+                    Some(desc) => {
+                        let idx = decode_u32_vec(&self.read_blob(desc.indices)?)?;
+                        let vals = decode_u16_vec(&self.read_blob(desc.values_f16)?)?;
+                        Some(SparseResidual::from_parts(rows, cols, idx, vals)?)
+                    }
+                    None => None,
+                };
+                Ok(QmfOperator::RmqSharedBasis {
+                    rows,
+                    cols,
+                    u_shared,
+                    core: core_factor,
+                    vt_shared,
+                    sparse_residual: sparse,
+                })
+            }
+            QmfRepresentation::RmqSharedCore {
+                s_latent_id,
+                rank,
+                left,
+                right,
+                sparse_residual,
+            } => {
+                let shared_core = self.load_or_cache_latent(s_latent_id, latent_cache)?;
+                let left_factor = self.decode_factor(rows, *rank, left)?;
+                let right_factor = self.decode_factor(*rank, cols, right)?;
+                let sparse = match sparse_residual {
+                    Some(desc) => {
+                        let idx = decode_u32_vec(&self.read_blob(desc.indices)?)?;
+                        let vals = decode_u16_vec(&self.read_blob(desc.values_f16)?)?;
+                        Some(SparseResidual::from_parts(rows, cols, idx, vals)?)
+                    }
+                    None => None,
+                };
+                Ok(QmfOperator::RmqSharedCore {
+                    rows,
+                    cols,
+                    left: left_factor,
+                    shared_core,
+                    right: right_factor,
+                    sparse_residual: sparse,
+                })
+            }
+        }
+    }
+
+    fn load_or_cache_latent(
+        &mut self,
+        id: &str,
+        latent_cache: &mut QmfLatentCache,
+    ) -> Result<Arc<QuantizedFactor>, QmfError> {
+        if let Some(existing) = latent_cache.get(id) {
+            return Ok(Arc::clone(existing));
+        }
+        let latent_entry = self
+            .manifest
+            .shared_latents
+            .iter()
+            .find(|l| l.id == id)
+            .cloned()
+            .ok_or_else(|| QmfError::InvalidManifest(format!("missing latent {id:?}")))?;
+        let decoded = Arc::new(self.decode_factor(
+            latent_entry.rows,
+            latent_entry.cols,
+            &latent_entry.encoding,
+        )?);
+        latent_cache.insert(id.to_owned(), Arc::clone(&decoded));
+        Ok(decoded)
+    }
+}
+
 /// Streaming, bounded header-only inspector for multi-GB QMF v1 files.
 pub fn inspect_qmf_v1_header<R: Read + Seek>(
     mut reader: R,
@@ -1689,5 +2168,79 @@ mod tests {
         for (a, b) in expected.iter().zip(actual) {
             assert!((a - b).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn file_backed_qmf_reader_streams_and_verifies_without_full_payload_buffer() {
+        let m = DenseMatrix::from_flat(8, 8, (0..64).map(|i| (i as f64 * 0.17).sin()).collect())
+            .unwrap();
+        let q = Int8SymMatrix::quantize(&m, 4).unwrap();
+        let mut builder =
+            QmfV1Builder::new("streaming-test", "MIT", "synthetic", "test", "int8", 7);
+        builder.add_int8_sym("layer.0.w", &q).unwrap();
+        builder
+            .add_dense_f32("norm.w", vec![4], &[1.0, 2.0, 3.0, 4.0])
+            .unwrap();
+        let archive = builder.build().unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "qml_format_atomic_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out_path = dir.join("model.qmf");
+        let src_path = dir.join("source.safetensors");
+        std::fs::write(&src_path, b"dummy").unwrap();
+
+        // Source-output alias must be rejected.
+        let alias_err = archive
+            .write_to_file_atomic(&src_path, Some(&src_path), &QmfBudget::default())
+            .unwrap_err();
+        assert!(matches!(alias_err, QmfError::SourceOutputAlias(_)));
+
+        // Atomic publish succeeds and returns exact SHA-256.
+        let (published_bytes, published_sha) = archive
+            .write_to_file_atomic(&out_path, Some(&src_path), &QmfBudget::default())
+            .unwrap();
+        assert!(published_bytes > 0);
+
+        // File-backed reader loads operators and verifies CRC-32 + SHA-256 in streaming mode.
+        let f = std::fs::File::open(&out_path).unwrap();
+        let mut reader = QmfFileReader::open(f, &QmfBudget::default()).unwrap();
+        let verified_sha = reader.verify_integrity_streaming().unwrap();
+        assert_eq!(verified_sha, published_sha);
+
+        let norm = reader.load_vector_f64("norm.w").unwrap();
+        assert_eq!(norm, vec![1.0, 2.0, 3.0, 4.0]);
+
+        let mut cache = QmfLatentCache::new();
+        let op = reader
+            .load_operator_cached("layer.0.w", &mut cache)
+            .unwrap();
+        let x: Vec<f64> = (0..8).map(|i| i as f64 * 0.25).collect();
+        let y_expected = q.matvec(&x).unwrap();
+        let y_actual = op.matvec(&x).unwrap();
+        for (a, b) in y_expected.iter().zip(y_actual) {
+            assert!((a - b).abs() < 1e-12);
+        }
+
+        // Flip a byte inside the binary payload (before the 4-byte CRC trailer)
+        // and confirm streaming integrity check catches silent payload corruption.
+        let mut bytes = std::fs::read(&out_path).unwrap();
+        let corrupt_idx = bytes.len() - 8;
+        bytes[corrupt_idx] ^= 0xFF;
+        std::fs::write(&out_path, &bytes).unwrap();
+        let f_bad = std::fs::File::open(&out_path).unwrap();
+        let mut bad_reader = QmfFileReader::open(f_bad, &QmfBudget::default()).unwrap();
+        assert!(matches!(
+            bad_reader.verify_integrity_streaming(),
+            Err(QmfError::ChecksumMismatch)
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

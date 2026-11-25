@@ -11,14 +11,16 @@ use qml_model::{PayloadBudget, PayloadError, SafetensorsFile};
 use qml_quant::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
     Int8SymMatrix, LinearOperator, LowRankSvdMatrix, MapConfig, RmqResidualKind,
-    RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, allocate_adaptive_precision,
-    deterministic_probe_vectors, evaluate_operator,
+    RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, allocate_from_profiles,
+    deterministic_probe_vectors, evaluate_operator, profile_layer_for_map,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Seek};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// Supported model-level transformation strategies in Q-Forge.
@@ -203,6 +205,7 @@ pub enum ForgeError {
     Payload(PayloadError),
     Qmf(QmfError),
     Matrix(qml_core::MatrixError),
+    Cancelled,
     Message(String),
 }
 
@@ -212,7 +215,42 @@ impl fmt::Display for ForgeError {
             Self::Payload(e) => write!(f, "model payload error: {e}"),
             Self::Qmf(e) => write!(f, "QMF error: {e}"),
             Self::Matrix(e) => write!(f, "matrix error: {e}"),
+            Self::Cancelled => write!(f, "transformation cancelled by user"),
             Self::Message(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+/// Progress callback invoked by Q-Forge as `(completed_tensors, total_tensors, stage_label)`.
+pub type ForgeProgressCallback = Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
+
+/// Cooperative cancellation and progress reporting handle for [`forge_safetensors_to_qmf_with_control`].
+pub struct ForgeControl {
+    pub cancel: Arc<AtomicBool>,
+    pub on_progress: Option<ForgeProgressCallback>,
+}
+
+impl Default for ForgeControl {
+    fn default() -> Self {
+        Self {
+            cancel: Arc::new(AtomicBool::new(false)),
+            on_progress: None,
+        }
+    }
+}
+
+impl ForgeControl {
+    fn check_cancelled(&self) -> Result<(), ForgeError> {
+        if self.cancel.load(Ordering::Relaxed) {
+            Err(ForgeError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn report(&self, done: usize, total: usize, stage: &str) {
+        if let Some(cb) = &self.on_progress {
+            cb(done, total, stage);
         }
     }
 }
@@ -237,8 +275,8 @@ impl From<qml_core::MatrixError> for ForgeError {
 /// Transform a read-only Safetensors stream into a validated QMF v1 archive and report.
 ///
 /// Single-tensor strategies (`Fp16`, `Bf16`, `Int8Sym`, `Int4Sym`, `Int4Asym`, `LowRankSvd`)
-/// execute strictly **tensor-by-tensor** (holding only one decoded matrix in memory at a time).
-/// RMQ strategies execute **cluster-by-cluster** (holding only one role cluster at a time).
+/// and two-pass streaming `MapAdaptive` execute strictly **tensor-by-tensor** (holding only one
+/// decoded matrix in memory at a time). RMQ strategies execute **cluster-by-cluster**.
 pub fn forge_safetensors_to_qmf<R: Read + Seek>(
     reader: R,
     model_id: &str,
@@ -248,10 +286,38 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
     budget: &PayloadBudget,
     seed: u64,
 ) -> Result<(QmfArchiveV1, ForgeReport), ForgeError> {
+    forge_safetensors_to_qmf_with_control(
+        reader,
+        model_id,
+        source_license,
+        architecture,
+        strategy,
+        budget,
+        seed,
+        &ForgeControl::default(),
+    )
+}
+
+/// Transform a read-only Safetensors stream into a validated QMF v1 archive with
+/// cooperative cancellation and per-tensor progress reporting.
+#[allow(clippy::too_many_arguments)]
+pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
+    reader: R,
+    model_id: &str,
+    source_license: &str,
+    architecture: &str,
+    strategy: &TransformStrategy,
+    budget: &PayloadBudget,
+    seed: u64,
+    control: &ForgeControl,
+) -> Result<(QmfArchiveV1, ForgeReport), ForgeError> {
+    control.check_cancelled()?;
     let start = Instant::now();
     let mut file = SafetensorsFile::open(reader, budget)?;
     let meta = file.metadata().clone();
     let descriptor = strategy.descriptor();
+    let total_tensors = meta.tensors.len().max(1);
+    let mut processed_tensors = 0usize;
 
     let mut builder = QmfV1Builder::new(
         model_id,
@@ -286,6 +352,7 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
 
     // 1. Stream 1D/non-2D vectors one by one and drop immediately after encoding.
     for info in &vector_infos {
+        control.check_cancelled()?;
         let vals = file.read_tensor_f64(&info.name, budget)?;
         let shape_usize: Vec<usize> = info.shape.iter().map(|&d| d as usize).collect();
         let f32_vals: Vec<f32> = vals.into_iter().map(|v| v as f32).collect();
@@ -297,6 +364,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
             relative_frobenius_error: Some(0.0),
             mean_matvec_rel_error: None,
         });
+        processed_tensors += 1;
+        control.report(processed_tensors, total_tensors, &info.name);
     }
 
     // 2. Transform 2D matrices with memory-bounded streaming per strategy.
@@ -308,6 +377,7 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
         | TransformStrategy::Int4Asym { .. }
         | TransformStrategy::LowRankSvd { .. } => {
             for (idx, info) in matrix_infos.iter().enumerate() {
+                control.check_cancelled()?;
                 let mat = file.read_tensor_matrix(&info.name, budget)?;
                 let probes = deterministic_probe_vectors(mat.cols(), 4, seed);
                 let (rep_name, rel_frob, mv_err) = match strategy {
@@ -409,6 +479,12 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                     .push(info.name.clone());
             }
             for ((role, rows, cols), names) in groups {
+                control.check_cancelled()?;
+                control.report(
+                    processed_tensors,
+                    total_tensors,
+                    &format!("RMQ gated cluster: {} ({}x{})", role.as_str(), rows, cols),
+                );
                 let cluster_mats: Vec<DenseMatrix> = names
                     .iter()
                     .map(|n| file.read_tensor_matrix(n, budget))
@@ -486,6 +562,12 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                     .push(info.name.clone());
             }
             for ((role, rows, cols), names) in groups {
+                control.check_cancelled()?;
+                control.report(
+                    processed_tensors,
+                    total_tensors,
+                    &format!("RMQ gated cluster: {} ({}x{})", role.as_str(), rows, cols),
+                );
                 let cluster_mats: Vec<DenseMatrix> = names
                     .iter()
                     .map(|n| file.read_tensor_matrix(n, budget))
@@ -548,30 +630,36 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
             include_svd_rank,
         } => {
             if !matrix_infos.is_empty() {
-                let mut matrices: Vec<(String, DenseMatrix)> =
-                    Vec::with_capacity(matrix_infos.len());
-                for info in &matrix_infos {
-                    matrices.push((
-                        info.name.clone(),
-                        file.read_tensor_matrix(&info.name, budget)?,
-                    ));
-                }
-                let pairs: Vec<(&str, &DenseMatrix)> =
-                    matrices.iter().map(|(n, m)| (n.as_str(), m)).collect();
                 let map_cfg = MapConfig {
                     target_avg_bpp: *target_avg_bpp,
                     propagation_weight: *propagation_weight,
                     include_svd_rank: *include_svd_rank,
                     seed,
                 };
-                let plan = allocate_adaptive_precision(&pairs, &map_cfg)?;
+                // Pass 1 (streaming): profile one matrix at a time and drop dense weights immediately.
+                let mut profiles = Vec::with_capacity(matrix_infos.len());
+                for (idx, info) in matrix_infos.iter().enumerate() {
+                    control.check_cancelled()?;
+                    control.report(
+                        processed_tensors,
+                        total_tensors,
+                        &format!("MAP pass 1/2: {}", info.name),
+                    );
+                    let mat = file.read_tensor_matrix(&info.name, budget)?;
+                    profiles.push(profile_layer_for_map(&info.name, idx, &mat, &map_cfg)?);
+                }
+                let plan = allocate_from_profiles(&profiles, &map_cfg)?;
+
+                // Pass 2 (streaming): re-read one matrix at a time and encode ONLY its chosen tier.
                 for (idx, alloc) in plan.allocations.iter().enumerate() {
-                    let (name, mat) = &matrices[idx];
+                    control.check_cancelled()?;
+                    let name = &matrix_infos[idx].name;
+                    let mat = file.read_tensor_matrix(name, budget)?;
                     let probes = deterministic_probe_vectors(mat.cols(), 4, seed);
                     let (rep_name, rel_frob, mv_err) = match alloc.selected.method.as_str() {
                         "FP16" => {
-                            let op = Fp16Matrix::quantize(mat);
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Fp16Matrix::quantize(&mat);
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_fp16(name.clone(), &op)?;
                             (
                                 "QMF_FP16",
@@ -580,8 +668,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             )
                         }
                         "BF16" => {
-                            let op = Bf16Matrix::quantize(mat);
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Bf16Matrix::quantize(&mat);
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_bf16(name.clone(), &op)?;
                             (
                                 "QMF_BF16",
@@ -590,8 +678,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             )
                         }
                         "INT8_SYM" => {
-                            let op = Int8SymMatrix::quantize(mat, 64)?;
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Int8SymMatrix::quantize(&mat, 64)?;
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_int8_sym(name.clone(), &op)?;
                             (
                                 "QMF_INT8_SYM",
@@ -600,8 +688,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             )
                         }
                         "INT4_ASYM_G32(Q4_1)" => {
-                            let op = Int4AsymGroupMatrix::quantize(mat, 32)?;
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Int4AsymGroupMatrix::quantize(&mat, 32)?;
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_int4_asym(name.clone(), &op)?;
                             (
                                 "QMF_INT4_ASYM",
@@ -610,8 +698,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             )
                         }
                         "INT4_SYM_G128" => {
-                            let op = Int4SymGroupMatrix::quantize(mat, 128)?;
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Int4SymGroupMatrix::quantize(&mat, 128)?;
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_int4_sym(name.clone(), &op)?;
                             (
                                 "QMF_INT4_SYM",
@@ -625,12 +713,12 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                                 .max(1)
                                 .min(mat.rows().min(mat.cols()));
                             let op = LowRankSvdMatrix::from_matrix(
-                                mat,
+                                &mat,
                                 r,
                                 FactorPrecision::Int8Sym,
                                 seed + idx as u64,
                             )?;
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_low_rank_svd(name.clone(), &op)?;
                             (
                                 "QMF_SVD",
@@ -639,8 +727,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                             )
                         }
                         _ => {
-                            let op = Int4SymGroupMatrix::quantize(mat, 32)?;
-                            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+                            let op = Int4SymGroupMatrix::quantize(&mat, 32)?;
+                            let ev = evaluate_operator(&mat, &op, &probes, 0)?;
                             builder.add_int4_sym(name.clone(), &op)?;
                             (
                                 "QMF_INT4_SYM",
@@ -652,6 +740,8 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
                     sum_frob += rel_frob;
                     sum_mv += mv_err;
                     mat_count += 1;
+                    processed_tensors += 1;
+                    control.report(processed_tensors, total_tensors, name);
                     tensor_summaries.push(TransformedTensorSummary {
                         name: name.clone(),
                         shape: vec![mat.rows(), mat.cols()],
@@ -681,6 +771,12 @@ pub fn forge_safetensors_to_qmf<R: Read + Seek>(
             let mut rmq_clusters_selected = 0usize;
             let mut fallback_clusters = 0usize;
             for ((role, rows, cols), names) in groups {
+                control.check_cancelled()?;
+                control.report(
+                    processed_tensors,
+                    total_tensors,
+                    &format!("RMQ gated cluster: {} ({}x{})", role.as_str(), rows, cols),
+                );
                 let cluster_mats: Vec<DenseMatrix> = names
                     .iter()
                     .map(|n| file.read_tensor_matrix(n, budget))
@@ -1053,5 +1149,27 @@ mod tests {
         .unwrap();
         assert_eq!(fallback_report.shared_latent_count, 0);
         assert!(fallback_report.mean_matvec_rel_error < 0.15);
+    }
+
+    #[test]
+    fn forge_honors_cooperative_cancellation() {
+        let model_bytes = generate_synthetic_transformer_safetensors(2, 16, 32, 2, 11).unwrap();
+        let budget = PayloadBudget::default();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let control = ForgeControl {
+            cancel,
+            on_progress: None,
+        };
+        let err = forge_safetensors_to_qmf_with_control(
+            Cursor::new(&model_bytes),
+            "cancelled-model",
+            "generated-test",
+            "mini_llama",
+            &TransformStrategy::Int4Sym { group_size: 32 },
+            &budget,
+            42,
+            &control,
+        );
+        assert!(matches!(err, Err(ForgeError::Cancelled)));
     }
 }

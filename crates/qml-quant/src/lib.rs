@@ -14,7 +14,8 @@ pub use baselines::{
     Int8AsymMatrix, Int8SymMatrix, LowRankSvdMatrix, SparseResidual,
 };
 pub use map::{
-    LayerAllocation, LayerCandidate, MapAllocationReport, MapConfig, allocate_adaptive_precision,
+    LayerAllocation, LayerCandidate, MapAllocationReport, MapConfig, MapLayerProfile,
+    allocate_adaptive_precision, allocate_from_profiles, profile_layer_for_map,
 };
 pub use rmq::{
     RmqAblationReport, RmqComparisonRow, RmqResidualKind, RmqSharedBasisCluster,

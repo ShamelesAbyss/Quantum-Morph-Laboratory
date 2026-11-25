@@ -18,8 +18,8 @@ pub use dtype::{
     f32_to_bf16, f32_to_f16,
 };
 pub use gguf::{
-    GGUF_MAGIC, GgufError, GgufMetadata, GgufTensorInfo, GgufValueSummary, ggml_type_name,
-    inspect_gguf,
+    GGUF_MAGIC, GgufError, GgufFile, GgufMetadata, GgufTensorInfo, GgufValueSummary,
+    ggml_supported_block_layout, ggml_type_name, inspect_gguf,
 };
 pub use payload::{
     DEFAULT_MAX_TENSOR_BYTES, DEFAULT_MAX_TOTAL_BYTES, DEFAULT_STREAM_CHUNK_ELEMENTS,

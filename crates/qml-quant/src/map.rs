@@ -82,132 +82,164 @@ pub struct MapAllocationReport {
     pub allocations: Vec<LayerAllocation>,
 }
 
-/// Run Morphological Adaptive Precision allocation across an ordered sequence of layers.
-pub fn allocate_adaptive_precision(
-    layers: &[(&str, &DenseMatrix)],
+/// Streaming per-layer profile computed in Pass 1 of MAP so dense matrices can be
+/// dropped immediately before global budget allocation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MapLayerProfile {
+    pub layer_name: String,
+    pub layer_index: usize,
+    pub param_count: usize,
+    pub spectral_norm: f64,
+    pub local_sensitivity: f64,
+    pub uniform_int4_bytes: usize,
+    pub uniform_int4_mv_err: f64,
+    pub uniform_int8_bytes: usize,
+    pub uniform_int8_mv_err: f64,
+    pub candidates: Vec<LayerCandidate>,
+}
+
+/// Profile a single dense matrix for MAP allocation so the caller can drop `mat`
+/// immediately afterwards (enabling constant-memory streaming MAP).
+pub fn profile_layer_for_map(
+    layer_name: &str,
+    layer_index: usize,
+    mat: &DenseMatrix,
+    config: &MapConfig,
+) -> Result<MapLayerProfile, MatrixError> {
+    let svd1 = truncated_svd(mat, 1, config.seed.wrapping_add(layer_index as u64))?;
+    let spectral_norm = svd1.singular_values[0];
+
+    let frob = mat.frobenius_norm();
+    let param_count = mat.rows() * mat.cols();
+    let rms = (frob * frob / param_count as f64).sqrt();
+    let absmax = mat
+        .as_slice()
+        .iter()
+        .map(|v| v.abs())
+        .fold(0.0_f64, f64::max);
+    let crest = if rms > 1e-15 { absmax / rms } else { 1.0 };
+    let local_sensitivity = frob.max(1e-6) * (1.0 + 0.15 * crest.ln_1p());
+
+    let probes = deterministic_probe_vectors(mat.cols(), 4, config.seed + layer_index as u64);
+    let mut candidates = Vec::new();
+
+    macro_rules! eval_cand {
+        ($op:expr) => {{
+            let op = $op;
+            let ev = evaluate_operator(mat, &op, &probes, 0)?;
+            LayerCandidate {
+                method: ev.method,
+                total_bytes: ev.total_bytes,
+                effective_bpp: ev.effective_bpp,
+                relative_error: ev.relative_frobenius_error,
+                matvec_rel_error: ev.mean_matvec_rel_error,
+            }
+        }};
+    }
+
+    if let Some(svd_r) = config.include_svd_rank {
+        let r = svd_r.max(1).min(mat.rows().min(mat.cols()));
+        candidates.push(eval_cand!(LowRankSvdMatrix::from_matrix(
+            mat,
+            r,
+            FactorPrecision::Int8Sym,
+            config.seed + layer_index as u64
+        )?));
+    }
+    let q4_g128 = eval_cand!(Int4SymGroupMatrix::quantize(mat, 128)?);
+    let q4_g32 = eval_cand!(Int4SymGroupMatrix::quantize(mat, 32)?);
+    let q4_1_g32 = eval_cand!(Int4AsymGroupMatrix::quantize(mat, 32)?);
+    let int8_g64 = eval_cand!(Int8SymMatrix::quantize(mat, 64)?);
+    let bf16 = eval_cand!(Bf16Matrix::quantize(mat));
+    let fp16 = eval_cand!(Fp16Matrix::quantize(mat));
+
+    let uniform_int4_bytes = q4_g32.total_bytes;
+    let uniform_int4_mv_err = q4_g32.matvec_rel_error;
+    let uniform_int8_bytes = int8_g64.total_bytes;
+    let uniform_int8_mv_err = int8_g64.matvec_rel_error;
+
+    candidates.extend([q4_g128, q4_g32, q4_1_g32, int8_g64, bf16, fp16]);
+    candidates.sort_by(|a, b| {
+        a.total_bytes
+            .cmp(&b.total_bytes)
+            .then(a.matvec_rel_error.total_cmp(&b.matvec_rel_error))
+    });
+
+    Ok(MapLayerProfile {
+        layer_name: layer_name.to_owned(),
+        layer_index,
+        param_count,
+        spectral_norm,
+        local_sensitivity,
+        uniform_int4_bytes,
+        uniform_int4_mv_err,
+        uniform_int8_bytes,
+        uniform_int8_mv_err,
+        candidates,
+    })
+}
+
+/// Solve global MAP allocation from precomputed streaming [`MapLayerProfile`] records
+/// without holding any dense weight matrices in memory.
+pub fn allocate_from_profiles(
+    profiles: &[MapLayerProfile],
     config: &MapConfig,
 ) -> Result<MapAllocationReport, MatrixError> {
-    if layers.is_empty() {
+    if profiles.is_empty() {
         return Err(MatrixError::Empty);
     }
-
-    let n_layers = layers.len();
-    let total_params: usize = layers.iter().map(|(_, m)| m.rows() * m.cols()).sum();
+    let n_layers = profiles.len();
+    let total_params: usize = profiles.iter().map(|p| p.param_count).sum();
     let budget_bytes = ((total_params as f64) * config.target_avg_bpp / 8.0).floor() as usize;
 
-    // 1. Estimate spectral norms and local sensitivities for every layer.
-    let mut spectral_norms = Vec::with_capacity(n_layers);
-    let mut local_sensitivities = Vec::with_capacity(n_layers);
-    for (idx, (_, mat)) in layers.iter().enumerate() {
-        let svd1 = truncated_svd(mat, 1, config.seed.wrapping_add(idx as u64))?;
-        let sigma1 = svd1.singular_values[0];
-        spectral_norms.push(sigma1);
-
-        let frob = mat.frobenius_norm();
-        let n = (mat.rows() * mat.cols()) as f64;
-        let rms = (frob * frob / n).sqrt();
-        let absmax = mat
-            .as_slice()
-            .iter()
-            .map(|v| v.abs())
-            .fold(0.0_f64, f64::max);
-        let crest = if rms > 1e-15 { absmax / rms } else { 1.0 };
-        // Local sensitivity combines Frobenius energy and outlier crest factor.
-        let sens = frob.max(1e-6) * (1.0 + 0.15 * crest.ln_1p());
-        local_sensitivities.push(sens);
-    }
-
-    // 2. Compute bounded downstream error-propagation factor for each layer.
-    let mut sorted_sigmas = spectral_norms.clone();
+    let mut sorted_sigmas: Vec<f64> = profiles.iter().map(|p| p.spectral_norm).collect();
     sorted_sigmas.sort_by(|a, b| a.total_cmp(b));
     let median_sigma = sorted_sigmas[n_layers / 2].max(1e-6);
 
     let mut propagation_factors = vec![1.0_f64; n_layers];
     for (l, slot) in propagation_factors.iter_mut().enumerate() {
         let mut log_downstream = 0.0_f64;
-        for &sigma in spectral_norms.iter().skip(l + 1) {
-            let ratio = (sigma / median_sigma).clamp(0.25, 4.0);
+        for p in profiles.iter().skip(l + 1) {
+            let ratio = (p.spectral_norm / median_sigma).clamp(0.25, 4.0);
             log_downstream += ratio.ln().max(0.0);
         }
-        // Earlier layers have more downstream layers amplifying their error.
         let depth_factor = ((n_layers - 1 - l) as f64) / (n_layers.max(1) as f64);
         *slot = 1.0 + config.propagation_weight * (depth_factor + 0.5 * log_downstream);
     }
 
-    let combined_importance: Vec<f64> = local_sensitivities
+    let combined_importance: Vec<f64> = profiles
         .iter()
         .zip(&propagation_factors)
-        .map(|(s, p)| s * p)
+        .map(|(prof, &prop)| prof.local_sensitivity * prop)
         .collect();
     let total_importance: f64 = combined_importance.iter().sum::<f64>().max(1e-12);
 
-    // 3. Evaluate candidate representation menu for each layer.
-    let mut menus: Vec<Vec<LayerCandidate>> = Vec::with_capacity(n_layers);
     let mut uniform_int4_bytes = 0_usize;
     let mut uniform_int4_err = 0.0_f64;
     let mut uniform_int8_bytes = 0_usize;
     let mut uniform_int8_err = 0.0_f64;
-
-    for (idx, (_, mat)) in layers.iter().enumerate() {
-        let probes = deterministic_probe_vectors(mat.cols(), 4, config.seed + idx as u64);
-        let mut candidates = Vec::new();
-
-        macro_rules! eval_cand {
-            ($op:expr) => {{
-                let op = $op;
-                let ev = evaluate_operator(mat, &op, &probes, 0)?;
-                LayerCandidate {
-                    method: ev.method,
-                    total_bytes: ev.total_bytes,
-                    effective_bpp: ev.effective_bpp,
-                    relative_error: ev.relative_frobenius_error,
-                    matvec_rel_error: ev.mean_matvec_rel_error,
-                }
-            }};
-        }
-
-        if let Some(svd_r) = config.include_svd_rank {
-            let r = svd_r.max(1).min(mat.rows().min(mat.cols()));
-            candidates.push(eval_cand!(LowRankSvdMatrix::from_matrix(
-                mat,
-                r,
-                FactorPrecision::Int8Sym,
-                config.seed + idx as u64
-            )?));
-        }
-        let q4_g128 = eval_cand!(Int4SymGroupMatrix::quantize(mat, 128)?);
-        let q4_g32 = eval_cand!(Int4SymGroupMatrix::quantize(mat, 32)?);
-        let q4_1_g32 = eval_cand!(Int4AsymGroupMatrix::quantize(mat, 32)?);
-        let int8_g64 = eval_cand!(Int8SymMatrix::quantize(mat, 64)?);
-        let bf16 = eval_cand!(Bf16Matrix::quantize(mat));
-        let fp16 = eval_cand!(Fp16Matrix::quantize(mat));
-
-        uniform_int4_bytes += q4_g32.total_bytes;
-        uniform_int4_err += (combined_importance[idx] / total_importance) * q4_g32.matvec_rel_error;
-        uniform_int8_bytes += int8_g64.total_bytes;
-        uniform_int8_err +=
-            (combined_importance[idx] / total_importance) * int8_g64.matvec_rel_error;
-
-        candidates.extend([q4_g128, q4_g32, q4_1_g32, int8_g64, bf16, fp16]);
-        // Sort by ascending byte size, then ascending matvec error.
-        candidates.sort_by(|a, b| {
-            a.total_bytes
-                .cmp(&b.total_bytes)
-                .then(a.matvec_rel_error.total_cmp(&b.matvec_rel_error))
-        });
-        menus.push(candidates);
+    for (idx, p) in profiles.iter().enumerate() {
+        let w = combined_importance[idx] / total_importance;
+        uniform_int4_bytes += p.uniform_int4_bytes;
+        uniform_int4_err += w * p.uniform_int4_mv_err;
+        uniform_int8_bytes += p.uniform_int8_bytes;
+        uniform_int8_err += w * p.uniform_int8_mv_err;
     }
 
-    // 4. Greedy marginal distortion-per-byte allocator starting from minimum-byte choice per layer.
     let mut chosen: Vec<usize> = vec![0; n_layers];
-    let mut current_bytes: usize = (0..n_layers).map(|l| menus[l][0].total_bytes).sum();
+    let mut current_bytes: usize = profiles.iter().map(|p| p.candidates[0].total_bytes).sum();
 
     loop {
         let mut best_upgrade: Option<(usize, usize, f64)> = None;
         for l in 0..n_layers {
-            let cur = &menus[l][chosen[l]];
+            let cur = &profiles[l].candidates[chosen[l]];
             let weight = combined_importance[l] / total_importance;
-            for (cand_idx, cand) in menus[l].iter().enumerate().skip(chosen[l] + 1) {
+            for (cand_idx, cand) in profiles[l]
+                .candidates
+                .iter()
+                .enumerate()
+                .skip(chosen[l] + 1)
+            {
                 let delta_bytes = cand.total_bytes.saturating_sub(cur.total_bytes);
                 if current_bytes.saturating_add(delta_bytes) > budget_bytes {
                     continue;
@@ -229,8 +261,8 @@ pub fn allocate_adaptive_precision(
         let Some((layer_idx, cand_idx, _)) = best_upgrade else {
             break;
         };
-        let old_bytes = menus[layer_idx][chosen[layer_idx]].total_bytes;
-        let new_bytes = menus[layer_idx][cand_idx].total_bytes;
+        let old_bytes = profiles[layer_idx].candidates[chosen[layer_idx]].total_bytes;
+        let new_bytes = profiles[layer_idx].candidates[cand_idx].total_bytes;
         current_bytes = current_bytes - old_bytes + new_bytes;
         chosen[layer_idx] = cand_idx;
     }
@@ -239,14 +271,14 @@ pub fn allocate_adaptive_precision(
     let mut weighted_error = 0.0_f64;
     let mut sum_mv_error = 0.0_f64;
     for l in 0..n_layers {
-        let selected = menus[l][chosen[l]].clone();
+        let selected = profiles[l].candidates[chosen[l]].clone();
         weighted_error += (combined_importance[l] / total_importance) * selected.matvec_rel_error;
         sum_mv_error += selected.matvec_rel_error;
         allocations.push(LayerAllocation {
-            layer_name: layers[l].0.to_owned(),
-            layer_index: l,
-            param_count: layers[l].1.rows() * layers[l].1.cols(),
-            local_sensitivity: local_sensitivities[l],
+            layer_name: profiles[l].layer_name.clone(),
+            layer_index: profiles[l].layer_index,
+            param_count: profiles[l].param_count,
+            local_sensitivity: profiles[l].local_sensitivity,
             propagation_factor: propagation_factors[l],
             combined_importance: combined_importance[l],
             selected,
@@ -268,6 +300,22 @@ pub fn allocate_adaptive_precision(
         uniform_int8_weighted_error: uniform_int8_err,
         allocations,
     })
+}
+
+/// Run Morphological Adaptive Precision allocation across an ordered sequence of layers.
+pub fn allocate_adaptive_precision(
+    layers: &[(&str, &DenseMatrix)],
+    config: &MapConfig,
+) -> Result<MapAllocationReport, MatrixError> {
+    if layers.is_empty() {
+        return Err(MatrixError::Empty);
+    }
+    let profiles: Vec<MapLayerProfile> = layers
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, mat))| profile_layer_for_map(name, idx, mat, config))
+        .collect::<Result<_, _>>()?;
+    allocate_from_profiles(&profiles, config)
 }
 
 #[cfg(test)]

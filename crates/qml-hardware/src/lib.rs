@@ -829,7 +829,9 @@ mod tests {
     }
 
     #[test]
-    fn wgpu_matvec_matches_cpu_reference_when_adapter_available() {
+    fn wgpu_dense_and_compressed_kernels_match_cpu_reference_when_adapter_available() {
+        // Initialize a single WGPU device in-process so concurrent DX12/Vulkan driver
+        // initialization across parallel test threads never deadlocks.
         let Ok(engine) = WgpuMatvecEngine::try_new() else {
             // Headless CI runners without a GPU adapter cleanly skip GPU execution.
             return;
@@ -844,6 +846,8 @@ mod tests {
         )
         .unwrap();
         let x: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
+
+        // 1. Dense FP32 on GPU vs CPU
         let cpu = mat.matvec(&x).unwrap();
         let gpu = engine.matvec(&mat, &x).unwrap();
         assert_eq!(cpu.len(), gpu.len());
@@ -858,25 +862,8 @@ mod tests {
             engine.adapter_name(),
             engine.backend_name()
         );
-    }
 
-    #[test]
-    fn wgpu_compressed_int8_and_q4_0_match_cpu_reference_when_adapter_available() {
-        let Ok(engine) = WgpuMatvecEngine::try_new() else {
-            return;
-        };
-        let mut rng = DeterministicRng::new(777);
-        let rows = 128;
-        let cols = 96;
-        let mat = DenseMatrix::from_flat(
-            rows,
-            cols,
-            (0..rows * cols).map(|_| rng.next_normal() * 0.25).collect(),
-        )
-        .unwrap();
-        let x: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
-
-        // Direct compressed INT8_SYM on GPU vs CPU
+        // 2. Direct compressed INT8_SYM on GPU vs CPU
         let q8 = Int8SymMatrix::quantize(&mat, 64).unwrap();
         let cpu8 = q8.matvec(&x).unwrap();
         let gpu8 = engine.matvec_int8_sym(&q8, &x).unwrap();
@@ -890,7 +877,7 @@ mod tests {
             "WGPU INT8_SYM matvec diverged from CPU: max_err={err8}"
         );
 
-        // Direct compressed Q4_0 (INT4_SYM) on GPU vs CPU
+        // 3. Direct compressed Q4_0 (INT4_SYM) on GPU vs CPU
         let q4 = Int4SymGroupMatrix::quantize(&mat, 32).unwrap();
         let cpu4 = q4.matvec(&x).unwrap();
         let gpu4 = engine.matvec_int4_sym(&q4, &x).unwrap();

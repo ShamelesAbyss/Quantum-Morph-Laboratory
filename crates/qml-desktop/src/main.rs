@@ -5,8 +5,10 @@ mod theme;
 mod views;
 
 use eframe::egui::{self, RichText, Vec2};
-use qml_forge::{ForgeReport, TransformStrategy, forge_safetensors_to_qmf};
-use qml_format::QmfArchiveV1;
+use qml_forge::{
+    ForgeControl, ForgeReport, TransformStrategy, forge_safetensors_to_qmf_with_control,
+};
+use qml_format::{QmfBudget, QmfFileReader};
 use qml_genesis::{GenesisArchive, GenesisConfig, run_genesis};
 use qml_hardware::{HardwareReport, WgpuMatvecEngine, probe_hardware};
 use qml_model::{PayloadBudget, SafetensorsFile};
@@ -19,11 +21,10 @@ use qml_scope::{ModelScopeReport, ScopeConfig, analyze_safetensors};
 use qml_tokenizer::BpeTokenizer;
 use state::{
     GpuKernelBenchmark, GpuSelfTestResult, ModelFormat, PersistedState, QmfInspection, WorkerEvent,
-    append_log_line, default_discovery_directories, install_crash_logger, load_persisted_state,
-    probe_model_file, save_persisted_state, scan_directory_for_models,
+    append_log_line, install_crash_logger, load_persisted_state, probe_model_file,
+    save_persisted_state, scan_directory_for_models,
 };
 use std::fs::{self, File};
-use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -202,22 +203,8 @@ impl QmlDesktopApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply_laboratory_theme(&cc.egui_ctx);
         let hardware = probe_hardware();
-        let mut persisted = load_persisted_state();
-
-        // Auto-discover local cache models on first launch (read-only) if library is empty.
-        if persisted.library.is_empty() {
-            for dir in default_discovery_directories() {
-                let found = scan_directory_for_models(&dir, 3);
-                for entry in found {
-                    if !persisted.library.iter().any(|e| e.path == entry.path) {
-                        persisted.library.push(entry);
-                    }
-                }
-            }
-            if !persisted.library.is_empty() {
-                save_persisted_state(&persisted);
-            }
-        }
+        let persisted = load_persisted_state();
+        // Model discovery is strictly opt-in via Model Library actions (no automatic background scanning).
 
         // Pre-fill paths from discovered library for smooth immediate workflow.
         let first_st = persisted
@@ -467,6 +454,13 @@ impl QmlDesktopApp {
             .and_then(|s| s.to_str())
             .unwrap_or("model")
             .to_owned();
+        let budget_plan = self.persisted.resource_preset.plan(&self.hardware);
+        let payload_budget = PayloadBudget {
+            max_total_bytes: budget_plan.ram_budget_bytes,
+            ..PayloadBudget::default()
+        };
+        let cancel = self.cancel_flag.clone();
+        cancel.store(false, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         self.worker_rx = Some(rx);
         self.busy_label = Some(format!(
@@ -474,30 +468,38 @@ impl QmlDesktopApp {
             model_id,
             self.forge_method.label()
         ));
-        self.cancel_flag.store(false, Ordering::SeqCst);
 
         std::thread::spawn(move || {
+            let tx_prog = tx.clone();
+            let ctx_prog = ctx.clone();
+            let control = ForgeControl {
+                cancel,
+                on_progress: Some(Arc::new(move |done, total, stage| {
+                    let _ = tx_prog.send(WorkerEvent::Status(format!(
+                        "Q-Forge [{done}/{total}] {stage}"
+                    )));
+                    ctx_prog.request_repaint();
+                })),
+            };
             let res = File::open(&src)
                 .map_err(|e| e.to_string())
                 .and_then(|file| {
-                    forge_safetensors_to_qmf(
+                    forge_safetensors_to_qmf_with_control(
                         file,
                         &model_id,
                         "local-readonly-source",
                         "transformer",
                         &strategy,
-                        &PayloadBudget::default(),
+                        &payload_budget,
                         42,
+                        &control,
                     )
                     .map_err(|e| e.to_string())
                 })
                 .and_then(|(archive, report)| {
-                    if let Some(parent) = dst.parent().filter(|p| !p.as_os_str().is_empty()) {
-                        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                    }
-                    let out_file = File::create(&dst).map_err(|e| e.to_string())?;
-                    let mut writer = BufWriter::new(out_file);
-                    archive.write_to(&mut writer).map_err(|e| e.to_string())?;
+                    archive
+                        .write_to_file_atomic(&dst, Some(&src), &QmfBudget::default())
+                        .map_err(|e| e.to_string())?;
                     Ok((report, dst))
                 });
             match res {
@@ -716,9 +718,10 @@ impl QmlDesktopApp {
                     .map_err(|e| e.to_string())?;
                 let tokenizer = BpeTokenizer::from_file(&tok_path).map_err(|e| e.to_string())?;
                 let qmf_file = File::open(&qmf_path).map_err(|e| e.to_string())?;
-                let archive = QmfArchiveV1::read_from(qmf_file).map_err(|e| e.to_string())?;
-                let model =
-                    QCoreModel::from_qmf(&archive, cfg.clone()).map_err(|e| e.to_string())?;
+                let mut qmf_reader = QmfFileReader::open(qmf_file, &QmfBudget::default())
+                    .map_err(|e| e.to_string())?;
+                let model = QCoreModel::from_qmf_reader(&mut qmf_reader, cfg.clone())
+                    .map_err(|e| e.to_string())?;
 
                 let formatted = if use_chatml {
                     tokenizer.format_chat_prompt(None, &prompt)
@@ -772,10 +775,10 @@ impl QmlDesktopApp {
                     ));
                     ctx.request_repaint();
                     let ref_file = File::open(&compare_path).map_err(|e| e.to_string())?;
-                    let ref_archive =
-                        QmfArchiveV1::read_from(ref_file).map_err(|e| e.to_string())?;
-                    let ref_model =
-                        QCoreModel::from_qmf(&ref_archive, cfg).map_err(|e| e.to_string())?;
+                    let mut ref_reader = QmfFileReader::open(ref_file, &QmfBudget::default())
+                        .map_err(|e| e.to_string())?;
+                    let ref_model = QCoreModel::from_qmf_reader(&mut ref_reader, cfg)
+                        .map_err(|e| e.to_string())?;
                     let mut seq = prompt_ids.clone();
                     seq.extend(gen_res.generated_tokens.iter().copied().take(16));
                     Some(

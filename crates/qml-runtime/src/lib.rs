@@ -10,7 +10,7 @@
 //! rigorous reference-vs-transformed logit KL divergence & perplexity evaluation.
 
 use qml_core::{DeterministicRng, MatrixError};
-use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfOperator};
+use qml_format::{QmfArchiveV1, QmfError, QmfFileReader, QmfLatentCache, QmfOperator};
 use qml_model::{DType, encode_safetensors};
 use qml_quant::LinearOperator;
 use serde::{Deserialize, Serialize};
@@ -293,6 +293,83 @@ impl QCoreModel {
             Arc::clone(&embed_op)
         } else {
             match archive.load_operator_cached("lm_head.weight", &mut latent_cache) {
+                Ok(op) => Arc::new(op),
+                Err(_) => Arc::clone(&embed_op),
+            }
+        };
+
+        Ok(Self {
+            config,
+            embed_tokens: embed_op,
+            layers,
+            final_norm,
+            lm_head,
+            shared_latents_deduped: latent_cache.len(),
+        })
+    }
+
+    /// Load an executable model lazily from a file-backed [`QmfFileReader`] without
+    /// buffering the entire compressed QMF file payload in RAM first.
+    pub fn from_qmf_reader<R: std::io::Read + std::io::Seek>(
+        reader: &mut QmfFileReader<R>,
+        config: TransformerConfig,
+    ) -> Result<Self, RuntimeError> {
+        config.validate()?;
+        let mut latent_cache = QmfLatentCache::new();
+
+        let embed_op =
+            Arc::new(reader.load_operator_cached("model.embed_tokens.weight", &mut latent_cache)?);
+        if embed_op.rows() != config.vocab_size || embed_op.cols() != config.hidden_size {
+            return Err(RuntimeError::InvalidConfig(format!(
+                "embed_tokens shape {}x{} does not match vocab_size={} hidden_size={}",
+                embed_op.rows(),
+                embed_op.cols(),
+                config.vocab_size,
+                config.hidden_size
+            )));
+        }
+
+        let mut layers = Vec::with_capacity(config.num_layers);
+        for l in 0..config.num_layers {
+            let p = format!("model.layers.{l}");
+            layers.push(TransformerBlock {
+                input_norm: reader.load_vector_f64(&format!("{p}.input_layernorm.weight"))?,
+                q_proj: reader.load_operator_cached(
+                    &format!("{p}.self_attn.q_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                k_proj: reader.load_operator_cached(
+                    &format!("{p}.self_attn.k_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                v_proj: reader.load_operator_cached(
+                    &format!("{p}.self_attn.v_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                o_proj: reader.load_operator_cached(
+                    &format!("{p}.self_attn.o_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                post_attn_norm: reader
+                    .load_vector_f64(&format!("{p}.post_attention_layernorm.weight"))?,
+                gate_proj: reader.load_operator_cached(
+                    &format!("{p}.mlp.gate_proj.weight"),
+                    &mut latent_cache,
+                )?,
+                up_proj: reader
+                    .load_operator_cached(&format!("{p}.mlp.up_proj.weight"), &mut latent_cache)?,
+                down_proj: reader.load_operator_cached(
+                    &format!("{p}.mlp.down_proj.weight"),
+                    &mut latent_cache,
+                )?,
+            });
+        }
+
+        let final_norm = reader.load_vector_f64("model.norm.weight")?;
+        let lm_head = if config.tie_word_embeddings {
+            Arc::clone(&embed_op)
+        } else {
+            match reader.load_operator_cached("lm_head.weight", &mut latent_cache) {
                 Ok(op) => Arc::new(op),
                 Err(_) => Arc::clone(&embed_op),
             }

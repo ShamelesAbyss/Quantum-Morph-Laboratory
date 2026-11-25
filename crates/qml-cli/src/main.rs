@@ -1,6 +1,6 @@
 use qml_core::{DenseMatrix, DeterministicRng};
 use qml_forge::{TransformStrategy, compare_safetensors_and_qmf, forge_safetensors_to_qmf};
-use qml_format::{QmfArchiveV1, QmfRankOne, peek_qmf_version};
+use qml_format::{QmfArchiveV1, QmfBudget, QmfFileReader, QmfRankOne, peek_qmf_version};
 use qml_genesis::{GenesisConfig, run_genesis};
 use qml_model::{
     PayloadBudget, SafetensorsFile, inspect_gguf as parse_gguf_metadata,
@@ -1025,21 +1025,8 @@ fn run_morph(args: Vec<String>) -> ExitCode {
         }
     };
 
-    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty())
-        && let Err(e) = fs::create_dir_all(parent)
-    {
-        eprintln!("could not create output directory: {e}");
-        return ExitCode::FAILURE;
-    }
-    let out_file = match File::create(&output) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("could not create {}: {e}", output.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    if let Err(e) = archive.write_to(&mut BufWriter::new(out_file)) {
-        eprintln!("failed writing QMF v1 artifact: {e}");
+    if let Err(e) = archive.write_to_file_atomic(&output, Some(&source), &QmfBudget::default()) {
+        eprintln!("failed publishing QMF v1 artifact atomically: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -1557,14 +1544,15 @@ fn run_generate(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let archive = match QmfArchiveV1::read_from(qmf_file) {
-        Ok(a) => a,
+    let mut qmf_reader = match QmfFileReader::open(qmf_file, &QmfBudget::default()) {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("could not read QMF v1 {}: {e}", qmf_p.display());
+            eprintln!("could not open QMF v1 {}: {e}", qmf_p.display());
             return ExitCode::FAILURE;
         }
     };
-    let model = match QCoreModel::from_qmf(&archive, cfg.clone()) {
+    let model_id = qmf_reader.manifest().model_id.clone();
+    let model = match QCoreModel::from_qmf_reader(&mut qmf_reader, cfg.clone()) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("could not initialize QCoreModel: {e}");
@@ -1585,10 +1573,7 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         println!("Q-Core Native Compressed Inference");
         println!(
             "  Model: {} ({} layers, hidden={}, vocab={})",
-            archive.manifest().model_id,
-            cfg.num_layers,
-            cfg.hidden_size,
-            cfg.vocab_size
+            model_id, cfg.num_layers, cfg.hidden_size, cfg.vocab_size
         );
         println!(
             "  Prompt tokens: {} | Max new tokens: {} | Temp: {:.2}",
@@ -1647,14 +1632,14 @@ fn run_generate(args: Vec<String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let ref_archive = match QmfArchiveV1::read_from(ref_file) {
-            Ok(a) => a,
+        let mut ref_reader = match QmfFileReader::open(ref_file, &QmfBudget::default()) {
+            Ok(r) => r,
             Err(e) => {
-                eprintln!("could not read reference QMF: {e}");
+                eprintln!("could not open reference QMF: {e}");
                 return ExitCode::FAILURE;
             }
         };
-        let ref_model = match QCoreModel::from_qmf(&ref_archive, cfg) {
+        let ref_model = match QCoreModel::from_qmf_reader(&mut ref_reader, cfg) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("could not init reference QCoreModel: {e}");

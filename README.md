@@ -7,9 +7,9 @@
   <img src="https://img.shields.io/badge/Unsafe%20Code-FORBIDDEN-06B6D4?style=for-the-badge" alt="Zero Unsafe"/>
   <img src="https://img.shields.io/badge/Python%20Deps-ZERO-0EA5E9?style=for-the-badge" alt="Zero Python"/>
   <img src="https://img.shields.io/badge/Crates-12%20Modular-8B5CF6?style=for-the-badge" alt="12 Crates"/>
-  <img src="https://img.shields.io/badge/Tests-76%20Passing-10B981?style=for-the-badge" alt="76 Tests"/>
+  <img src="https://img.shields.io/badge/Tests-79%20Passing-10B981?style=for-the-badge" alt="79 Tests"/>
   <img src="https://img.shields.io/badge/License-MIT-22D3EE?style=for-the-badge" alt="MIT License"/>
-  <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.1%20SINGULARITY-F59E0B?style=for-the-badge" alt="Experimental"/>
+  <img src="https://img.shields.io/badge/Release-v0.1.0--alpha.2%20TRANSCENDENCE-F59E0B?style=for-the-badge" alt="Experimental"/>
 </p>
 
 <h3 align="center"><em>Don't just compress intelligence. Transform its representation.</em></h3>

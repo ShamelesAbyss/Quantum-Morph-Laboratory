@@ -12,6 +12,7 @@ use qml_runtime::{
     generate_synthetic_llama_safetensors,
 };
 use qml_scope::{ScopeConfig, analyze_safetensors};
+use qml_tokenizer::BpeTokenizer;
 use serde::Serialize;
 use std::env;
 use std::fs::{self, File};
@@ -36,6 +37,8 @@ COMMANDS:
     morph PATH --method M --output OUT   Transform a Safetensors file into an experimental QMF v1 artifact
     compare SOURCE.safetensors OUT.qmf   Verify a QMF v1 artifact directly against its source Safetensors
     infer-demo [--json]                  Run native Q-Core CPU inference & KL-divergence comparison
+    generate QMF --config C --tokenizer T --prompt P [OPTS]
+                                         Run real text generation with Q-Core + BPE tokenizer
     genesis [--json] [--synthetic|PATH]  Run Q-Genesis multi-objective evolutionary representation search
     demo-rank1 [--output PATH]           Run the original synthetic rank-one QMF v0 demo
     help                                 Show this help text
@@ -61,6 +64,7 @@ fn main() -> ExitCode {
         Some("morph") => run_morph(args.collect()),
         Some("compare") => run_compare(args.collect()),
         Some("infer-demo") => run_infer_demo(args.collect()),
+        Some("generate") => run_generate(args.collect()),
         Some("genesis") => run_genesis_cmd(args.collect()),
         Some("help" | "--help" | "-h") if args.next().is_none() => {
             println!("{HELP}");
@@ -1449,6 +1453,253 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
                 c.fitness.mean_matvec_rel_error,
                 c.fitness.estimated_matvec_flops,
                 summary.join(", ")
+            );
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+#[derive(Serialize)]
+struct GenerateOutput {
+    qmf_path: String,
+    prompt: String,
+    formatted_prompt: String,
+    prompt_tokens: usize,
+    generated_tokens: usize,
+    generated_text: String,
+    tokens_per_second: f64,
+    elapsed_ms: f64,
+    fidelity: Option<qml_runtime::InferenceComparison>,
+}
+
+fn run_generate(args: Vec<String>) -> ExitCode {
+    use std::io::Write;
+    let mut json = false;
+    let mut qmf_path: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
+    let mut tokenizer_path: Option<PathBuf> = None;
+    let mut compare_qmf: Option<PathBuf> = None;
+    let mut prompt = String::from("The mathematical beauty of neural networks is");
+    let mut max_tokens: usize = 32;
+    let mut temperature: f64 = 0.0;
+    let mut use_chat = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--chat" => use_chat = true,
+            "--config" => {
+                i += 1;
+                config_path = args.get(i).map(PathBuf::from);
+            }
+            "--tokenizer" => {
+                i += 1;
+                tokenizer_path = args.get(i).map(PathBuf::from);
+            }
+            "--prompt" => {
+                i += 1;
+                if let Some(p) = args.get(i) {
+                    prompt = p.clone();
+                }
+            }
+            "--max-tokens" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|s| s.parse().ok()) {
+                    max_tokens = v;
+                }
+            }
+            "--temperature" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|s| s.parse().ok()) {
+                    temperature = v;
+                }
+            }
+            "--compare-qmf" => {
+                i += 1;
+                compare_qmf = args.get(i).map(PathBuf::from);
+            }
+            s if !s.starts_with("--") && qmf_path.is_none() => qmf_path = Some(PathBuf::from(s)),
+            other => {
+                eprintln!("unknown option for generate: {other}");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(qmf_p), Some(cfg_p), Some(tok_p)) = (qmf_path, config_path, tokenizer_path) else {
+        eprintln!(
+            "usage: qml generate MODEL.qmf --config config.json --tokenizer tokenizer.json [--prompt TEXT] [--max-tokens N] [--temperature T] [--chat] [--compare-qmf REF.qmf] [--json]"
+        );
+        return ExitCode::from(2);
+    };
+
+    let cfg_bytes = match fs::read(&cfg_p) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("could not read {}: {e}", cfg_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let cfg = match TransformerConfig::from_hf_config_bytes(&cfg_bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("invalid config.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tokenizer = match BpeTokenizer::from_file(&tok_p) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("could not load tokenizer {}: {e}", tok_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let qmf_file = match File::open(&qmf_p) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("could not open {}: {e}", qmf_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let archive = match QmfArchiveV1::read_from(qmf_file) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("could not read QMF v1 {}: {e}", qmf_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let model = match QCoreModel::from_qmf(&archive, cfg.clone()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("could not initialize QCoreModel: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let formatted = if use_chat {
+        tokenizer.format_chat_prompt(None, &prompt)
+    } else {
+        prompt.clone()
+    };
+    let prompt_u32 = tokenizer.encode(&formatted);
+    let prompt_ids: Vec<usize> = prompt_u32.iter().map(|&id| id as usize).collect();
+    let eos = tokenizer.eos_token_id().map(|id| id as usize);
+
+    if !json {
+        println!("Q-Core Native Compressed Inference");
+        println!(
+            "  Model: {} ({} layers, hidden={}, vocab={})",
+            archive.manifest().model_id,
+            cfg.num_layers,
+            cfg.hidden_size,
+            cfg.vocab_size
+        );
+        println!(
+            "  Prompt tokens: {} | Max new tokens: {} | Temp: {:.2}",
+            prompt_ids.len(),
+            max_tokens,
+            temperature
+        );
+        print!("  Output: ");
+        let _ = std::io::stdout().flush();
+    }
+
+    let generation = match model.generate_with_callback(
+        &prompt_ids,
+        max_tokens,
+        temperature,
+        eos,
+        42,
+        |tok_id| {
+            if !json {
+                let piece = tokenizer.decode_token(tok_id as u32, true);
+                print!("{piece}");
+                let _ = std::io::stdout().flush();
+            }
+            true
+        },
+    ) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("\ngeneration failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !json {
+        println!();
+    }
+
+    let gen_u32: Vec<u32> = generation
+        .generated_tokens
+        .iter()
+        .map(|&t| t as u32)
+        .collect();
+    let generated_text = tokenizer.decode(&gen_u32, true);
+
+    let fidelity = if let Some(ref_path) = compare_qmf {
+        let ref_file = match File::open(&ref_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("could not open reference QMF {}: {e}", ref_path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let ref_archive = match QmfArchiveV1::read_from(ref_file) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("could not read reference QMF: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let ref_model = match QCoreModel::from_qmf(&ref_archive, cfg) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("could not init reference QCoreModel: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut eval_seq = prompt_ids.clone();
+        eval_seq.extend(generation.generated_tokens.iter().copied().take(16));
+        match evaluate_inference_fidelity(&ref_model, &model, &eval_seq) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("fidelity evaluation failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+
+    let output = GenerateOutput {
+        qmf_path: qmf_p.display().to_string(),
+        prompt,
+        formatted_prompt: formatted,
+        prompt_tokens: prompt_ids.len(),
+        generated_tokens: generation.generated_tokens.len(),
+        generated_text,
+        tokens_per_second: generation.tokens_per_second,
+        elapsed_ms: generation.elapsed_micros as f64 / 1000.0,
+        fidelity,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!(
+            "  Speed: {:.2} tok/s ({} generated in {:.1} ms)",
+            output.tokens_per_second, output.generated_tokens, output.elapsed_ms
+        );
+        if let Some(f) = &output.fidelity {
+            println!(
+                "  Fidelity vs reference: Mean KL={:.5} | Logit RMSE={:.5} | Top-1={:.1}% | PPL ref={:.3} vs tr={:.3}",
+                f.mean_kl_divergence,
+                f.mean_logit_rmse,
+                f.top1_token_agreement * 100.0,
+                f.reference_perplexity,
+                f.transformed_perplexity
             );
         }
     }

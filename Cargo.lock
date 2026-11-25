@@ -271,6 +271,7 @@ dependencies = [
  "qml-quant",
  "qml-runtime",
  "qml-scope",
+ "qml-tokenizer",
  "serde",
  "serde_json",
 ]
@@ -341,6 +342,7 @@ dependencies = [
  "qml-model",
  "qml-quant",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -350,6 +352,14 @@ dependencies = [
  "qml-core",
  "qml-model",
  "serde",
+]
+
+[[package]]
+name = "qml-tokenizer"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

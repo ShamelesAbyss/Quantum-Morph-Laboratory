@@ -8,6 +8,7 @@ members = [
     "crates/qml-quant",
     "crates/qml-forge",
     "crates/qml-runtime",
+    "crates/qml-tokenizer",
     "crates/qml-genesis",
     "crates/qml-cli",
 ]

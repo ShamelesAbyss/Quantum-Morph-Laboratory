@@ -73,6 +73,44 @@ impl TransformerConfig {
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_heads
     }
+
+    /// Parse a standard Hugging Face `config.json` into a `TransformerConfig`.
+    pub fn from_hf_config_bytes(bytes: &[u8]) -> Result<Self, RuntimeError> {
+        #[derive(Deserialize)]
+        struct HfLlamaConfig {
+            vocab_size: usize,
+            hidden_size: usize,
+            intermediate_size: usize,
+            num_hidden_layers: usize,
+            num_attention_heads: usize,
+            #[serde(default)]
+            num_key_value_heads: Option<usize>,
+            #[serde(default)]
+            rms_norm_eps: Option<f64>,
+            #[serde(default)]
+            rope_theta: Option<f64>,
+            #[serde(default)]
+            max_position_embeddings: Option<usize>,
+            #[serde(default)]
+            tie_word_embeddings: bool,
+        }
+        let raw: HfLlamaConfig = serde_json::from_slice(bytes)
+            .map_err(|e| RuntimeError::InvalidConfig(format!("config.json parse error: {e}")))?;
+        let cfg = Self {
+            vocab_size: raw.vocab_size,
+            hidden_size: raw.hidden_size,
+            intermediate_size: raw.intermediate_size,
+            num_layers: raw.num_hidden_layers,
+            num_heads: raw.num_attention_heads,
+            num_kv_heads: raw.num_key_value_heads.unwrap_or(raw.num_attention_heads),
+            rms_norm_eps: raw.rms_norm_eps.unwrap_or(1e-5),
+            rope_theta: raw.rope_theta.unwrap_or(10_000.0),
+            max_seq_len: raw.max_position_embeddings.unwrap_or(2048),
+            tie_word_embeddings: raw.tie_word_embeddings,
+        };
+        cfg.validate()?;
+        Ok(cfg)
+    }
 }
 
 #[derive(Debug)]
@@ -339,8 +377,8 @@ impl QCoreModel {
                 let kv_h = h / kv_groups;
                 let q_head = &q[h * head_dim..(h + 1) * head_dim];
                 let mut scores = Vec::with_capacity(seq_len);
-                for t in 0..seq_len {
-                    let k_head = &cache.keys[layer_idx][t][kv_h * head_dim..(kv_h + 1) * head_dim];
+                for k_vec in &cache.keys[layer_idx] {
+                    let k_head = &k_vec[kv_h * head_dim..(kv_h + 1) * head_dim];
                     let dot: f64 = q_head.iter().zip(k_head).map(|(a, b)| a * b).sum();
                     scores.push(dot * scale);
                 }
@@ -384,6 +422,30 @@ impl QCoreModel {
         temperature: f64,
         seed: u64,
     ) -> Result<GenerationResult, RuntimeError> {
+        self.generate_with_callback(
+            prompt_tokens,
+            max_new_tokens,
+            temperature,
+            None,
+            seed,
+            |_| true,
+        )
+    }
+
+    /// Generate up to `max_new_tokens`, stopping early on `eos_token` or when
+    /// `on_token(token_id)` returns `false` (enabling live streaming & cancellation).
+    pub fn generate_with_callback<F>(
+        &self,
+        prompt_tokens: &[usize],
+        max_new_tokens: usize,
+        temperature: f64,
+        eos_token: Option<usize>,
+        seed: u64,
+        mut on_token: F,
+    ) -> Result<GenerationResult, RuntimeError>
+    where
+        F: FnMut(usize) -> bool,
+    {
         if prompt_tokens.is_empty() {
             return Err(RuntimeError::EmptyPrompt);
         }
@@ -400,6 +462,10 @@ impl QCoreModel {
         for step in 0..max_new_tokens {
             let next_tok = sample_token(&logits, temperature, &mut rng);
             generated.push(next_tok);
+            let keep_going = on_token(next_tok);
+            if !keep_going || eos_token == Some(next_tok) {
+                break;
+            }
             let pos = prompt_tokens.len() + step;
             if pos + 1 < self.config.max_seq_len && step + 1 < max_new_tokens {
                 logits = self.forward_token(next_tok, pos, &mut cache)?;

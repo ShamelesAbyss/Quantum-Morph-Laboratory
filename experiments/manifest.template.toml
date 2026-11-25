@@ -1,0 +1,66 @@
+# Copy this file for an actual experiment. Replace every UNSET value and record
+# measured values only after the measurement has actually been executed.
+schema_version = 1
+experiment_id = "UNSET"
+created_utc = "UNSET"
+status = "not_run" # not_run | running | completed | failed | interrupted
+outcome = "UNSET"
+
+[model]
+identifier = "UNSET"
+source_format = "UNSET"
+source_hash_sha256 = "UNSET" # UNSET only when no source artifact exists or hashing was unavailable
+license = "UNSET"
+fixture_description = "UNSET"
+
+[transformation]
+name = "UNSET"
+version = "UNSET"
+configuration = "UNSET"
+random_seed = -1 # replace with the actual seed; -1 means not yet specified
+
+[hardware]
+os = "UNSET"
+cpu = "UNSET"
+logical_processors = -1
+system_memory_bytes = -1
+accelerator = "UNSET"
+accelerator_memory_bytes = -1
+backend = "UNSET"
+
+[software]
+qml_version = "UNSET"
+rustc_version = "UNSET"
+git_commit = "UNSET"
+dependency_lock_hash_sha256 = "UNSET"
+
+[evaluation]
+methodology = "UNSET"
+dataset_identifier = "UNSET"
+dataset_license = "UNSET"
+seed = -1
+context_length = -1
+
+[resources]
+configured_ram_budget_bytes = -1
+configured_vram_budget_bytes = -1
+peak_ram_bytes = -1
+peak_vram_bytes = -1
+elapsed_milliseconds = -1
+
+[results]
+input_bytes = -1
+output_bytes = -1
+metadata_bytes = -1
+reconstruction_error = "UNSET"
+matvec_error = "UNSET"
+perplexity = "not_measured"
+task_accuracy = "not_measured"
+
+[limitations]
+items = ["UNSET"]
+
+[artifacts]
+# Use relative paths to non-sensitive reports only. Never list model weights,
+# private datasets, credentials, or other excluded files.
+report_path = "UNSET"

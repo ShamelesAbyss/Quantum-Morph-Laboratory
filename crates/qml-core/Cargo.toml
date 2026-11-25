@@ -2,6 +2,7 @@
 name = "qml-core"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 

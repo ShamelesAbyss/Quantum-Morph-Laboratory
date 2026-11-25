@@ -1,12 +1,31 @@
 use qml_core::DenseMatrix;
 use qml_format::QmfRankOne;
+use qml_model::inspect_safetensors as parse_safetensors_metadata;
 use std::env;
 use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const HELP: &str = "Quantum Morph Laboratory (qml)\n\nUSAGE:\n    qml <COMMAND>\n\nCOMMANDS:\n    doctor                         Show basic host platform diagnostics\n    demo-rank1 [--output PATH]     Run a synthetic rank-one factorization demo\n    inspect-qmf PATH               Validate and summarize an experimental QMF v0 file\n    help                           Show this help text\n    version                        Show the CLI version\n\nThe demo uses a generated synthetic matrix, not a pretrained model. The rank-one\npivot approximation is a simple baseline and is not guaranteed optimal for general\nmatrices. QMF v0 is an unstable, single-matrix experimental format.\n\nSafetensors/GGUF model inspection, transformation, benchmarking, and inference are\nnot implemented yet.";
+const HELP: &str = r#"Quantum Morph Laboratory (qml)
+
+USAGE:
+    qml <COMMAND>
+
+COMMANDS:
+    doctor                         Show basic host platform diagnostics
+    demo-rank1 [--output PATH]     Run a synthetic rank-one factorization demo
+    inspect-qmf PATH               Validate an experimental QMF v0 file
+    inspect-safetensors [--json] PATH  Read metadata only (16 MiB header cap)
+    help                           Show this help text
+    version                        Show the CLI version
+
+The demo uses a generated synthetic matrix, not a pretrained model. The rank-one
+pivot approximation is a simple baseline and is not guaranteed optimal for general
+matrices. QMF v0 is an unstable, single-matrix experimental format.
+
+Safetensors inspection reads only the bounded header, never payload bytes or tensor
+values. GGUF inspection, transformations, benchmarking, and inference are unavailable."#;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -14,6 +33,7 @@ fn main() -> ExitCode {
         Some("doctor") if args.next().is_none() => doctor(),
         Some("demo-rank1") => demo_rank_one(args.collect()),
         Some("inspect-qmf") => inspect_qmf(args.collect()),
+        Some("inspect-safetensors") => inspect_safetensors(args.collect()),
         Some("help" | "--help" | "-h") if args.next().is_none() => {
             println!("{HELP}");
             ExitCode::SUCCESS
@@ -184,6 +204,69 @@ fn inspect_qmf(args: Vec<String>) -> ExitCode {
         }
         Err(error) => {
             eprintln!("could not read QMF file {}: {error}", path.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn inspect_safetensors(args: Vec<String>) -> ExitCode {
+    let (json, path) = match args.as_slice() {
+        [path] => (false, PathBuf::from(path)),
+        [flag, path] if flag == "--json" => (true, PathBuf::from(path)),
+        _ => {
+            eprintln!("usage: qml inspect-safetensors [--json] PATH\n\n{HELP}");
+            return ExitCode::from(2);
+        }
+    };
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!(
+                "could not open Safetensors file {}: {error}",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    match parse_safetensors_metadata(file) {
+        Ok(metadata) if json => match serde_json::to_string_pretty(&metadata) {
+            Ok(output) => {
+                println!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("could not encode Safetensors metadata as JSON: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Ok(metadata) => {
+            println!("Safetensors metadata (payload not read)");
+            println!("  File bytes: {}", metadata.file_bytes);
+            println!("  Header bytes: {}", metadata.header_bytes);
+            println!("  Tensor payload bytes: {}", metadata.data_bytes);
+            println!("  Tensor count: {}", metadata.tensors.len());
+            for tensor in &metadata.tensors {
+                println!(
+                    "  {}: {} {:?}, bytes {}..{} ({} bytes)",
+                    tensor.name,
+                    tensor.dtype,
+                    tensor.shape,
+                    tensor.data_offsets[0],
+                    tensor.data_offsets[1],
+                    tensor.data_bytes
+                );
+            }
+            if !metadata.metadata.is_empty() {
+                println!("  File metadata: {:?}", metadata.metadata);
+            }
+            println!("  Scope: header validation only; tensor values were not inspected");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!(
+                "could not inspect Safetensors file {}: {error}",
+                path.display()
+            );
             ExitCode::FAILURE
         }
     }

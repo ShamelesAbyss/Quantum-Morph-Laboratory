@@ -2,6 +2,7 @@
 name = "qml-cli"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [[bin]]
 name = "qml"
@@ -10,6 +11,8 @@ path = "src/main.rs"
 [dependencies]
 qml-core = { path = "../qml-core" }
 qml-format = { path = "../qml-format" }
+qml-model = { path = "../qml-model" }
+serde_json = "1"
 
 [lints]
 workspace = true

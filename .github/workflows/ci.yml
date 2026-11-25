@@ -21,5 +21,17 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run tests
         run: cargo test --workspace
+      - name: Build workspace
+        run: cargo build --workspace
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.21.0 --locked
+      - name: Check dependency advisories, licenses, sources, and bans
+        run: cargo deny check

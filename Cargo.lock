@@ -293,6 +293,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qml-quant"
+version = "0.1.0"
+dependencies = [
+ "qml-core",
+ "qml-model",
+ "serde",
+]
+
+[[package]]
 name = "qml-scope"
 version = "0.1.0"
 dependencies = [

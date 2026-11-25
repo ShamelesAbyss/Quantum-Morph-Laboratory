@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 egui_plot = "0.31"
+qml-behavior = { path = "../qml-behavior" }
 qml-core = { path = "../qml-core" }
 qml-forge = { path = "../qml-forge" }
 qml-format = { path = "../qml-format" }

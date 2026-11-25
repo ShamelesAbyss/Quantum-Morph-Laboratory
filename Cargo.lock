@@ -2385,9 +2385,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qml-behavior"
+version = "0.1.0"
+dependencies = [
+ "qml-forge",
+ "qml-model",
+ "qml-quant",
+ "qml-runtime",
+ "serde",
+]
+
+[[package]]
 name = "qml-cli"
 version = "0.1.0"
 dependencies = [
+ "qml-behavior",
  "qml-core",
  "qml-forge",
  "qml-format",
@@ -2412,6 +2424,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui_plot",
+ "qml-behavior",
  "qml-core",
  "qml-forge",
  "qml-format",
@@ -2455,7 +2468,10 @@ name = "qml-genesis"
 version = "0.1.0"
 dependencies = [
  "qml-core",
+ "qml-format",
+ "qml-model",
  "qml-quant",
+ "qml-scope",
  "serde",
 ]
 

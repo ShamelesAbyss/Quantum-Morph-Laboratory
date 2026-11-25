@@ -1532,6 +1532,164 @@ pub fn show_qcore(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Contex
     });
 }
 
+pub fn show_qbehavior(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    section_header(
+        ui,
+        "Q-Behavior Mechanistic & Activation Observatory",
+        "Captures intermediate hidden-state trajectories across every layer, computes Representational Similarity Analysis (RSA) and activation drift, and runs strictly reversible causal layer interventions.",
+        Some(("REVERSIBLE RUNTIME PROBES", CYAN)),
+    );
+
+    glass_card().show(ui, |ui| {
+        ui.label(
+            RichText::new("Uses the Model QMF, Reference QMF, config.json, tokenizer.json, and Prompt configured in Q-Core Inference (or edit directly below).")
+                .color(TEXT_MUTED)
+                .size(12.0),
+        );
+        ui.add_space(6.0);
+        egui::Grid::new("qbehavior_grid")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Reference QMF (e.g. BF16):");
+                ui.add(egui::TextEdit::singleline(&mut app.infer_compare_qmf_path).desired_width(520.0));
+                ui.end_row();
+                ui.label("Candidate QMF:");
+                ui.add(egui::TextEdit::singleline(&mut app.infer_qmf_path).desired_width(520.0));
+                ui.end_row();
+            });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !app.is_busy(),
+                    egui::Button::new("Compare Layer Activations & RSA"),
+                )
+                .clicked()
+            {
+                app.start_behavior_compare_job(ctx.clone());
+            }
+            ui.separator();
+            ui.label("Intervention Layer:");
+            ui.add(egui::DragValue::new(&mut app.behavior_intervention_layer).range(0..=127));
+            if ui
+                .add_enabled(!app.is_busy(), egui::Button::new("Ablate MLP (Reversible)"))
+                .clicked()
+            {
+                let l = app.behavior_intervention_layer;
+                app.start_intervention_job(ctx.clone(), qml_runtime::LayerIntervention::AblateMlp { layer: l });
+            }
+            if ui
+                .add_enabled(
+                    !app.is_busy(),
+                    egui::Button::new("Ablate Attention (Reversible)"),
+                )
+                .clicked()
+            {
+                let l = app.behavior_intervention_layer;
+                app.start_intervention_job(
+                    ctx.clone(),
+                    qml_runtime::LayerIntervention::AblateAttention { layer: l },
+                );
+            }
+        });
+    });
+
+    ui.add_space(10.0);
+
+    let mut export_msg: Option<String> = None;
+    if let Some(rep) = &app.behavior_report {
+        accent_card().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("LAYER-BY-LAYER ACTIVATION DRIFT & RSA GEOMETRY")
+                        .color(CYAN)
+                        .strong(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    export_msg =
+                        export_json_report(ui, "Export JSON...", "qbehavior-report.json", rep);
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                metric_tile(
+                    ui,
+                    "PEAK DRIFT LAYER",
+                    &format!("Layer {}", rep.peak_divergence_layer),
+                    &format!("Rel L2: {:.4}", rep.peak_rel_l2_divergence),
+                    AMETHYST,
+                );
+                metric_tile(
+                    ui,
+                    "FINAL LAYER COSINE",
+                    &format!("{:.4}", rep.final_layer_cosine),
+                    &format!("{} layers traced", rep.num_layers),
+                    EMERALD,
+                );
+                metric_tile(
+                    ui,
+                    "MEAN LOGIT KL",
+                    &format!("{:.5}", rep.mean_logit_kl_divergence),
+                    &format!("Top-1: {:.1}%", rep.top1_token_agreement * 100.0),
+                    CYAN,
+                );
+            });
+            ui.add_space(8.0);
+            let cos_pts: PlotPoints = rep
+                .layers
+                .iter()
+                .map(|l| [l.layer_index as f64, l.mean_cosine_similarity])
+                .collect();
+            let rsa_pts: PlotPoints = rep
+                .layers
+                .iter()
+                .map(|l| [l.layer_index as f64, l.rsa_correlation])
+                .collect();
+            let l2_pts: PlotPoints = rep
+                .layers
+                .iter()
+                .map(|l| [l.layer_index as f64, l.mean_rel_l2_divergence])
+                .collect();
+            Plot::new("qbehavior_layer_plot")
+                .height(220.0)
+                .legend(egui_plot::Legend::default())
+                .x_axis_label("Transformer Layer")
+                .show(ui, |plot_ui| {
+                    plot_ui.line(Line::new(cos_pts).name("Mean Cosine Sim").color(EMERALD));
+                    plot_ui.line(Line::new(rsa_pts).name("RSA Correlation").color(CYAN));
+                    plot_ui.line(Line::new(l2_pts).name("Mean Rel L2 Drift").color(AMETHYST));
+                });
+        });
+    }
+
+    if let Some(intv) = &app.intervention_report {
+        ui.add_space(10.0);
+        glass_card().show(ui, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "REVERSIBLE CAUSAL INTERVENTION: {:?}",
+                    intv.intervention
+                ))
+                .color(AMBER)
+                .strong(),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "Tokens: {}  •  Mean Logit KL: {:.5}  •  Top-1 Prediction Flip Rate: {:.1}%",
+                    intv.sequence_len,
+                    intv.mean_logit_kl_divergence,
+                    intv.top1_flip_rate * 100.0
+                ))
+                .color(TEXT_PRIMARY),
+            );
+        });
+    }
+    if let Some(msg) = export_msg {
+        app.log(msg);
+    }
+}
+
 pub fn show_benchmarks(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     section_header(
         ui,

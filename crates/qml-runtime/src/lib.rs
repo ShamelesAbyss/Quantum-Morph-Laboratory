@@ -447,6 +447,26 @@ pub struct GenerationResult {
     pub tokens_per_second: f64,
 }
 
+/// Strictly runtime-only, reversible causal intervention applied during a traced forward pass.
+/// Never mutates stored QMF weights.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LayerIntervention {
+    /// Scale the residual stream output of `layer` by `scale`.
+    ScaleResidual { layer: usize, scale: f64 },
+    /// Zero out the self-attention residual contribution of `layer`.
+    AblateAttention { layer: usize },
+    /// Zero out the SwiGLU MLP residual contribution of `layer`.
+    AblateMlp { layer: usize },
+}
+
+/// Output logits and per-layer post-block hidden states captured during one forward step.
+#[derive(Debug, Clone)]
+pub struct ForwardTrace {
+    pub logits: Vec<f64>,
+    pub layer_hidden: Vec<Vec<f64>>,
+}
+
 /// Quantitative comparison of a transformed model against a dense reference model on identical tokens.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InferenceComparison {
@@ -759,6 +779,20 @@ impl QCoreModel {
         position: usize,
         cache: &mut KvCache,
     ) -> Result<Vec<f64>, RuntimeError> {
+        Ok(self
+            .forward_token_with_trace(token_id, position, cache, None)?
+            .logits)
+    }
+
+    /// Execute one autoregressive forward step while capturing post-block hidden states
+    /// for every transformer layer and optionally applying a reversible [`LayerIntervention`].
+    pub fn forward_token_with_trace(
+        &self,
+        token_id: usize,
+        position: usize,
+        cache: &mut KvCache,
+        intervention: Option<LayerIntervention>,
+    ) -> Result<ForwardTrace, RuntimeError> {
         if token_id >= self.config.vocab_size {
             return Err(RuntimeError::TokenOutOfRange {
                 token: token_id,
@@ -777,6 +811,7 @@ impl QCoreModel {
         let scale = 1.0 / (head_dim as f64).sqrt();
 
         let mut hidden = self.embed_tokens.decode_row(token_id)?;
+        let mut layer_hidden = Vec::with_capacity(self.layers.len());
 
         for (layer_idx, block) in self.layers.iter().enumerate() {
             // Pre-attention RMSNorm
@@ -829,25 +864,51 @@ impl QCoreModel {
                 }
             }
 
-            // Output projection + residual connection
-            let proj_out = block.o_proj.matvec(&attn_out)?;
-            for (h_val, p_val) in hidden.iter_mut().zip(proj_out) {
-                *h_val += p_val;
+            // Output projection + residual connection (optional reversible attention ablation)
+            let ablate_attn = matches!(
+                intervention,
+                Some(LayerIntervention::AblateAttention { layer }) if layer == layer_idx
+            );
+            if !ablate_attn {
+                let proj_out = block.o_proj.matvec(&attn_out)?;
+                for (h_val, p_val) in hidden.iter_mut().zip(proj_out) {
+                    *h_val += p_val;
+                }
             }
 
-            // Post-attention RMSNorm + SwiGLU MLP + residual connection
-            let mlp_in = rms_norm(&hidden, &block.post_attn_norm, self.config.rms_norm_eps);
-            let gate = block.gate_proj.matvec(&mlp_in)?;
-            let up = block.up_proj.matvec(&mlp_in)?;
-            let activated: Vec<f64> = gate.iter().zip(up).map(|(&g, u)| silu(g) * u).collect();
-            let mlp_out = block.down_proj.matvec(&activated)?;
-            for (h_val, m_val) in hidden.iter_mut().zip(mlp_out) {
-                *h_val += m_val;
+            // Post-attention RMSNorm + SwiGLU MLP + residual connection (optional reversible MLP ablation)
+            let ablate_mlp = matches!(
+                intervention,
+                Some(LayerIntervention::AblateMlp { layer }) if layer == layer_idx
+            );
+            if !ablate_mlp {
+                let mlp_in = rms_norm(&hidden, &block.post_attn_norm, self.config.rms_norm_eps);
+                let gate = block.gate_proj.matvec(&mlp_in)?;
+                let up = block.up_proj.matvec(&mlp_in)?;
+                let activated: Vec<f64> = gate.iter().zip(up).map(|(&g, u)| silu(g) * u).collect();
+                let mlp_out = block.down_proj.matvec(&activated)?;
+                for (h_val, m_val) in hidden.iter_mut().zip(mlp_out) {
+                    *h_val += m_val;
+                }
             }
+
+            if let Some(LayerIntervention::ScaleResidual { layer, scale: s }) = intervention
+                && layer == layer_idx
+            {
+                for h_val in &mut hidden {
+                    *h_val *= s;
+                }
+            }
+
+            layer_hidden.push(hidden.clone());
         }
 
         let final_hidden = rms_norm(&hidden, &self.final_norm, self.config.rms_norm_eps);
-        Ok(self.lm_head.matvec(&final_hidden)?)
+        let logits = self.lm_head.matvec(&final_hidden)?;
+        Ok(ForwardTrace {
+            logits,
+            layer_hidden,
+        })
     }
 
     /// Generate `max_new_tokens` autoregressively using greedy (`temperature <= 0.0`) or sampled decoding.

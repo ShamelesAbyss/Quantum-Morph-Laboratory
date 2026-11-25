@@ -42,12 +42,13 @@ pub enum NavTab {
     QGenesis,
     QmfExplorer,
     QCore,
+    QBehavior,
     Benchmarks,
     SystemObservatory,
 }
 
 impl NavTab {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::CommandCenter,
         Self::ModelLibrary,
         Self::QScope,
@@ -56,6 +57,7 @@ impl NavTab {
         Self::QGenesis,
         Self::QmfExplorer,
         Self::QCore,
+        Self::QBehavior,
         Self::Benchmarks,
         Self::SystemObservatory,
     ];
@@ -70,6 +72,7 @@ impl NavTab {
             Self::QGenesis => "Q-Genesis Lab",
             Self::QmfExplorer => "QMF Explorer",
             Self::QCore => "Q-Core Inference",
+            Self::QBehavior => "Q-Behavior Observatory",
             Self::Benchmarks => "Benchmarks & RMQ",
             Self::SystemObservatory => "System Observatory",
         }
@@ -85,6 +88,7 @@ impl NavTab {
             Self::QGenesis => "GEN",
             Self::QmfExplorer => "QMF",
             Self::QCore => "COR",
+            Self::QBehavior => "BHV",
             Self::Benchmarks => "BMK",
             Self::SystemObservatory => "SYS",
         }
@@ -189,6 +193,11 @@ pub struct QmlDesktopApp {
     pub infer_output_text: String,
     pub infer_stats: Option<(usize, f64, f64)>,
     pub infer_fidelity: Option<qml_runtime::InferenceComparison>,
+
+    // Q-Behavior Observatory state
+    pub behavior_intervention_layer: usize,
+    pub behavior_report: Option<qml_behavior::BehaviorComparisonReport>,
+    pub intervention_report: Option<qml_behavior::InterventionReport>,
 
     // Benchmarks / RMQ Ablation state
     pub ablation_layers: usize,
@@ -300,6 +309,10 @@ impl QmlDesktopApp {
             infer_output_text: String::new(),
             infer_stats: None,
             infer_fidelity: None,
+
+            behavior_intervention_layer: 0,
+            behavior_report: None,
+            intervention_report: None,
 
             ablation_layers: 8,
             ablation_dim: 64,
@@ -566,20 +579,7 @@ impl QmlDesktopApp {
                         let budget = PayloadBudget::default();
                         let mut st =
                             SafetensorsFile::open(file, &budget).map_err(|e| e.to_string())?;
-                        let names: Vec<String> = st
-                            .metadata()
-                            .tensors
-                            .iter()
-                            .filter(|t| {
-                                t.shape.len() == 2
-                                    && t.shape[0] > 0
-                                    && t.shape[1] > 0
-                                    && t.shape[0] <= 2048
-                                    && t.shape[1] <= 2048
-                            })
-                            .take(6)
-                            .map(|t| t.name.clone())
-                            .collect();
+                        let names = qml_genesis::select_stratified_tensor_names(st.metadata(), 21);
                         let mut loaded = Vec::new();
                         for name in names {
                             let m = st
@@ -823,6 +823,136 @@ impl QmlDesktopApp {
         });
     }
 
+    pub fn start_behavior_compare_job(&mut self, ctx: egui::Context) {
+        if self.is_busy() {
+            return;
+        }
+        let ref_path = PathBuf::from(self.infer_compare_qmf_path.trim());
+        let cand_path = PathBuf::from(self.infer_qmf_path.trim());
+        let cfg_path = PathBuf::from(self.infer_config_path.trim());
+        let tok_path = PathBuf::from(self.infer_tokenizer_path.trim());
+        if !ref_path.is_file() || !cand_path.is_file() || !cfg_path.is_file() || !tok_path.is_file()
+        {
+            self.log(
+                "Q-Behavior: select Reference QMF, Candidate QMF, config.json, and tokenizer.json.",
+            );
+            return;
+        }
+        let prompt = self.infer_prompt.clone();
+        let backend = if self.infer_use_gpu {
+            qml_runtime::QCoreBackend::GpuHybrid
+        } else {
+            qml_runtime::QCoreBackend::Cpu
+        };
+        let (tx, rx) = mpsc::channel();
+        self.worker_rx = Some(rx);
+        self.busy_label = Some("Q-Behavior capturing layer activations & RSA...".to_owned());
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(move || {
+            let run = || -> Result<qml_behavior::BehaviorComparisonReport, String> {
+                let cfg = TransformerConfig::from_hf_config_bytes(
+                    &fs::read(&cfg_path).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let tok = BpeTokenizer::from_file(&tok_path).map_err(|e| e.to_string())?;
+                let seq: Vec<usize> = tok
+                    .encode(&prompt)
+                    .into_iter()
+                    .map(|id| id as usize)
+                    .collect();
+                let mut ref_r = QmfFileReader::open(
+                    File::open(&ref_path).map_err(|e| e.to_string())?,
+                    &QmfBudget::default(),
+                )
+                .map_err(|e| e.to_string())?;
+                let ref_m =
+                    QCoreModel::from_qmf_reader_with_backend(&mut ref_r, cfg.clone(), backend)
+                        .map_err(|e| e.to_string())?;
+                let mut cand_r = QmfFileReader::open(
+                    File::open(&cand_path).map_err(|e| e.to_string())?,
+                    &QmfBudget::default(),
+                )
+                .map_err(|e| e.to_string())?;
+                let cand_m = QCoreModel::from_qmf_reader_with_backend(&mut cand_r, cfg, backend)
+                    .map_err(|e| e.to_string())?;
+                qml_behavior::compare_model_behavior(&ref_m, &cand_m, &seq)
+                    .map_err(|e| e.to_string())
+            };
+            match run() {
+                Ok(rep) => {
+                    let _ = tx.send(WorkerEvent::BehaviorComplete(Box::new(rep)));
+                }
+                Err(err) => {
+                    let _ = tx.send(WorkerEvent::Error(format!("Q-Behavior failed: {err}")));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn start_intervention_job(
+        &mut self,
+        ctx: egui::Context,
+        intervention: qml_runtime::LayerIntervention,
+    ) {
+        if self.is_busy() {
+            return;
+        }
+        let qmf_path = PathBuf::from(self.infer_qmf_path.trim());
+        let cfg_path = PathBuf::from(self.infer_config_path.trim());
+        let tok_path = PathBuf::from(self.infer_tokenizer_path.trim());
+        if !qmf_path.is_file() || !cfg_path.is_file() || !tok_path.is_file() {
+            self.log("Q-Behavior: select Model QMF, config.json, and tokenizer.json.");
+            return;
+        }
+        let prompt = self.infer_prompt.clone();
+        let backend = if self.infer_use_gpu {
+            qml_runtime::QCoreBackend::GpuHybrid
+        } else {
+            qml_runtime::QCoreBackend::Cpu
+        };
+        let (tx, rx) = mpsc::channel();
+        self.worker_rx = Some(rx);
+        self.busy_label = Some(format!("Q-Behavior running reversible {intervention:?}..."));
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        std::thread::spawn(move || {
+            let run = || -> Result<qml_behavior::InterventionReport, String> {
+                let cfg = TransformerConfig::from_hf_config_bytes(
+                    &fs::read(&cfg_path).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let tok = BpeTokenizer::from_file(&tok_path).map_err(|e| e.to_string())?;
+                let seq: Vec<usize> = tok
+                    .encode(&prompt)
+                    .into_iter()
+                    .map(|id| id as usize)
+                    .collect();
+                let mut r = QmfFileReader::open(
+                    File::open(&qmf_path).map_err(|e| e.to_string())?,
+                    &QmfBudget::default(),
+                )
+                .map_err(|e| e.to_string())?;
+                let m = QCoreModel::from_qmf_reader_with_backend(&mut r, cfg, backend)
+                    .map_err(|e| e.to_string())?;
+                qml_behavior::run_intervention_study(&m, &seq, intervention)
+                    .map_err(|e| e.to_string())
+            };
+            match run() {
+                Ok(rep) => {
+                    let _ = tx.send(WorkerEvent::InterventionComplete(Box::new(rep)));
+                }
+                Err(err) => {
+                    let _ = tx.send(WorkerEvent::Error(format!(
+                        "Q-Behavior intervention failed: {err}"
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     pub fn start_gpu_selftest(&mut self, ctx: egui::Context) {
         if self.is_busy() {
             return;
@@ -1047,6 +1177,31 @@ impl QmlDesktopApp {
                     clear_rx = true;
                     self.log(msg);
                 }
+                WorkerEvent::BehaviorComplete(rep) => {
+                    let msg = format!(
+                        "Q-Behavior complete: {} layers analyzed, peak drift L{} (relL2={:.4}), Mean KL={:.5}.",
+                        rep.num_layers,
+                        rep.peak_divergence_layer,
+                        rep.peak_rel_l2_divergence,
+                        rep.mean_logit_kl_divergence
+                    );
+                    self.behavior_report = Some(*rep);
+                    self.busy_label = None;
+                    clear_rx = true;
+                    self.log(msg);
+                }
+                WorkerEvent::InterventionComplete(rep) => {
+                    let msg = format!(
+                        "Q-Behavior intervention {:?}: Mean KL={:.5}, Top-1 Flip={:.1}%.",
+                        rep.intervention,
+                        rep.mean_logit_kl_divergence,
+                        rep.top1_flip_rate * 100.0
+                    );
+                    self.intervention_report = Some(*rep);
+                    self.busy_label = None;
+                    clear_rx = true;
+                    self.log(msg);
+                }
                 WorkerEvent::Error(err) => {
                     self.busy_label = None;
                     clear_rx = true;
@@ -1236,6 +1391,7 @@ impl eframe::App for QmlDesktopApp {
                         NavTab::QGenesis => views::show_qgenesis(self, ui, ctx),
                         NavTab::QmfExplorer => views::show_qmf_explorer(self, ui),
                         NavTab::QCore => views::show_qcore(self, ui, ctx),
+                        NavTab::QBehavior => views::show_qbehavior(self, ui, ctx),
                         NavTab::Benchmarks => views::show_benchmarks(self, ui, ctx),
                         NavTab::SystemObservatory => views::show_system_observatory(self, ui, ctx),
                     });

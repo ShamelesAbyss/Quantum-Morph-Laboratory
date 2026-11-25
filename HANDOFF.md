@@ -5,8 +5,8 @@
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **PROJECT SINGULARITY — `v0.1.0-alpha.1` Complete (Audit Remediation, Pure-Rust BPE Tokenizer, Real SmolLM2-135M Validation, Rayon CPU Parallelism, WGPU Compute Prototype, and Native Windows Desktop Laboratory `qml-desktop`)**.
-- The workspace now contains **12 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
+- Active takeover milestone: **PROJECT TRANSCENDENCE (`v0.2.0-alpha.2`) Complete — Out-of-Core Streaming QMF, Atomic Publication, GGUF Payload Decoding, Persistent GPU-Resident Compressed Q-Core (`SmolLM2-360M` 20.97 tok/s on RTX 4070), Q-Behavior Mechanistic Observatory, and Scalable Q-Genesis with Genome-to-QMF Export**.
+- The workspace now contains **13 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-behavior`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
 - **License:** Officially licensed under the **MIT License** ([LICENSE](LICENSE), approved by repository owner). All 12 workspace crates inherit `license.workspace = true`.
 
 ## Implemented capabilities

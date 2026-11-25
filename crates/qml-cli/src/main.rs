@@ -65,6 +65,7 @@ fn main() -> ExitCode {
         Some("compare") => run_compare(args.collect()),
         Some("infer-demo") => run_infer_demo(args.collect()),
         Some("generate") => run_generate(args.collect()),
+        Some("behavior") => run_behavior_cmd(args.collect()),
         Some("genesis") => run_genesis_cmd(args.collect()),
         Some("help" | "--help" | "-h") if args.next().is_none() => {
             println!("{HELP}");
@@ -1259,6 +1260,9 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
     let mut synthetic = false;
     let mut path: Option<PathBuf> = None;
     let mut archive_out: Option<PathBuf> = None;
+    let mut export_qmf: Option<PathBuf> = None;
+    let mut profile = qml_genesis::GenesisProfile::Balanced;
+    let mut max_matrices: usize = 21;
     let mut cfg = GenesisConfig::default();
 
     let mut i = 0;
@@ -1284,6 +1288,33 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
                     return ExitCode::from(2);
                 };
                 cfg.generations = v;
+                i += 2;
+            }
+            "--max-matrices" => {
+                let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) else {
+                    return ExitCode::from(2);
+                };
+                max_matrices = v;
+                i += 2;
+            }
+            "--profile" => {
+                profile = match args.get(i + 1).map(String::as_str) {
+                    Some("balanced") => qml_genesis::GenesisProfile::Balanced,
+                    Some("smallest") => qml_genesis::GenesisProfile::Smallest,
+                    Some("quality") => qml_genesis::GenesisProfile::BestQuality,
+                    Some("fastest") => qml_genesis::GenesisProfile::Fastest,
+                    other => {
+                        eprintln!("unknown genesis profile: {other:?}");
+                        return ExitCode::from(2);
+                    }
+                };
+                i += 2;
+            }
+            "--export-qmf" => {
+                let Some(p) = args.get(i + 1) else {
+                    return ExitCode::from(2);
+                };
+                export_qmf = Some(PathBuf::from(p));
                 i += 2;
             }
             "--archive" => {
@@ -1346,8 +1377,8 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
                 )
             })
             .collect()
-    } else if let Some(path) = path {
-        let file = match File::open(&path) {
+    } else if let Some(ref path) = path {
+        let file = match File::open(path) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("could not open {}: {e}", path.display());
@@ -1362,14 +1393,7 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let names: Vec<String> = st
-            .metadata()
-            .tensors
-            .iter()
-            .filter(|t| t.shape.len() == 2 && t.shape[0] > 0 && t.shape[1] > 0)
-            .take(8)
-            .map(|t| t.name.clone())
-            .collect();
+        let names = qml_genesis::select_stratified_tensor_names(st.metadata(), max_matrices);
         let mut loaded = Vec::new();
         for name in names {
             match st.read_tensor_matrix(&name, &budget) {
@@ -1383,7 +1407,7 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
         loaded
     } else {
         eprintln!(
-            "usage: qml genesis [--json] [--population P] [--generations G] [--archive OUT.json] [--synthetic | PATH]"
+            "usage: qml genesis [--json] [--population P] [--generations G] [--max-matrices M] [--profile balanced|smallest|quality|fastest] [--export-qmf OUT.qmf] [--archive OUT.json] [--synthetic | PATH]"
         );
         return ExitCode::from(2);
     };
@@ -1398,6 +1422,54 @@ fn run_genesis_cmd(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if let (Some(qmf_out), Some(src_path)) = (export_qmf, path.as_ref())
+        && let Some(winner) = archive.select_best(profile)
+    {
+        let src_file = match File::open(src_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("could not reopen {} for export: {e}", src_path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let model_id = src_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("genesis-model");
+        match qml_genesis::export_genome_to_qmf_v1(
+            src_file,
+            model_id,
+            "see-source-model-license",
+            "safetensors",
+            &archive.layer_names,
+            &winner.genes,
+            &PayloadBudget::default(),
+            cfg.seed,
+        ) {
+            Ok(qmf) => {
+                if let Err(e) =
+                    qmf.write_to_file_atomic(&qmf_out, Some(src_path), &QmfBudget::default())
+                {
+                    eprintln!("failed publishing Q-Genesis QMF artifact: {e}");
+                    return ExitCode::FAILURE;
+                }
+                if !json {
+                    println!(
+                        "Exported {} winner (ID {}, {:.3} bpp) -> {}",
+                        profile.label(),
+                        winner.id,
+                        winner.fitness.effective_bpp,
+                        qmf_out.display()
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("failed exporting genome to QMF v1: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     if let Some(out_path) = archive_out {
         if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -1713,4 +1785,180 @@ fn run_generate(args: Vec<String>) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn run_behavior_cmd(args: Vec<String>) -> ExitCode {
+    let mut json = false;
+    let mut ref_qmf: Option<PathBuf> = None;
+    let mut cand_qmf: Option<PathBuf> = None;
+    let mut cfg_path: Option<PathBuf> = None;
+    let mut tok_path: Option<PathBuf> = None;
+    let mut prompt = String::from("Explain singular value decomposition in two sentences.");
+    let mut intervention: Option<qml_runtime::LayerIntervention> = None;
+    let mut backend = qml_runtime::QCoreBackend::Cpu;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json = true,
+            "--config" => {
+                i += 1;
+                cfg_path = args.get(i).map(PathBuf::from);
+            }
+            "--tokenizer" => {
+                i += 1;
+                tok_path = args.get(i).map(PathBuf::from);
+            }
+            "--prompt" => {
+                i += 1;
+                if let Some(p) = args.get(i) {
+                    prompt = p.clone();
+                }
+            }
+            "--backend" => {
+                i += 1;
+                if let Some("gpu") = args.get(i).map(String::as_str) {
+                    backend = qml_runtime::QCoreBackend::GpuHybrid;
+                }
+            }
+            "--ablate-mlp" => {
+                i += 1;
+                if let Some(l) = args.get(i).and_then(|s| s.parse().ok()) {
+                    intervention = Some(qml_runtime::LayerIntervention::AblateMlp { layer: l });
+                }
+            }
+            "--ablate-attn" => {
+                i += 1;
+                if let Some(l) = args.get(i).and_then(|s| s.parse().ok()) {
+                    intervention =
+                        Some(qml_runtime::LayerIntervention::AblateAttention { layer: l });
+                }
+            }
+            s if !s.starts_with("--") && ref_qmf.is_none() => ref_qmf = Some(PathBuf::from(s)),
+            s if !s.starts_with("--") && cand_qmf.is_none() => cand_qmf = Some(PathBuf::from(s)),
+            other => {
+                eprintln!("unknown option for behavior: {other}");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(ref_p), Some(cfg_p), Some(tok_p)) = (ref_qmf, cfg_path, tok_path) else {
+        eprintln!(
+            "usage: qml behavior REF.qmf [CAND.qmf] --config config.json --tokenizer tokenizer.json [--prompt TEXT] [--ablate-mlp L | --ablate-attn L] [--backend cpu|gpu] [--json]"
+        );
+        return ExitCode::from(2);
+    };
+
+    let cfg_bytes = match fs::read(&cfg_p) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("could not read {}: {e}", cfg_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let cfg = match TransformerConfig::from_hf_config_bytes(&cfg_bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("invalid config.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tokenizer = match BpeTokenizer::from_file(&tok_p) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("could not load tokenizer {}: {e}", tok_p.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let prompt_ids: Vec<usize> = tokenizer
+        .encode(&prompt)
+        .into_iter()
+        .map(|id| id as usize)
+        .collect();
+
+    let load_model = |p: &PathBuf| -> Result<QCoreModel, String> {
+        let f = File::open(p).map_err(|e| e.to_string())?;
+        let mut r = QmfFileReader::open(f, &QmfBudget::default()).map_err(|e| e.to_string())?;
+        QCoreModel::from_qmf_reader_with_backend(&mut r, cfg.clone(), backend)
+            .map_err(|e| e.to_string())
+    };
+    let ref_model = match load_model(&ref_p) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("could not load reference model: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(intv) = intervention {
+        match qml_behavior::run_intervention_study(&ref_model, &prompt_ids, intv) {
+            Ok(rep) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+                } else {
+                    println!("Q-Behavior Reversible Causal Intervention Study");
+                    println!("  Intervention: {:?}", rep.intervention);
+                    println!(
+                        "  Tokens: {} | Mean Logit KL: {:.5} | Top-1 Flip Rate: {:.1}%",
+                        rep.sequence_len,
+                        rep.mean_logit_kl_divergence,
+                        rep.top1_flip_rate * 100.0
+                    );
+                }
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("Q-Behavior intervention failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    let Some(cand_p) = cand_qmf else {
+        eprintln!("provide CAND.qmf for comparison or --ablate-mlp/--ablate-attn for intervention");
+        return ExitCode::from(2);
+    };
+    let cand_model = match load_model(&cand_p) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("could not load candidate model: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match qml_behavior::compare_model_behavior(&ref_model, &cand_model, &prompt_ids) {
+        Ok(rep) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rep).unwrap());
+            } else {
+                println!("Q-Behavior Layer-by-Layer Activation & RSA Report");
+                println!(
+                    "  Tokens: {} | Layers: {} | Peak Drift Layer: {} (Rel L2={:.4}) | Final Cos={:.4} | Mean KL={:.5} | Top-1={:.1}%",
+                    rep.sequence_len,
+                    rep.num_layers,
+                    rep.peak_divergence_layer,
+                    rep.peak_rel_l2_divergence,
+                    rep.final_layer_cosine,
+                    rep.mean_logit_kl_divergence,
+                    rep.top1_token_agreement * 100.0
+                );
+                for l in &rep.layers {
+                    println!(
+                        "  L{:02}: cos={:.4} (min {:.4}) | relL2={:.4} | RSA={:.4}",
+                        l.layer_index,
+                        l.mean_cosine_similarity,
+                        l.min_cosine_similarity,
+                        l.mean_rel_l2_divergence,
+                        l.rsa_correlation
+                    );
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("Q-Behavior comparison failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

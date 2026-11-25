@@ -1,0 +1,18 @@
+[package]
+name = "qml-behavior"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+qml-runtime = { path = "../qml-runtime" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+qml-forge = { path = "../qml-forge" }
+qml-model = { path = "../qml-model" }
+qml-quant = { path = "../qml-quant" }
+
+[lints]
+workspace = true

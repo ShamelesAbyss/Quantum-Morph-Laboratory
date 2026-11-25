@@ -1,5 +1,6 @@
 //! Persistent laboratory state, model library discovery, crash logging, and background job messages.
 
+use qml_behavior::{BehaviorComparisonReport, InterventionReport};
 use qml_forge::ForgeReport;
 use qml_format::{QmfBudget, QmfManifest, QmfRankOne};
 use qml_genesis::GenesisArchive;
@@ -336,5 +337,7 @@ pub enum WorkerEvent {
         fidelity: Option<InferenceComparison>,
     },
     GpuSelfTestComplete(GpuSelfTestResult),
+    BehaviorComplete(Box<BehaviorComparisonReport>),
+    InterventionComplete(Box<InterventionReport>),
     Error(String),
 }

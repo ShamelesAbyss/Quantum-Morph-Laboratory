@@ -10,6 +10,7 @@ name = "qml"
 path = "src/main.rs"
 
 [dependencies]
+qml-behavior = { path = "../qml-behavior" }
 qml-core = { path = "../qml-core" }
 qml-forge = { path = "../qml-forge" }
 qml-format = { path = "../qml-format" }

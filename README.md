@@ -3,13 +3,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-1.100%2B%20(2024%20Edition)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
-  <img src="https://img.shields.io/badge/Unsafe%20Code-FORBIDDEN-06B6D4?style=for-the-badge" alt="Zero Unsafe"/>
-  <img src="https://img.shields.io/badge/Python%20Deps-ZERO-0EA5E9?style=for-the-badge" alt="Zero Python"/>
-  <img src="https://img.shields.io/badge/Crates-13%20Modular-8B5CF6?style=for-the-badge" alt="13 Crates"/>
-  <img src="https://img.shields.io/badge/Tests-81%20Passing-10B981?style=for-the-badge" alt="81 Tests"/>
-  <img src="https://img.shields.io/badge/License-MIT-22D3EE?style=for-the-badge" alt="MIT License"/>
-  <img src="https://img.shields.io/badge/Release-v0.3.0--alpha.1%20PRISM-A855F7?style=for-the-badge" alt="PROJECT PRISM"/>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.3.0%20PRISM-A855F7?style=for-the-badge" alt="Latest Public Release v0.3.0"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ShamelesAbyss/Quantum-Morph-Laboratory/ci.yml?branch=main&style=for-the-badge&label=Rust%20CI" alt="CI Status"/></a>
+  <img src="https://img.shields.io/badge/Rust-1.100%2B%20(Safe%20Only)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge" alt="MIT License"/></a>
 </p>
 
 <h3 align="center"><em>Don't just compress intelligence. Transform its representation.</em></h3>
@@ -20,7 +19,28 @@
 
 ---
 
-> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is an active experimental research platform (`v0.3.0-alpha.1 — PROJECT PRISM`), not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, Grassmannian subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. QML has been validated end-to-end on synthetic benchmarks (`exp-001`) and real openly licensed pretrained language models (`HuggingFaceTB/SmolLM2-135M-Instruct` in `exp-002` and `HuggingFaceTB/SmolLM2-360M-Instruct` in `exp-003`, weights stored locally outside Git). Every byte—including scales, zero-points, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported sizes, negative controls are preserved alongside positive results, and every 3D visualization explicitly distinguishes actual measured telemetry from artistic identity or schematic previews.
+## Download Quantum Morph Laboratory (`v0.3.0` — PROJECT PRISM)
+
+Launch the native desktop scientific observatory directly on your computer — **no Rust toolchain, no Python, no terminal, and no cloud account required**.
+
+<p align="center">
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.3.0%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
+  &nbsp;
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
+  &nbsp;
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.3.0%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
+  &nbsp;
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/View%20Latest%20Release-GitHub%20Releases-10B981?style=for-the-badge" alt="View Latest Release"/></a>
+  &nbsp;
+  <a href="ARCHITECTURE.md"><img src="https://img.shields.io/badge/Read%20Documentation-Architecture%20%26%20Guide-6366F1?style=for-the-badge" alt="Read Documentation"/></a>
+</p>
+
+| Download Option | Contents | Direct Link |
+|---|---|---|
+| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.3.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Windows-x64.exe) |
+| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.3.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Windows-x64-Portable.zip) |
+| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.3.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.3.0/Quantum-Morph-Laboratory-v0.3.0-Linux-x64.tar.gz) |
+| **Latest Public Release & Checksums** | Full release notes, `SHA256SUMS.txt`, and all release assets | [View Latest Release (`releases/latest`)](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest) |
 
 ---
 
@@ -63,6 +83,10 @@
 
 ---
 
+> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is active experimental research software (`v0.3.0 — PROJECT PRISM`), not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, Grassmannian subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. QML has been validated end-to-end on synthetic benchmarks (`exp-001`) and real openly licensed pretrained language models (`HuggingFaceTB/SmolLM2-135M-Instruct` in `exp-002` and `HuggingFaceTB/SmolLM2-360M-Instruct` in `exp-003`, weights stored locally outside Git). Every byte—including scales, zero-points, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported sizes, negative controls are preserved alongside positive results, and every 3D visualization explicitly distinguishes actual measured telemetry from artistic identity or schematic previews.
+
+---
+
 ## Architecture & Representation Pipeline
 
 <p align="center">
@@ -85,7 +109,7 @@
 | **Q-Behavior Observatory** | `qml-behavior` | Layer-by-layer hidden activation tracing (`compare_model_behavior`), cosine similarity, relative L2 drift, **Representational Similarity Analysis (RSA)**, peak drift detection, and strictly runtime-only reversible causal ablations (`run_intervention_study`: `ScaleResidual`, `AblateAttention`, `AblateMlp`) | Experimental & verified |
 | **Q-Genesis** | `qml-genesis` | Multi-objective NSGA-II evolutionary search with role/depth-stratified sampling (`select_stratified_tensor_names`), user profiles (`Balanced`, `Smallest`, `BestQuality`, `Fastest`), and direct **Genome-to-QMF v1 export** (`export_genome_to_qmf_v1`) | Experimental & tested |
 | **Laboratory CLI** | `qml-cli` | 14 commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `generate`, `behavior`, `genesis`, `demo-rank1`) with text and `--json` output | Implemented & tested |
-| **Native Desktop App** | `qml-desktop` | **PROJECT PRISM** native WGPU 3D scientific observatory (`eframe`/`egui` + `wgpu 24` + 7 custom WGSL shaders + `Rgba16Float` HDR selective bloom + 3D ray picking) across **11 real-engine views**: Command Center, Model Library, Q-Scope 3D Anatomy, Q-Entangle Constellation, Q-Forge Morphogenesis, Q-Genesis Crucible, QMF Explorer, Q-Core Inference (with Zen Mode), Q-Behavior Observatory, RMQ Benchmarks, and System Observatory | `v0.3.0-alpha.1` |
+| **Native Desktop App** | `qml-desktop` | **PROJECT PRISM** native WGPU 3D scientific observatory (`eframe`/`egui` + `wgpu 24` + 7 custom WGSL shaders + `Rgba16Float` HDR selective bloom + 3D ray picking) across **11 real-engine views**: Command Center, Model Library, Q-Scope 3D Anatomy, Q-Entangle Constellation, Q-Forge Morphogenesis, Q-Genesis Crucible, QMF Explorer, Q-Core Inference (with Zen Mode), Q-Behavior Observatory, RMQ Benchmarks, and System Observatory | `v0.3.0` |
 
 ---
 
@@ -144,9 +168,9 @@ All figures below were measured directly from `qml.exe --release` and archived i
 
 ---
 
-## Quick Start — Build, Test & Run
+## Building from Source (Optional)
 
-Requires only a stable Rust toolchain (`rustc` / `cargo`). Zero Python, zero cloud accounts, zero mandatory GPU drivers (automatic 2.5D CPU fallback if no WGPU adapter is present).
+Prebuilt executables are available on the [Releases page](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest). To build from source, only a stable Rust toolchain (`rustc` / `cargo`) is required (zero Python):
 
 ```sh
 # Format, strict Clippy lint, full test suite (81 tests across 13 crates), and release build
@@ -195,7 +219,7 @@ See [BUILD.md](BUILD.md) for `cargo-deny` policy checks and CI workflow details.
 
 ## License
 
-Quantum Morph Laboratory is licensed under the **[MIT License](LICENSE)** (Copyright © 2026 ShamelesAbyss). Third-party Rust crate dependency licenses and advisories are continuously verified by `cargo-deny` in CI ([`deny.toml`](deny.toml)). Prebuilt Windows and Linux release binaries with SHA-256 checksums are published on the [GitHub Releases](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases) page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)).
+Quantum Morph Laboratory is licensed under the **[MIT License](LICENSE)** (Copyright © 2026 ShamelesAbyss). Third-party Rust crate dependency licenses and advisories are continuously verified by `cargo-deny` in CI ([`deny.toml`](deny.toml)). Prebuilt Windows and Linux release binaries with SHA-256 checksums are published on the [GitHub Releases](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest) page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)).
 
 ---
 

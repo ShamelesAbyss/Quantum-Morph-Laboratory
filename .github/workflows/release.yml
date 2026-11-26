@@ -7,65 +7,89 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v0.1.0-alpha.1)'
+        description: 'Release tag name (e.g. v0.3.0)'
         required: true
         type: string
+      prerelease:
+        description: 'Mark as prerelease (ONLY set true when explicitly requested by repository owner)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
-    name: Build Windows x86_64 Release
+    name: Validate & Build Windows x64 Release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Determine release tag
         shell: pwsh
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           echo "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Validate formatting, lint, and tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
       - name: Build qml-desktop and qml-cli (release)
         run: cargo build --release -p qml-desktop -p qml-cli
-      - name: Package Windows artifacts and SHA-256 checksums
+      - name: Package Windows x64 executable, portable ZIP, and SHA-256 checksums
         shell: pwsh
         run: |
           $tag = $env:RELEASE_TAG
           $stage = "dist/windows"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          $pkgDir = "$stage/qml-$tag-windows-x86_64"
+          $pkgDir = "$stage/Quantum-Morph-Laboratory-$tag-Windows-x64-Portable"
           New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+
           Copy-Item "target/release/qml-desktop.exe" "$pkgDir/qml-desktop.exe"
           Copy-Item "target/release/qml.exe" "$pkgDir/qml.exe"
           Copy-Item "LICENSE" "$pkgDir/LICENSE"
           Copy-Item "README.md" "$pkgDir/README.md"
           Copy-Item "RELEASE_NOTES.md" "$pkgDir/RELEASE_NOTES.md"
+          Copy-Item "ARCHITECTURE.md" "$pkgDir/ARCHITECTURE.md"
+          Copy-Item "SECURITY.md" "$pkgDir/SECURITY.md"
+          Copy-Item "CHANGELOG.md" "$pkgDir/CHANGELOG.md"
 
-          $zipName = "quantum-morph-laboratory-$tag-windows-x86_64.zip"
-          Compress-Archive -Path "$pkgDir/*" -DestinationPath "$stage/$zipName" -Force
-          $exeName = "qml-desktop-$tag-windows-x86_64.exe"
+          $exeName = "Quantum-Morph-Laboratory-$tag-Windows-x64.exe"
+          $zipName = "Quantum-Morph-Laboratory-$tag-Windows-x64-Portable.zip"
+
           Copy-Item "target/release/qml-desktop.exe" "$stage/$exeName"
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "$stage/$zipName" -Force
 
-          $sumFile = "$stage/SHA256SUMS-windows-x86_64.txt"
+          # Verify packaged executables exist and CLI executes cleanly
+          if (-not (Test-Path "$stage/$exeName")) { throw "Missing $exeName" }
+          if (-not (Test-Path "$stage/$zipName")) { throw "Missing $zipName" }
+          & "$pkgDir/qml.exe" --version
+
+          $sumFile = "$stage/SHA256SUMS-windows.txt"
           @(
-            "$((Get-FileHash "$stage/$zipName" -Algorithm SHA256).Hash.ToLower())  $zipName",
-            "$((Get-FileHash "$stage/$exeName" -Algorithm SHA256).Hash.ToLower())  $exeName"
-          ) | Set-Content -Path $sumFile -Encoding utf8
+            "$((Get-FileHash "$stage/$exeName" -Algorithm SHA256).Hash.ToLower())  $exeName",
+            "$((Get-FileHash "$stage/$zipName" -Algorithm SHA256).Hash.ToLower())  $zipName"
+          ) | Set-Content -Path $sumFile -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: release-windows-x86_64
+          name: release-windows-x64
           path: |
-            dist/windows/*.zip
             dist/windows/*.exe
-            dist/windows/SHA256SUMS-windows-x86_64.txt
+            dist/windows/*.zip
+            dist/windows/SHA256SUMS-windows.txt
 
   build-linux:
-    name: Build Linux x86_64 Release
+    name: Validate & Build Linux x64 Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Determine release tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -73,56 +97,92 @@ jobs:
           else
             echo "RELEASE_TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
           fi
+      - name: Validate formatting, lint, and tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
       - name: Build qml-desktop and qml-cli (release)
         run: cargo build --release -p qml-desktop -p qml-cli
-      - name: Package Linux artifacts and SHA-256 checksums
+      - name: Package Linux x64 tarball and SHA-256 checksums
         run: |
           TAG="${RELEASE_TAG}"
-          mkdir -p "dist/linux/qml-${TAG}-linux-x86_64"
-          cp target/release/qml-desktop "dist/linux/qml-${TAG}-linux-x86_64/qml-desktop"
-          cp target/release/qml "dist/linux/qml-${TAG}-linux-x86_64/qml"
-          cp LICENSE README.md RELEASE_NOTES.md "dist/linux/qml-${TAG}-linux-x86_64/"
-          TAR_NAME="quantum-morph-laboratory-${TAG}-linux-x86_64.tar.gz"
-          tar -C dist/linux -czf "dist/linux/${TAR_NAME}" "qml-${TAG}-linux-x86_64"
-          (cd dist/linux && sha256sum "${TAR_NAME}" > SHA256SUMS-linux-x86_64.txt)
+          PKG_DIR="dist/linux/Quantum-Morph-Laboratory-${TAG}-Linux-x64"
+          mkdir -p "${PKG_DIR}"
+          cp target/release/qml-desktop "${PKG_DIR}/qml-desktop"
+          cp target/release/qml "${PKG_DIR}/qml"
+          cp LICENSE README.md RELEASE_NOTES.md ARCHITECTURE.md SECURITY.md CHANGELOG.md "${PKG_DIR}/"
+          "${PKG_DIR}/qml" --version
+          TAR_NAME="Quantum-Morph-Laboratory-${TAG}-Linux-x64.tar.gz"
+          tar -C dist/linux -czf "dist/linux/${TAR_NAME}" "Quantum-Morph-Laboratory-${TAG}-Linux-x64"
+          (cd dist/linux && sha256sum "${TAR_NAME}" > SHA256SUMS-linux.txt)
       - uses: actions/upload-artifact@v4
         with:
-          name: release-linux-x86_64
+          name: release-linux-x64
           path: |
             dist/linux/*.tar.gz
-            dist/linux/SHA256SUMS-linux-x86_64.txt
+            dist/linux/SHA256SUMS-linux.txt
 
   publish-release:
-    name: Publish GitHub Release
+    name: Publish Public GitHub Release
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Determine release tag
+      - name: Determine release metadata
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "RELEASE_TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+            TAG="${{ inputs.tag }}"
+            IS_PRE="${{ inputs.prerelease }}"
           else
-            echo "RELEASE_TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
+            TAG="${{ github.ref_name }}"
+            IS_PRE="false"
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=${IS_PRE}" >> "$GITHUB_ENV"
+
+          # Extract release title from first Markdown heading in RELEASE_NOTES.md
+          FIRST_HEADING=$(grep -m 1 '^# ' RELEASE_NOTES.md | sed 's/^# //' || true)
+          if [ -n "${FIRST_HEADING}" ]; then
+            echo "RELEASE_TITLE=${FIRST_HEADING}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TITLE=Quantum Morph Laboratory ${TAG}" >> "$GITHUB_ENV"
           fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Merge SHA-256 checksums
+      - name: Merge and verify SHA-256 checksums
         run: |
-          cat dist/SHA256SUMS-windows-x86_64.txt dist/SHA256SUMS-linux-x86_64.txt > dist/SHA256SUMS.txt
-          rm -f dist/SHA256SUMS-windows-x86_64.txt dist/SHA256SUMS-linux-x86_64.txt
+          cat dist/SHA256SUMS-windows.txt dist/SHA256SUMS-linux.txt > dist/SHA256SUMS.txt
+          rm -f dist/SHA256SUMS-windows.txt dist/SHA256SUMS-linux.txt
+          ls -lh dist/
           cat dist/SHA256SUMS.txt
-      - name: Publish Release with Assets
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+      - name: Verify all mandatory release assets are present
+        run: |
+          TAG="${RELEASE_TAG}"
+          for f in \
+            "dist/Quantum-Morph-Laboratory-${TAG}-Windows-x64.exe" \
+            "dist/Quantum-Morph-Laboratory-${TAG}-Windows-x64-Portable.zip" \
+            "dist/Quantum-Morph-Laboratory-${TAG}-Linux-x64.tar.gz" \
+            "dist/SHA256SUMS.txt"; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: Required release asset missing or empty: $f"
+              exit 1
+            fi
+          done
+      - name: Publish Public GitHub Release with Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Quantum Morph Laboratory ${{ env.RELEASE_TAG }} — PROJECT SINGULARITY"
+          name: ${{ env.RELEASE_TITLE }}
           body_path: RELEASE_NOTES.md
-          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          draft: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          make_latest: ${{ env.IS_PRERELEASE == 'true' && 'false' || 'true' }}
           files: |
-            dist/*.zip
-            dist/*.exe
-            dist/*.tar.gz
+            dist/Quantum-Morph-Laboratory-*-Windows-x64.exe
+            dist/Quantum-Morph-Laboratory-*-Windows-x64-Portable.zip
+            dist/Quantum-Morph-Laboratory-*-Linux-x64.tar.gz
             dist/SHA256SUMS.txt

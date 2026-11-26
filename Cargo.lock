@@ -2387,7 +2387,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qml-behavior"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-forge",
  "qml-model",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "qml-cli"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-behavior",
  "qml-core",
@@ -2417,11 +2417,11 @@ dependencies = [
 
 [[package]]
 name = "qml-core"
-version = "0.1.0"
+version = "0.3.0"
 
 [[package]]
 name = "qml-desktop"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "qml-forge"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-format",
@@ -2458,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "qml-format"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-model",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "qml-genesis"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-format",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "qml-hardware"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -2494,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "qml-model"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "qml-core",
@@ -2505,7 +2505,7 @@ dependencies = [
 
 [[package]]
 name = "qml-quant"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-model",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "qml-runtime"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-forge",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "qml-scope"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "qml-core",
  "qml-model",
@@ -2538,7 +2538,7 @@ dependencies = [
 
 [[package]]
 name = "qml-tokenizer"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",

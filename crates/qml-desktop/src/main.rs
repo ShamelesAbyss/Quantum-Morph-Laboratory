@@ -303,7 +303,7 @@ impl QmlDesktopApp {
                 "Laboratory online — PRISM WGPU 3D Observatory ready (models opened strictly read-only)."
                     .to_owned(),
             activity_log: vec![
-                "Quantum Morph Laboratory v0.3.0-alpha.1 (PROJECT PRISM) initialized."
+                "Quantum Morph Laboratory v0.3.0 (PROJECT PRISM) initialized."
                     .to_owned(),
             ],
             busy_label: None,
@@ -1528,7 +1528,7 @@ impl eframe::App for QmlDesktopApp {
                                 .size(13.5)
                                 .strong(),
                         );
-                        theme::pill_badge(ui, "v0.3.0-alpha.1 PRISM", theme::ULTRAVIOLET);
+                        theme::pill_badge(ui, "v0.3.0 PRISM", theme::ULTRAVIOLET);
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let gpu_label = self
@@ -1792,7 +1792,7 @@ fn main() -> eframe::Result<()> {
     install_crash_logger();
     append_log_line(
         "INFO",
-        "Launching qml-desktop v0.3.0-alpha.1 (PROJECT PRISM — WGPU 3D Renderer).",
+        "Launching qml-desktop v0.3.0 (PROJECT PRISM — WGPU 3D Renderer).",
     );
     let launch = parse_launch_options();
 

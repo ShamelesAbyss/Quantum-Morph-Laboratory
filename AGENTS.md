@@ -16,7 +16,16 @@ QML is a local-first computational research laboratory, not a chatbot or a thin 
 - Evaluate every dependency for purpose, license, security status, maintenance, and transitive Python independence. Keep `Cargo.lock` checked in. Test-only oracles must remain dev dependencies.
 - The repository is licensed under the **MIT License** (`LICENSE`, approved by the repository owner); respect all third-party dependency licenses verified via `cargo-deny`.
 - **Permanent Memorial Dedication:** The memorial dedication to **Ashlan Haley Rapponotti** at the end of `README.md` must remain intact throughout all future documentation updates, repository reorganizations, and releases. Never remove, alter, or relocate it.
-- **Releases:** Update `RELEASE_NOTES.md` with clear, detailed release notes for each milestone push and publish versioned `v*` GitHub Releases via `.github/workflows/release.yml`.
+- **Permanent Public Release Distribution Policy (MANDATORY):**
+  - All future user-facing application releases **must** be published as full, visible public GitHub Releases (`draft: false`, `prerelease: false`, `make_latest: true`) with compiled downloadable assets, comprehensive `RELEASE_NOTES.md`, and prominent download links near the top of `README.md`.
+  - Use clean semantic version numbers (`v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`, etc.). Do **not** automatically classify development milestones as prereleases. Only use `alpha`, `beta`, or `prerelease: true` when explicitly authorized by the repository owner.
+  - Experimental maturity must always be accurately and honestly documented inside `RELEASE_NOTES.md` and `README.md`; never confuse public binary distribution with a claim of production maturity.
+  - Every public application release **must** include all four compiled/verified assets:
+    - `Quantum-Morph-Laboratory-<version>-Windows-x64.exe` (standalone native desktop app; launches directly without Rust, Cargo, Python, or a terminal)
+    - `Quantum-Morph-Laboratory-<version>-Windows-x64-Portable.zip` (desktop app, CLI, docs, and `LICENSE`)
+    - `Quantum-Morph-Laboratory-<version>-Linux-x64.tar.gz` (desktop app, CLI, docs, and `LICENSE`)
+    - `SHA256SUMS.txt` (verified against all published assets)
+  - A Git tag is **not** a completed application release. A successful CI build is **not** a completed application release. An uploaded GitHub Actions artifact is **not** a completed application release. A source-code archive is **not** a completed application release. A release is complete **only** when ordinary users can visit the GitHub repository homepage, see the latest public release, and directly download the verified compiled application from the public GitHub Release page.
 
 ## Architecture and coding conventions
 

@@ -6,7 +6,8 @@
 - Development branch: `main` only.
 - Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM, 2560×1440 144 Hz display).
 - Local pretrained model cache (NEVER commit to Git): `C:\Users\Shame\.gemini\antigravity\scratch\qml-models-cache` (`smollm2-135m` and `smollm2-360m`).
-- Latest completed milestone: **PROJECT PRISM (`v0.3.0-alpha.1`) — Native Multi-Pass WGPU 3D Scientific Observatory**.
+- Latest completed milestone: **PROJECT PRISM (`v0.3.0`) — Public Native Multi-Pass WGPU 3D Scientific Observatory & Corrected Public Release Distribution**.
+- **Permanent Release Distribution Policy:** All user-facing releases use clean semantic versions (`v0.3.0`, `v0.3.1`, `v0.4.0`, ...) and MUST be published as full, visible public GitHub Releases (`draft: false`, `prerelease: false`, `make_latest: true`) with all 4 compiled assets (`Quantum-Morph-Laboratory-<tag>-Windows-x64.exe`, `Quantum-Morph-Laboratory-<tag>-Windows-x64-Portable.zip`, `Quantum-Morph-Laboratory-<tag>-Linux-x64.tar.gz`, `SHA256SUMS.txt`), full `RELEASE_NOTES.md`, and prominent `README.md` download links. Prereleases are strictly opt-in when explicitly requested by the repository owner. A Git tag, CI build, Actions artifact, or source archive alone is NEVER a completed release.
 - The workspace contains **13 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-behavior`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
 - **License:** MIT ([LICENSE](LICENSE)). All workspace crates inherit `license.workspace = true`.
 - **Permanent Memorial Dedication:** The memorial dedication to Ashlan Haley Rapponotti at the end of `README.md` MUST be preserved verbatim across all future updates and releases.

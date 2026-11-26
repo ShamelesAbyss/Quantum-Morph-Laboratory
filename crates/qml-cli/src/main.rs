@@ -1592,12 +1592,26 @@ fn run_generate(args: Vec<String>) -> ExitCode {
     let mut temperature: f64 = 0.0;
     let mut use_chat = false;
     let mut backend = qml_runtime::QCoreBackend::Cpu;
+    let mut kv_mode = qml_runtime::KvCacheMode::Fp64;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json = true,
             "--chat" => use_chat = true,
+            "--kv-cache" => {
+                i += 1;
+                match args.get(i).map(String::as_str) {
+                    Some("int8") => kv_mode = qml_runtime::KvCacheMode::Int8,
+                    Some("fp32") | Some("fp64") | Some("full") => {
+                        kv_mode = qml_runtime::KvCacheMode::Fp64;
+                    }
+                    other => {
+                        eprintln!("invalid --kv-cache value: {other:?} (expected fp32 or int8)");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "--backend" => {
                 i += 1;
                 match args.get(i).map(String::as_str) {
@@ -1739,11 +1753,12 @@ fn run_generate(args: Vec<String>) -> ExitCode {
     }
 
     let mut stream_dec = tokenizer.streaming_decoder(true);
-    let generation = match model.generate_with_callback(
+    let generation = match model.generate_with_kv_mode(
         &prompt_ids,
         max_tokens,
         temperature,
         eos,
+        kv_mode,
         42,
         |tok_id| {
             if !json {
@@ -2054,6 +2069,8 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
     let mut include_vq = false;
     let mut include_echo = true;
     let mut calibrate = false;
+    let mut streaming_ref = false;
+    let mut kv_mode = qml_runtime::KvCacheMode::Fp64;
     let mut json = false;
 
     let mut i = 0;
@@ -2064,6 +2081,14 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             "--with-vq" => include_vq = true,
             "--no-echo" => include_echo = false,
             "--calibrate" => calibrate = true,
+            "--streaming-ref" => streaming_ref = true,
+            "--kv-cache" => {
+                i += 1;
+                match args.get(i).map(String::as_str) {
+                    Some("int8") => kv_mode = qml_runtime::KvCacheMode::Int8,
+                    _ => kv_mode = qml_runtime::KvCacheMode::Fp64,
+                }
+            }
             "--model" => {
                 i += 1;
                 model_path = args.get(i).map(PathBuf::from);
@@ -2165,6 +2190,39 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                         codebook_size: 256,
                         num_stages: 1,
                         group_size: 64,
+                        hadamard_block: 64,
+                    },
+                ),
+                "rvq-200" => (
+                    "RVQ2_D8_G128".to_owned(),
+                    Some(2.13),
+                    TransformStrategy::VectorQuant {
+                        subvec_dim: 8,
+                        codebook_size: 256,
+                        num_stages: 2,
+                        group_size: 128,
+                        hadamard_block: 64,
+                    },
+                ),
+                "rvq-175" => (
+                    "RVQ2_D10_G128".to_owned(),
+                    Some(1.73),
+                    TransformStrategy::VectorQuant {
+                        subvec_dim: 10,
+                        codebook_size: 256,
+                        num_stages: 2,
+                        group_size: 128,
+                        hadamard_block: 64,
+                    },
+                ),
+                "rvq-150" => (
+                    "RVQ2_D12_G128".to_owned(),
+                    Some(1.46),
+                    TransformStrategy::VectorQuant {
+                        subvec_dim: 12,
+                        codebook_size: 256,
+                        num_stages: 2,
+                        group_size: 128,
                         hadamard_block: 64,
                     },
                 ),
@@ -2377,7 +2435,130 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         .unwrap_or_else(|| std::env::temp_dir().join("qml-resonance-ladder"));
     let _ = fs::create_dir_all(&work_dir);
 
-    let (ref_cache, cal_profile) = {
+    // Disjoint multi-domain calibration corpus (strictly separate from held-out eval prompts!)
+    let cal_texts = [
+        "Modern operating systems schedule threads across multiple processor cores while isolating virtual address spaces through hierarchical page tables.",
+        "In numerical linear algebra, Cholesky factorization decomposes a symmetric positive-definite matrix into a lower triangular factor and its transpose.",
+        "def quicksort(arr): return arr if len(arr) <= 1 else quicksort([x for x in arr[1:] if x <= arr[0]]) + [arr[0]] + quicksort([x for x in arr[1:] if x > arr[0]])",
+        "Photosynthesis converts light energy into chemical energy inside chloroplasts, fixing atmospheric carbon dioxide into glucose molecules.",
+        "When designing distributed databases, consensus algorithms such as Raft elect a leader to replicate a deterministic state-machine log across nodes.",
+        "Calculate the area of a right triangle with legs of length 9 cm and 12 cm: area equals one-half times 9 times 12, which is 54 square centimeters.",
+    ];
+    let cal_seqs: Vec<Vec<usize>> = cal_texts
+        .iter()
+        .map(|t| tok.encode(t).into_iter().map(|id| id as usize).collect())
+        .collect();
+    let eval_seqs: Vec<Vec<usize>> = examples.iter().map(|ex| ex.tokens.clone()).collect();
+
+    // Auto-enable layer-by-layer streaming calibration/reference when source exceeds 6.5 GiB (7B–32B on 8 GB GPUs!)
+    let source_bytes = qml_model::SafetensorsSource::open(&model_p, &budget)
+        .map(|s| s.metadata().file_bytes)
+        .unwrap_or(0);
+    let use_streaming_ref =
+        streaming_ref || (ref_qmf_path.is_none() && source_bytes > 6_500_000_000);
+
+    let ref_cache_file = work_dir.join("_ref_logits.qref");
+    let cal_cache_file = work_dir.join("_cal_profile.qcal");
+
+    let (ref_cache, cal_profile) = if out_dir.is_some()
+        && ref_cache_file.exists()
+        && (!calibrate || cal_cache_file.exists())
+    {
+        if !json {
+            eprintln!(
+                "  [cache] Loading cached BF16 reference logits ({}) & calibration ({})...",
+                ref_cache_file.display(),
+                if calibrate {
+                    cal_cache_file.display().to_string()
+                } else {
+                    "disabled".to_owned()
+                }
+            );
+        }
+        let rcache = match qml_behavior::ReferenceSuiteCache::load_from_file(
+            &ref_cache_file,
+            examples.clone(),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("failed loading cached reference logits: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let cal = if calibrate {
+            match qml_quant::ModelCalibrationProfile::load_from_file(&cal_cache_file) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("failed loading cached calibration profile: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            None
+        };
+        (rcache, cal)
+    } else if use_streaming_ref {
+        if !json {
+            eprintln!(
+                "  [stream] Source is {:.2} GiB — running Layer-by-Layer Streaming BF16 Calibration & Reference Eval (<1 GiB VRAM)...",
+                source_bytes as f64 / 1_073_741_824.0
+            );
+        }
+        let use_gpu = backend != qml_runtime::QCoreBackend::Cpu;
+        let streamed = match qml_runtime::stream_calibrate_and_reference(
+            &model_p,
+            "streaming-ref",
+            &cfg,
+            if calibrate { &cal_seqs } else { &[] },
+            &eval_seqs,
+            qml_quant::DEFAULT_HESSIAN_BLOCK_SIZE,
+            use_gpu,
+            &budget,
+            |cur, tot, stage| {
+                if !json && (cur == 1 || cur == tot || cur % 4 == 0) {
+                    eprintln!("    [{cur:02}/{tot:02}] {stage}");
+                }
+            },
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("streaming BF16 calibration/reference failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if !json {
+            eprintln!(
+                "  [stream] Done in {:.1}s | Peak layer VRAM={:.1} MiB ({}) | Cal tokens={} ({:.1} MiB Hessians)",
+                streamed.elapsed_secs,
+                streamed.peak_layer_vram_bytes as f64 / 1_048_576.0,
+                if streamed.used_gpu {
+                    "WGPU BF16"
+                } else {
+                    "Rayon CPU"
+                },
+                streamed.calibration.calibration_tokens,
+                streamed.calibration.memory_bytes() as f64 / 1_048_576.0
+            );
+        }
+        let rcache = qml_behavior::ReferenceSuiteCache::from_precomputed(
+            examples.clone(),
+            streamed.eval_logits,
+        );
+        if out_dir.is_some() {
+            let _ = rcache.save_to_file(&ref_cache_file);
+            if calibrate {
+                let _ = streamed.calibration.save_to_file(&cal_cache_file);
+            }
+        }
+        (
+            rcache,
+            if calibrate {
+                Some(streamed.calibration)
+            } else {
+                None
+            },
+        )
+    } else {
         let ref_model = if let Some(ref_p) = ref_qmf_path {
             let f = match File::open(&ref_p) {
                 Ok(f) => f,
@@ -2442,20 +2623,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             }
         };
 
-        // Disjoint multi-domain calibration corpus (strictly separate from held-out eval prompts!)
         let cal = if calibrate {
-            let cal_texts = [
-                "Modern operating systems schedule threads across multiple processor cores while isolating virtual address spaces through hierarchical page tables.",
-                "In numerical linear algebra, Cholesky factorization decomposes a symmetric positive-definite matrix into a lower triangular factor and its transpose.",
-                "def quicksort(arr): return arr if len(arr) <= 1 else quicksort([x for x in arr[1:] if x <= arr[0]]) + [arr[0]] + quicksort([x for x in arr[1:] if x > arr[0]])",
-                "Photosynthesis converts light energy into chemical energy inside chloroplasts, fixing atmospheric carbon dioxide into glucose molecules.",
-                "When designing distributed databases, consensus algorithms such as Raft elect a leader to replicate a deterministic state-machine log across nodes.",
-                "Calculate the area of a right triangle with legs of length 9 cm and 12 cm: area equals one-half times 9 times 12, which is 54 square centimeters.",
-            ];
-            let cal_seqs: Vec<Vec<usize>> = cal_texts
-                .iter()
-                .map(|t| tok.encode(t).into_iter().map(|id| id as usize).collect())
-                .collect();
             let t_cal = std::time::Instant::now();
             match ref_model.collect_calibration_profile("calibration", &cal_seqs) {
                 Ok(p) => {
@@ -2468,6 +2636,9 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                             t_cal.elapsed().as_secs_f64()
                         );
                     }
+                    if out_dir.is_some() {
+                        let _ = p.save_to_file(&cal_cache_file);
+                    }
                     Some(p)
                 }
                 Err(e) => {
@@ -2478,6 +2649,9 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         } else {
             None
         };
+        if out_dir.is_some() {
+            let _ = rcache.save_to_file(&ref_cache_file);
+        }
         // `ref_model` drops right here, freeing 100% of VRAM before candidate runs!
         (rcache, cal)
     };
@@ -2537,7 +2711,9 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         let dt = t0.elapsed().as_secs_f64().max(1e-6);
         let n_tok: usize = suite.categories.iter().map(|c| c.token_count).sum();
 
-        let gen_res = cand_model.generate(&sample_ids, 20, 0.0, 42).ok();
+        let gen_res = cand_model
+            .generate_with_kv_mode(&sample_ids, 20, 0.0, None, kv_mode, 42, |_| true)
+            .ok();
         let gen_new: Vec<u32> = gen_res
             .as_ref()
             .map(|res| res.generated_tokens.iter().map(|&id| id as u32).collect())

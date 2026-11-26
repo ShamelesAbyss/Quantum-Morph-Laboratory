@@ -17,9 +17,9 @@ use qml_quant::{
     ModelCalibrationProfile, ResonanceCandidateKind, ResonanceProfile, RmqResidualKind,
     RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, TernaryPackedMatrix,
     VectorQuantMatrix, allocate_from_profiles, allocate_resonance_map_b,
-    deterministic_probe_vectors, evaluate_operator, fit_echo_calibrated, profile_layer_for_map,
-    profile_tensor_for_resonance_calibrated, quantize_int2_gptq, quantize_int3_gptq,
-    quantize_int4_sym_gptq, quantize_ternary_gptq,
+    deterministic_probe_vectors, evaluate_operator, fit_echo_calibrated, fit_vq_calibrated,
+    profile_layer_for_map, profile_tensor_for_resonance_calibrated, quantize_int2_gptq,
+    quantize_int3_gptq, quantize_int4_sym_gptq, quantize_ternary_gptq,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
 use serde::{Deserialize, Serialize};
@@ -750,22 +750,34 @@ fn forge_source_internal<S: TensorStreamSource>(
                             *hadamard_block,
                             seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
                         );
-                        let op = VectorQuantMatrix::fit(
-                            &mat,
-                            *subvec_dim,
-                            *codebook_size,
-                            *num_stages,
-                            *group_size,
-                            had,
-                            seed.wrapping_add(idx as u64),
-                        )?;
-                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            fit_vq_calibrated(
+                                &mat,
+                                *subvec_dim,
+                                *codebook_size,
+                                *num_stages,
+                                *group_size,
+                                had,
+                                stats,
+                                seed.wrapping_add(idx as u64),
+                            )?
+                        } else {
+                            VectorQuantMatrix::fit(
+                                &mat,
+                                *subvec_dim,
+                                *codebook_size,
+                                *num_stages,
+                                *group_size,
+                                had,
+                                seed.wrapping_add(idx as u64),
+                            )?
+                        };
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_vector_quant(info.name.clone(), &op)?;
-                        (
-                            op.method_name().to_owned(),
-                            ev.relative_frobenius_error,
-                            ev.mean_matvec_rel_error,
-                        )
+                        (op.method_name().to_owned(), mv, mv)
                     }
                     TransformStrategy::Int2Echo {
                         group_size,
@@ -1358,15 +1370,19 @@ fn forge_source_internal<S: TensorStreamSource>(
                             } else {
                                 256
                             };
-                            let op = VectorQuantMatrix::fit(
-                                &mat,
-                                8,
-                                cb_k,
-                                1,
-                                64,
-                                had,
-                                seed + idx as u64,
-                            )?;
+                            let op = if let Some(s) = cal_stats {
+                                fit_vq_calibrated(&mat, 8, cb_k, 1, 64, had, s, seed + idx as u64)?
+                            } else {
+                                VectorQuantMatrix::fit(
+                                    &mat,
+                                    8,
+                                    cb_k,
+                                    1,
+                                    64,
+                                    had,
+                                    seed + idx as u64,
+                                )?
+                            };
                             builder.add_vector_quant(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }

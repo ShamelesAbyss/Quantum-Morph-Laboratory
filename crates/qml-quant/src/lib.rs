@@ -17,7 +17,7 @@ pub use baselines::{
 };
 pub use gptq::{
     DEFAULT_HESSIAN_BLOCK_SIZE, LayerCalibrationAccumulator, LayerCalibrationStats,
-    ModelCalibrationProfile, activation_output_rel_error, fit_echo_calibrated,
+    ModelCalibrationProfile, activation_output_rel_error, fit_echo_calibrated, fit_vq_calibrated,
     fit_weighted_affine_group, quantize_int2_gptq, quantize_int3_gptq, quantize_int4_sym_gptq,
     quantize_ternary_gptq, rotate_hessian_block_hadamard,
 };

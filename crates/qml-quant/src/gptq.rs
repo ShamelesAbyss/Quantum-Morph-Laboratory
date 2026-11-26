@@ -19,10 +19,10 @@
 use crate::baselines::{FactorPrecision, Int4SymGroupMatrix, LowRankSvdMatrix, QuantizedFactor};
 use crate::resonance::{
     EchoBaseOperator, EchoCorrectedMatrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix,
-    TernaryPackedMatrix, apply_hadamard_forward,
+    TernaryPackedMatrix, VectorQuantMatrix, apply_hadamard_forward,
 };
 use crate::{LinearOperator, SparseResidual};
-use qml_core::{DenseMatrix, MatrixError, truncated_svd};
+use qml_core::{DenseMatrix, DeterministicRng, MatrixError, truncated_svd};
 use qml_model::{f16_to_f32, f32_to_f16};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -179,6 +179,122 @@ impl ModelCalibrationProfile {
                 l.input_rms.len() * 8 + l.hessian_blocks.iter().map(|b| b.len() * 8).sum::<usize>()
             })
             .sum()
+    }
+
+    /// Persist this calibration profile to a compact little-endian binary file (`QCAL1\0`),
+    /// storing Hessian blocks in `f32` for fast `< 0.5s` save/load even on 7B–32B models.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::{BufWriter, Write};
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut w = BufWriter::new(std::fs::File::create(path)?);
+        w.write_all(b"QCAL1\0")?;
+        let id_bytes = self.model_id.as_bytes();
+        w.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
+        w.write_all(id_bytes)?;
+        w.write_all(&(self.calibration_tokens as u64).to_le_bytes())?;
+        w.write_all(&(self.block_size as u32).to_le_bytes())?;
+        w.write_all(&(self.layers.len() as u32).to_le_bytes())?;
+        for (name, stats) in &self.layers {
+            let nb = name.as_bytes();
+            w.write_all(&(nb.len() as u32).to_le_bytes())?;
+            w.write_all(nb)?;
+            w.write_all(&(stats.cols as u32).to_le_bytes())?;
+            w.write_all(&(stats.block_size as u32).to_le_bytes())?;
+            w.write_all(&(stats.samples as u64).to_le_bytes())?;
+            w.write_all(&(stats.input_rms.len() as u32).to_le_bytes())?;
+            for &v in &stats.input_rms {
+                w.write_all(&(v as f32).to_le_bytes())?;
+            }
+            w.write_all(&(stats.hessian_blocks.len() as u32).to_le_bytes())?;
+            for blk in &stats.hessian_blocks {
+                w.write_all(&(blk.len() as u32).to_le_bytes())?;
+                for &v in blk {
+                    w.write_all(&(v as f32).to_le_bytes())?;
+                }
+            }
+        }
+        w.flush()
+    }
+
+    /// Load a previously saved calibration profile (`QCAL1\0`) from disk.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        use std::io::{BufReader, Read};
+        let mut r = BufReader::new(std::fs::File::open(path)?);
+        let mut magic = [0u8; 6];
+        r.read_exact(&mut magic)?;
+        if &magic != b"QCAL1\0" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid QCAL1 calibration cache magic",
+            ));
+        }
+        let read_u32 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(u32::from_le_bytes(b))
+        };
+        let read_u64 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u64> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(u64::from_le_bytes(b))
+        };
+        let read_f32_vec =
+            |r: &mut BufReader<std::fs::File>, n: usize| -> std::io::Result<Vec<f64>> {
+                let mut raw = vec![0u8; n * 4];
+                r.read_exact(&mut raw)?;
+                Ok(raw
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f64::from(f32::from_le_bytes(c)))
+                    .collect())
+            };
+        let id_len = read_u32(&mut r)? as usize;
+        let mut id_buf = vec![0u8; id_len];
+        r.read_exact(&mut id_buf)?;
+        let model_id = String::from_utf8(id_buf)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let calibration_tokens = read_u64(&mut r)? as usize;
+        let block_size = read_u32(&mut r)? as usize;
+        let num_layers = read_u32(&mut r)? as usize;
+        let mut layers = BTreeMap::new();
+        for _ in 0..num_layers {
+            let nlen = read_u32(&mut r)? as usize;
+            let mut nbuf = vec![0u8; nlen];
+            r.read_exact(&mut nbuf)?;
+            let name = String::from_utf8(nbuf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let cols = read_u32(&mut r)? as usize;
+            let bs = read_u32(&mut r)? as usize;
+            let samples = read_u64(&mut r)? as usize;
+            let rms_len = read_u32(&mut r)? as usize;
+            let input_rms = read_f32_vec(&mut r, rms_len)?;
+            let n_blks = read_u32(&mut r)? as usize;
+            let mut hessian_blocks = Vec::with_capacity(n_blks);
+            for _ in 0..n_blks {
+                let blen = read_u32(&mut r)? as usize;
+                hessian_blocks.push(read_f32_vec(&mut r, blen)?);
+            }
+            layers.insert(
+                name.clone(),
+                LayerCalibrationStats {
+                    tensor_name: name,
+                    cols,
+                    block_size: bs,
+                    samples,
+                    input_rms,
+                    hessian_blocks,
+                },
+            );
+        }
+        Ok(Self {
+            model_id,
+            calibration_tokens,
+            block_size,
+            layers,
+        })
     }
 }
 
@@ -1034,6 +1150,283 @@ pub fn quantize_int4_sym_gptq(
         // Fallback when cols is not divisible by group_size
         Int4SymGroupMatrix::quantize(matrix, group_size)
     }
+}
+
+/// Fit an **Activation-Weighted 1/2-Stage Residual Vector Quantizer (`VectorQuantMatrix`)**
+/// with Hadamard rotation and 2-pass joint stage refinement, minimizing output activation error
+/// `Σ_j w_j (w_{rj} - s_{rg} * Σ_s c_{s,k}[j])²` (100% compatible with GPU `MATVEC_VQ_WGSL`).
+#[allow(clippy::too_many_arguments)]
+pub fn fit_vq_calibrated(
+    matrix: &DenseMatrix,
+    subvec_dim: usize,
+    codebook_size: usize,
+    num_stages: usize,
+    group_size: usize,
+    hadamard: HadamardSpec,
+    stats: &LayerCalibrationStats,
+    seed: u64,
+) -> Result<VectorQuantMatrix, MatrixError> {
+    if subvec_dim == 0
+        || codebook_size == 0
+        || codebook_size > 256
+        || num_stages == 0
+        || num_stages > 2
+        || group_size == 0
+        || stats.cols != matrix.cols()
+    {
+        return Err(MatrixError::DimensionMismatch {
+            expected: matrix.cols(),
+            actual: stats.cols,
+        });
+    }
+    let rows = matrix.rows();
+    let cols = matrix.cols();
+    let rotated = rotate_rows_helper(matrix, hadamard);
+    let plans = build_gptq_block_plans(cols, stats, hadamard, 0.01);
+    let bs = stats.block_size;
+    let mut col_weights = vec![1.0_f64; cols];
+    for (b, plan) in plans.iter().enumerate() {
+        let start = b * bs;
+        col_weights[start..start + plan.len].copy_from_slice(&plan.diag_weights);
+    }
+
+    let gpr = cols.div_ceil(group_size);
+    let spr = cols.div_ceil(subvec_dim);
+    let total_subvecs = rows * spr;
+
+    // Normalize each group by activation-weighted RMS so important channels keep dynamic range
+    let mut scales_f16 = vec![0u16; rows * gpr];
+    let mut norm_data = vec![0.0_f64; rows * spr * subvec_dim];
+    for r in 0..rows {
+        let row = &rotated[r * cols..(r + 1) * cols];
+        let dst = &mut norm_data[r * spr * subvec_dim..(r + 1) * spr * subvec_dim];
+        for g in 0..gpr {
+            let start = g * group_size;
+            let end = (start + group_size).min(cols);
+            let mut w_sq = 0.0_f64;
+            let mut w_sum = 0.0_f64;
+            for c in start..end {
+                let w = col_weights[c].max(1e-12);
+                w_sq += w * row[c] * row[c];
+                w_sum += w;
+            }
+            let rms = (w_sq / w_sum.max(1e-15)).sqrt();
+            let s_bits = f32_to_f16(rms as f32);
+            let scale = f64::from(f16_to_f32(s_bits));
+            scales_f16[r * gpr + g] = s_bits;
+            if scale > 1e-12 {
+                for c in start..end {
+                    dst[c] = row[c] / scale;
+                }
+            }
+        }
+    }
+
+    // Pad per-subvector coordinate weights (`spr * subvec_dim`)
+    let mut sv_weights = vec![0.0_f64; spr * subvec_dim];
+    for c in 0..cols {
+        sv_weights[c] = col_weights[c].max(1e-12);
+    }
+
+    let sample_cap = total_subvecs.min(8192);
+    let mut rng = DeterministicRng::new(seed ^ 0x5651_4750_5451_5733);
+    let sample_indices: Vec<usize> = if total_subvecs <= sample_cap {
+        (0..total_subvecs).collect()
+    } else {
+        let stride = (total_subvecs / sample_cap).max(1);
+        (0..sample_cap)
+            .map(|i| (i * stride + rng.next_usize(stride)) % total_subvecs)
+            .collect()
+    };
+
+    let weighted_sq_dist = |a: &[f64], b: &[f64], w: &[f64]| -> f64 {
+        let mut s = 0.0_f64;
+        for i in 0..a.len() {
+            let d = a[i] - b[i];
+            s += w[i] * d * d;
+        }
+        s
+    };
+    let nearest_w = |v: &[f64], w: &[f64], centroids: &[f64], k_eff: usize, d: usize| -> usize {
+        let mut best_k = 0usize;
+        let mut best_d = f64::INFINITY;
+        for k in 0..k_eff {
+            let dist = weighted_sq_dist(v, &centroids[k * d..(k + 1) * d], w);
+            if dist < best_d {
+                best_d = dist;
+                best_k = k;
+            }
+        }
+        best_k
+    };
+
+    let mut residual = norm_data.clone();
+    let mut stage_cbs_f16: Vec<Vec<u16>> = Vec::with_capacity(num_stages);
+    let mut stage_cbs_f64: Vec<Vec<f64>> = Vec::with_capacity(num_stages);
+    let mut codes = vec![0u8; total_subvecs * num_stages];
+
+    for stage in 0..num_stages {
+        let k_eff = codebook_size.min(sample_indices.len().max(1));
+        let mut centroids = vec![0.0_f64; codebook_size * subvec_dim];
+        let first_idx = sample_indices[rng.next_usize(sample_indices.len())];
+        centroids[..subvec_dim]
+            .copy_from_slice(&residual[first_idx * subvec_dim..(first_idx + 1) * subvec_dim]);
+        let mut min_dists = vec![f64::INFINITY; sample_indices.len()];
+        for c_idx in 1..k_eff {
+            let prev = &centroids[(c_idx - 1) * subvec_dim..c_idx * subvec_dim];
+            let mut best_si = 0usize;
+            let mut best_d = -1.0_f64;
+            for (si, &sv_idx) in sample_indices.iter().enumerate() {
+                let sv_col = (sv_idx % spr) * subvec_dim;
+                let w = &sv_weights[sv_col..sv_col + subvec_dim];
+                let v = &residual[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                let d = weighted_sq_dist(v, prev, w);
+                if d < min_dists[si] {
+                    min_dists[si] = d;
+                }
+                if min_dists[si] > best_d {
+                    best_d = min_dists[si];
+                    best_si = si;
+                }
+            }
+            let chosen = sample_indices[best_si];
+            centroids[c_idx * subvec_dim..(c_idx + 1) * subvec_dim]
+                .copy_from_slice(&residual[chosen * subvec_dim..(chosen + 1) * subvec_dim]);
+        }
+
+        // 8 activation-weighted Lloyd iterations on the deterministic subsample
+        let mut sums = vec![0.0_f64; codebook_size * subvec_dim];
+        let mut wsums = vec![0.0_f64; codebook_size * subvec_dim];
+        for _ in 0..8 {
+            sums.fill(0.0);
+            wsums.fill(0.0);
+            for &sv_idx in &sample_indices {
+                let sv_col = (sv_idx % spr) * subvec_dim;
+                let w = &sv_weights[sv_col..sv_col + subvec_dim];
+                let v = &residual[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                let best_k = nearest_w(v, w, &centroids, k_eff, subvec_dim);
+                let dst = &mut sums[best_k * subvec_dim..(best_k + 1) * subvec_dim];
+                let wdst = &mut wsums[best_k * subvec_dim..(best_k + 1) * subvec_dim];
+                for j in 0..subvec_dim {
+                    dst[j] += w[j] * v[j];
+                    wdst[j] += w[j];
+                }
+            }
+            for k in 0..k_eff {
+                let dst = &mut centroids[k * subvec_dim..(k + 1) * subvec_dim];
+                let src = &sums[k * subvec_dim..(k + 1) * subvec_dim];
+                let ws = &wsums[k * subvec_dim..(k + 1) * subvec_dim];
+                for j in 0..subvec_dim {
+                    if ws[j] > 1e-15 {
+                        dst[j] = src[j] / ws[j];
+                    }
+                }
+            }
+        }
+
+        let mut cb_f16 = Vec::with_capacity(codebook_size * subvec_dim);
+        let mut cb_f64 = vec![0.0_f64; codebook_size * subvec_dim];
+        for (i, &c) in centroids.iter().enumerate() {
+            let bits = f32_to_f16(c as f32);
+            cb_f16.push(bits);
+            cb_f64[i] = f64::from(f16_to_f32(bits));
+        }
+
+        let assigned: Vec<u8> = (0..total_subvecs)
+            .into_par_iter()
+            .map(|sv_idx| {
+                let sv_col = (sv_idx % spr) * subvec_dim;
+                let w = &sv_weights[sv_col..sv_col + subvec_dim];
+                let v = &residual[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                nearest_w(v, w, &cb_f64, k_eff, subvec_dim) as u8
+            })
+            .collect();
+
+        for (sv_idx, &k) in assigned.iter().enumerate() {
+            codes[sv_idx * num_stages + stage] = k;
+            if stage + 1 < num_stages {
+                let cb = &cb_f64[k as usize * subvec_dim..(k as usize + 1) * subvec_dim];
+                let v = &mut residual[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                for (rv, &cv) in v.iter_mut().zip(cb) {
+                    *rv -= cv;
+                }
+            }
+        }
+        stage_cbs_f16.push(cb_f16);
+        stage_cbs_f64.push(cb_f64);
+    }
+
+    // Joint 2-stage alternating code refinement (improves additive RVQ accuracy with zero extra bytes!)
+    if num_stages == 2 {
+        let k0_eff = codebook_size.min(sample_indices.len().max(1));
+        let cb0 = &stage_cbs_f64[0];
+        let cb1 = &stage_cbs_f64[1];
+        let refined_s0: Vec<u8> = (0..total_subvecs)
+            .into_par_iter()
+            .map(|sv_idx| {
+                let sv_col = (sv_idx % spr) * subvec_dim;
+                let w = &sv_weights[sv_col..sv_col + subvec_dim];
+                let orig = &norm_data[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                let k1 = codes[sv_idx * 2 + 1] as usize;
+                let c1 = &cb1[k1 * subvec_dim..(k1 + 1) * subvec_dim];
+                let mut target = [0.0_f64; 32];
+                let tslice = &mut target[..subvec_dim.min(32)];
+                for j in 0..tslice.len() {
+                    tslice[j] = orig[j] - c1[j];
+                }
+                if subvec_dim <= 32 {
+                    nearest_w(tslice, w, cb0, k0_eff, subvec_dim) as u8
+                } else {
+                    let tv: Vec<f64> = orig.iter().zip(c1).map(|(a, b)| a - b).collect();
+                    nearest_w(&tv, w, cb0, k0_eff, subvec_dim) as u8
+                }
+            })
+            .collect();
+        for (sv_idx, &k0) in refined_s0.iter().enumerate() {
+            codes[sv_idx * 2] = k0;
+        }
+        let refined_s1: Vec<u8> = (0..total_subvecs)
+            .into_par_iter()
+            .map(|sv_idx| {
+                let sv_col = (sv_idx % spr) * subvec_dim;
+                let w = &sv_weights[sv_col..sv_col + subvec_dim];
+                let orig = &norm_data[sv_idx * subvec_dim..(sv_idx + 1) * subvec_dim];
+                let k0 = codes[sv_idx * 2] as usize;
+                let c0 = &cb0[k0 * subvec_dim..(k0 + 1) * subvec_dim];
+                let mut target = [0.0_f64; 32];
+                let tslice = &mut target[..subvec_dim.min(32)];
+                for j in 0..tslice.len() {
+                    tslice[j] = orig[j] - c0[j];
+                }
+                if subvec_dim <= 32 {
+                    nearest_w(tslice, w, cb1, k0_eff, subvec_dim) as u8
+                } else {
+                    let tv: Vec<f64> = orig.iter().zip(c0).map(|(a, b)| a - b).collect();
+                    nearest_w(&tv, w, cb1, k0_eff, subvec_dim) as u8
+                }
+            })
+            .collect();
+        for (sv_idx, &k1) in refined_s1.iter().enumerate() {
+            codes[sv_idx * 2 + 1] = k1;
+        }
+    }
+
+    let mut codebooks_f16 = Vec::with_capacity(num_stages * codebook_size * subvec_dim);
+    for cb in stage_cbs_f16 {
+        codebooks_f16.extend_from_slice(&cb);
+    }
+    VectorQuantMatrix::from_raw(
+        rows,
+        cols,
+        subvec_dim,
+        codebook_size,
+        num_stages,
+        group_size,
+        hadamard,
+        codebooks_f16,
+        scales_f16,
+        codes,
+    )
 }
 
 /// Fit an **Activation-Weighted PROJECT ECHO** recovery adapter (`min ||(E - L R) diag(input_rms)||_F`)

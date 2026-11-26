@@ -7,13 +7,15 @@
 
 pub mod gpu_full;
 
-pub use gpu_full::{GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache};
+pub use gpu_full::{
+    GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache, GpuKvMode,
+};
 
 use qml_core::{DenseMatrix, MatrixError};
 use qml_quant::{
     Bf16Matrix, Fp16Matrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix,
     Int4AsymGroupMatrix, Int4SymGroupMatrix, Int8SymMatrix, LinearOperator, QuantizedFactor,
-    TernaryPackedMatrix, apply_hadamard_forward,
+    TernaryPackedMatrix, VectorQuantMatrix, apply_hadamard_forward,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -635,8 +637,74 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct VqMatvecUniforms {
+    rows: u32,
+    cols: u32,
+    subvec_dim: u32,
+    codebook_size: u32,
+    num_stages: u32,
+    group_size: u32,
+    spr: u32,
+    gpr: u32,
+}
+
+/// Direct GPU-resident 1/2-stage Residual Vector Quantization (`VECTOR_QUANT` / RVQ / AQLM) WGSL kernel.
+const MATVEC_VQ_WGSL: &str = r#"
+struct VqDims {
+    rows: u32,
+    cols: u32,
+    subvec_dim: u32,
+    codebook_size: u32,
+    num_stages: u32,
+    group_size: u32,
+    spr: u32,
+    gpr: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: VqDims;
+@group(0) @binding(1) var<storage, read> codebooks_f16: array<u32>;
+@group(0) @binding(2) var<storage, read> scales_f16: array<u32>;
+@group(0) @binding(3) var<storage, read> codes: array<u32>;
+@group(0) @binding(4) var<storage, read> vector: array<f32>;
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    let cb_stage_stride = dims.codebook_size * dims.subvec_dim;
+    var sum: f32 = 0.0;
+    for (var sv: u32 = 0u; sv < dims.spr; sv = sv + 1u) {
+        let col_start = sv * dims.subvec_dim;
+        let len = min(dims.subvec_dim, dims.cols - col_start);
+        let code_base = (row * dims.spr + sv) * dims.num_stages;
+        for (var i: u32 = 0u; i < len; i = i + 1u) {
+            let c = col_start + i;
+            var w: f32 = 0.0;
+            for (var st: u32 = 0u; st < dims.num_stages; st = st + 1u) {
+                let b_idx = code_base + st;
+                let k = (codes[b_idx >> 2u] >> ((b_idx & 3u) * 8u)) & 0xFFu;
+                let cb_idx = st * cb_stage_stride + k * dims.subvec_dim + i;
+                let pair = unpack2x16float(codebooks_f16[cb_idx >> 1u]);
+                w = w + select(pair.x, pair.y, (cb_idx & 1u) == 1u);
+            }
+            let g = c / dims.group_size;
+            let s_idx = row * dims.gpr + g;
+            let s_pair = unpack2x16float(scales_f16[s_idx >> 1u]);
+            let scale = select(s_pair.x, s_pair.y, (s_idx & 1u) == 1u);
+            sum = sum + (w * scale) * vector[c];
+        }
+    }
+    output[row] = sum;
+}
+"#;
+
 /// Experimental WGPU compute shader engine for dense `f32` and direct compressed
-/// `FP16` / `BF16` / `INT8_SYM` / `Q4_0` / `Q4_1` / `INT3_ASYM` / `INT2_ASYM` / `TERNARY_PACKED`
+/// `FP16` / `BF16` / `INT8_SYM` / `Q4_0` / `Q4_1` / `INT3_ASYM` / `INT2_ASYM` / `TERNARY_PACKED` / `VECTOR_QUANT`
 /// matrix-vector multiplication (zero dense weight reconstruction in VRAM) with preallocated
 /// reusable scratch buffers for zero-allocation per-token inference.
 pub struct WgpuMatvecEngine {
@@ -655,6 +723,8 @@ pub struct WgpuMatvecEngine {
     pipeline_int2: wgpu::ComputePipeline,
     pipeline_ternary: wgpu::ComputePipeline,
     bgl_quant: wgpu::BindGroupLayout,
+    pipeline_vq: wgpu::ComputePipeline,
+    bgl_vq: wgpu::BindGroupLayout,
     scratch_vec_buf: wgpu::Buffer,
     scratch_out_buf: wgpu::Buffer,
     scratch_readback_buf: wgpu::Buffer,
@@ -673,6 +743,7 @@ pub enum GpuMatrixKind {
     Int3Asym,
     Int2Asym,
     TernaryPacked,
+    VectorQuant,
 }
 
 /// Persistent compressed weight matrix stored once in GPU VRAM with a pre-bound
@@ -728,6 +799,7 @@ impl PersistentGpuMatrix {
             GpuMatrixKind::Int3Asym => &self.engine.pipeline_int3,
             GpuMatrixKind::Int2Asym => &self.engine.pipeline_int2,
             GpuMatrixKind::TernaryPacked => &self.engine.pipeline_ternary,
+            GpuMatrixKind::VectorQuant => &self.engine.pipeline_vq,
         }
     }
 
@@ -764,6 +836,40 @@ impl PersistentGpuMatrix {
                         },
                     ],
                 }),
+            GpuMatrixKind::VectorQuant => {
+                self.engine
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("full-gpu-matvec-vq-bg"),
+                        layout: &self.engine.bgl_vq,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: self._weight_buffers[0].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: self._weight_buffers[1].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: self._weight_buffers[2].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: self._weight_buffers[3].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: input_buf.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: output_buf.as_entire_binding(),
+                            },
+                        ],
+                    })
+            }
             _ => self
                 .engine
                 .device
@@ -815,6 +921,7 @@ impl PersistentGpuMatrix {
             GpuMatrixKind::Int3Asym => &self.engine.pipeline_int3,
             GpuMatrixKind::Int2Asym => &self.engine.pipeline_int2,
             GpuMatrixKind::TernaryPacked => &self.engine.pipeline_ternary,
+            GpuMatrixKind::VectorQuant => &self.engine.pipeline_vq,
         };
         let rotated_vec;
         let active_vec = if self.hadamard.is_enabled() {
@@ -915,6 +1022,10 @@ impl WgpuMatvecEngine {
             label: Some("qml-matvec-ternary-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_TERNARY_WGSL.into()),
         });
+        let shader_vq = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-vq-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_VQ_WGSL.into()),
+        });
 
         let ro_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
@@ -961,6 +1072,17 @@ impl WgpuMatvecEngine {
                 rw_storage(4),
             ],
         });
+        let bgl_vq = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("qml-matvec-vq-bgl"),
+            entries: &[
+                uniform_entry,
+                ro_storage(1),
+                ro_storage(2),
+                ro_storage(3),
+                ro_storage(4),
+                rw_storage(5),
+            ],
+        });
 
         let pl_f32 = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("qml-matvec-f32-pl"),
@@ -970,6 +1092,11 @@ impl WgpuMatvecEngine {
         let pl_quant = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("qml-matvec-quant-pl"),
             bind_group_layouts: &[&bgl_quant],
+            push_constant_ranges: &[],
+        });
+        let pl_vq = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("qml-matvec-vq-pl"),
+            bind_group_layouts: &[&bgl_vq],
             push_constant_ranges: &[],
         });
 
@@ -1045,6 +1172,14 @@ impl WgpuMatvecEngine {
             compilation_options: Default::default(),
             cache: None,
         });
+        let pipeline_vq = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-vq-pipeline"),
+            layout: Some(&pl_vq),
+            module: &shader_vq,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         let scratch_bytes = (GPU_SCRATCH_MAX_ELEMS * std::mem::size_of::<f32>()) as u64;
         let scratch_vec_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1082,6 +1217,8 @@ impl WgpuMatvecEngine {
             pipeline_int2,
             pipeline_ternary,
             bgl_quant,
+            pipeline_vq,
+            bgl_vq,
             scratch_vec_buf,
             scratch_out_buf,
             scratch_readback_buf,
@@ -1723,6 +1860,105 @@ impl WgpuMatvecEngine {
         Ok(p)
     }
 
+    /// Upload a learned 1/2-stage `VectorQuantMatrix` (RVQ / AQLM + optional Hadamard) persistently to GPU VRAM.
+    pub fn upload_vector_quant(
+        self: &Arc<Self>,
+        matrix: &VectorQuantMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        use wgpu::util::DeviceExt;
+        let spr = matrix.cols().div_ceil(matrix.subvec_dim());
+        let gpr = matrix.cols().div_ceil(matrix.group_size());
+        let uniforms = VqMatvecUniforms {
+            rows: matrix.rows() as u32,
+            cols: matrix.cols() as u32,
+            subvec_dim: matrix.subvec_dim() as u32,
+            codebook_size: matrix.codebook_size() as u32,
+            num_stages: matrix.num_stages() as u32,
+            group_size: matrix.group_size() as u32,
+            spr: spr as u32,
+            gpr: gpr as u32,
+        };
+        let packed_cb = pack_u16_u32(matrix.codebooks_f16());
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        let packed_codes = pack_bytes_u32(matrix.codes());
+        let cb_bytes = bytemuck::cast_slice::<u32, u8>(&packed_cb);
+        let s_bytes = bytemuck::cast_slice::<u32, u8>(&packed_scales);
+        let c_bytes = bytemuck::cast_slice::<u32, u8>(&packed_codes);
+
+        let uniform_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-vq-dims"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let cb_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-vq-codebooks"),
+                contents: cb_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let scales_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-vq-scales"),
+                contents: s_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let codes_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("persist-vq-codes"),
+                contents: c_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("persist-vq-bg"),
+            layout: &self.bgl_vq,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: cb_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scales_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: codes_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.scratch_vec_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.scratch_out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        Ok(PersistentGpuMatrix {
+            engine: Arc::clone(self),
+            kind: GpuMatrixKind::VectorQuant,
+            rows: matrix.rows(),
+            cols: matrix.cols(),
+            hadamard: matrix.hadamard(),
+            vram_bytes: (cb_bytes.len()
+                + s_bytes.len()
+                + c_bytes.len()
+                + std::mem::size_of::<VqMatvecUniforms>()) as u64,
+            bind_group,
+            _weight_buffers: vec![uniform_buf, cb_buf, scales_buf, codes_buf],
+        })
+    }
+
     /// Upload a [`QuantizedFactor`] (used by SVD and RMQ Shared-Basis/Core latents) persistently to VRAM.
     pub fn upload_quantized_factor(
         self: &Arc<Self>,
@@ -1888,6 +2124,7 @@ mod tests {
         let q3_had = Int3AsymGroupMatrix::quantize(&mat, 64, had).unwrap();
         let q2_had = Int2AsymGroupMatrix::quantize(&mat, 64, had).unwrap();
         let tern_had = TernaryPackedMatrix::quantize(&mat, 64, had).unwrap();
+        let vq_had = VectorQuantMatrix::fit(&mat, 8, 64, 2, 64, had, 1234).unwrap();
 
         let p_f32 = engine.upload_f32(&mat).unwrap();
         let p_fp16 = engine.upload_fp16(&fp16).unwrap();
@@ -1898,6 +2135,7 @@ mod tests {
         let p_q3 = engine.upload_int3_asym(&q3_had).unwrap();
         let p_q2 = engine.upload_int2_asym(&q2_had).unwrap();
         let p_tern = engine.upload_ternary_packed(&tern_had).unwrap();
+        let p_vq = engine.upload_vector_quant(&vq_had).unwrap();
 
         assert!(p_q4_0.vram_bytes() < p_f32.vram_bytes() / 5);
         assert!(p_q2.vram_bytes() < p_q4_0.vram_bytes());
@@ -1907,7 +2145,7 @@ mod tests {
 
         let x2: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
         for probe in [&x, &x2] {
-            let checks: [(&str, Vec<f64>, Vec<f64>); 9] = [
+            let checks: [(&str, Vec<f64>, Vec<f64>); 10] = [
                 (
                     "FP32",
                     mat.matvec(probe).unwrap(),
@@ -1952,6 +2190,11 @@ mod tests {
                     "TERNARY_HADAMARD",
                     tern_had.matvec(probe).unwrap(),
                     p_tern.matvec(probe).unwrap(),
+                ),
+                (
+                    "VQ_RVQ2_HADAMARD",
+                    vq_had.matvec(probe).unwrap(),
+                    p_vq.matvec(probe).unwrap(),
                 ),
             ];
             for (name, cpu_y, gpu_y) in checks {

@@ -17,10 +17,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 /// Hard safety ceiling on a single shard index JSON file (16 MiB).
 pub const MAX_SHARD_INDEX_BYTES: u64 = 16 * 1024 * 1024;
-/// Default per-tensor allocation ceiling (4 GiB in decoded f64 — covers 3B–32B embeddings up to 256K vocab).
-pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-/// Default cumulative payload budget for multi-tensor reads (32 GiB).
-pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// Default per-tensor allocation ceiling (8 GiB in decoded f64 — covers 7B–32B 152K-256K vocab embeddings).
+pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Default cumulative payload budget for multi-tensor reads (64 GiB — covers 32B BF16 checkpoints).
+pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 /// Default element count per streaming chunk (65,536 elements = 512 KiB in f64).
 pub const DEFAULT_STREAM_CHUNK_ELEMENTS: usize = 65_536;
 
@@ -330,6 +330,144 @@ impl<R: Read + Seek> SafetensorsFile<R> {
         Ok(DenseMatrix::from_flat(rows, cols, values)?)
     }
 
+    /// Read specific rows of a 2D tensor directly by seeking to each row's byte offset,
+    /// avoiding loading multi-GB embedding tables into RAM.
+    pub fn read_tensor_rows_f64(
+        &mut self,
+        name: &str,
+        row_indices: &[usize],
+    ) -> Result<BTreeMap<usize, Vec<f64>>, PayloadError> {
+        let info = self
+            .tensor_metadata(name)
+            .ok_or_else(|| PayloadError::TensorNotFound(name.to_owned()))?
+            .clone();
+        if info.shape.len() != 2 {
+            return Err(PayloadError::NotTwoDimensional {
+                tensor: info.name,
+                shape: info.shape,
+            });
+        }
+        let rows = usize::try_from(info.shape[0]).map_err(|_| PayloadError::OffsetOverflow {
+            tensor: info.name.clone(),
+        })?;
+        let cols = usize::try_from(info.shape[1]).map_err(|_| PayloadError::OffsetOverflow {
+            tensor: info.name.clone(),
+        })?;
+        let dtype = DType::parse(&info.dtype).ok_or_else(|| PayloadError::UnsupportedDecode {
+            tensor: info.name.clone(),
+            reason: format!("unknown dtype {:?}", info.dtype),
+        })?;
+        let elem_bytes = dtype
+            .byte_width()
+            .ok_or_else(|| PayloadError::UnsupportedDecode {
+                tensor: info.name.clone(),
+                reason: format!("dtype {dtype} is sub-byte"),
+            })?;
+        let base_offset = self
+            .data_start
+            .checked_add(info.data_offsets[0])
+            .ok_or_else(|| PayloadError::OffsetOverflow {
+                tensor: info.name.clone(),
+            })?;
+        let row_bytes =
+            cols.checked_mul(elem_bytes)
+                .ok_or_else(|| PayloadError::OffsetOverflow {
+                    tensor: info.name.clone(),
+                })?;
+        let mut raw_row = vec![0u8; row_bytes];
+        let mut out = BTreeMap::new();
+        for &r in row_indices {
+            if r >= rows || out.contains_key(&r) {
+                continue;
+            }
+            let off = base_offset
+                .checked_add((r as u64).saturating_mul(row_bytes as u64))
+                .ok_or_else(|| PayloadError::OffsetOverflow {
+                    tensor: info.name.clone(),
+                })?;
+            self.reader.seek(SeekFrom::Start(off))?;
+            self.reader.read_exact(&mut raw_row)?;
+            let mut decoded = Vec::with_capacity(cols);
+            decode_chunk_to_f64(dtype, &raw_row, &mut decoded).map_err(|reason| {
+                PayloadError::UnsupportedDecode {
+                    tensor: info.name.clone(),
+                    reason,
+                }
+            })?;
+            out.insert(r, decoded);
+        }
+        Ok(out)
+    }
+
+    /// Read a 2D tensor directly into compact BF16 `u16` bits without allocating an `f64` matrix
+    /// (4x less RAM than `read_tensor_matrix`; zero-copy bit copy for native BF16 checkpoints).
+    pub fn read_tensor_bf16_bits(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<(usize, usize, Vec<u16>), PayloadError> {
+        let info = self
+            .tensor_metadata(name)
+            .ok_or_else(|| PayloadError::TensorNotFound(name.to_owned()))?
+            .clone();
+        if info.shape.len() != 2 {
+            return Err(PayloadError::NotTwoDimensional {
+                tensor: info.name,
+                shape: info.shape,
+            });
+        }
+        let rows = usize::try_from(info.shape[0]).map_err(|_| PayloadError::OffsetOverflow {
+            tensor: info.name.clone(),
+        })?;
+        let cols = usize::try_from(info.shape[1]).map_err(|_| PayloadError::OffsetOverflow {
+            tensor: info.name.clone(),
+        })?;
+        let dtype = DType::parse(&info.dtype).ok_or_else(|| PayloadError::UnsupportedDecode {
+            tensor: info.name.clone(),
+            reason: format!("unknown dtype {:?}", info.dtype),
+        })?;
+        let raw = self.read_tensor_bytes(name, budget)?;
+        let bits: Vec<u16> = match dtype {
+            DType::BF16 => raw
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| u16::from_le_bytes(c))
+                .collect(),
+            DType::F16 => raw
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| {
+                    let v = crate::dtype::f16_to_f32(u16::from_le_bytes(c));
+                    crate::dtype::f32_to_bf16(v)
+                })
+                .collect(),
+            DType::F32 => raw
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| {
+                    let v = f32::from_le_bytes(c);
+                    crate::dtype::f32_to_bf16(v)
+                })
+                .collect(),
+            _ => {
+                let mut f64s = Vec::with_capacity(rows * cols);
+                decode_chunk_to_f64(dtype, &raw, &mut f64s).map_err(|reason| {
+                    PayloadError::UnsupportedDecode {
+                        tensor: info.name,
+                        reason,
+                    }
+                })?;
+                f64s.into_iter()
+                    .map(|v| crate::dtype::f32_to_bf16(v as f32))
+                    .collect()
+            }
+        };
+        Ok((rows, cols, bits))
+    }
+
     /// Stream a tensor in fixed-size chunks decoded to `f64`, using constant memory.
     ///
     /// Does not accumulate the full tensor in memory and does not count against
@@ -631,6 +769,25 @@ impl SafetensorsSource {
     ) -> Result<DenseMatrix, PayloadError> {
         let st = self.shard_for_tensor(name, budget)?;
         st.read_tensor_matrix(name, budget)
+    }
+
+    pub fn read_tensor_rows_f64(
+        &mut self,
+        name: &str,
+        row_indices: &[usize],
+        budget: &PayloadBudget,
+    ) -> Result<BTreeMap<usize, Vec<f64>>, PayloadError> {
+        let st = self.shard_for_tensor(name, budget)?;
+        st.read_tensor_rows_f64(name, row_indices)
+    }
+
+    pub fn read_tensor_bf16_bits(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<(usize, usize, Vec<u16>), PayloadError> {
+        let st = self.shard_for_tensor(name, budget)?;
+        st.read_tensor_bf16_bits(name, budget)
     }
 }
 

@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.5.1%20EVENT%20HORIZON%20II-A855F7?style=for-the-badge" alt="Latest Public Release v0.5.1"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.6.0%20EVENT%20HORIZON%20III-A855F7?style=for-the-badge" alt="Latest Public Release v0.6.0"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ShamelesAbyss/Quantum-Morph-Laboratory/ci.yml?branch=main&style=for-the-badge&label=Rust%20CI" alt="CI Status"/></a>
   <img src="https://img.shields.io/badge/Rust-1.100%2B%20(Safe%20Only)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge" alt="MIT License"/></a>
@@ -14,21 +14,21 @@
 <h3 align="center"><em>Don't just compress intelligence. Transform its representation.</em></h3>
 
 <p align="center">
-  An experimental, local-first Rust neural model research laboratory featuring <strong>Activation-Aware Blockwise Cholesky GPTQ + Hadamard Sub-3-Bit Compression</strong>, a <strong>Single-Submission Full GPU-Resident WGSL Transformer (<code>GpuFull</code>, 22× speedup)</strong>, multi-shard Llama &amp; Qwen2 streaming, GGUF K-quant ingestion, and the native multi-pass WGPU 3D scientific observatory (<strong>PROJECT PRISM</strong>).
+  An experimental, local-first Rust neural model research laboratory featuring <strong>Layer-by-Layer Streaming Calibration (&lt;450 MiB VRAM for 7B–32B models)</strong>, <strong>Activation-Aware Blockwise Cholesky GPTQ + Hadamard Sub-3-Bit Compression</strong> (breaking the <strong>2.000 bpp barrier on Qwen2.5-7B in 1.63 GiB VRAM</strong>), a <strong>Single-Submission Full GPU-Resident WGSL Transformer with GPU INT8 KV-Cache &amp; 10 Compressed Compute Kernels</strong>, and the native multi-pass WGPU 3D scientific observatory (<strong>PROJECT PRISM</strong>).
 </p>
 
 ---
 
-## Download Quantum Morph Laboratory (`v0.5.1` — PROJECT EVENT HORIZON Wave II)
+## Download Quantum Morph Laboratory (`v0.6.0` — PROJECT EVENT HORIZON Wave III)
 
 Launch the native desktop scientific observatory directly on your computer — **no Rust toolchain, no Python, no terminal, and no cloud account required**.
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.5.1%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.6.0%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.5.1%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.6.0%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
   &nbsp;
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/View%20Latest%20Release-GitHub%20Releases-10B981?style=for-the-badge" alt="View Latest Release"/></a>
   &nbsp;
@@ -37,9 +37,9 @@ Launch the native desktop scientific observatory directly on your computer — *
 
 | Download Option | Contents | Direct Link |
 |---|---|---|
-| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe) |
-| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip) |
-| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz) |
+| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe) |
+| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip) |
+| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz) |
 | **Latest Public Release & Checksums** | Full release notes, `SHA256SUMS.txt`, and all release assets | [View Latest Release (`releases/latest`)](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest) |
 
 ---
@@ -83,7 +83,7 @@ Launch the native desktop scientific observatory directly on your computer — *
 
 ---
 
-> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is active experimental research software (`v0.5.1 — PROJECT EVENT HORIZON Wave II`), not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, Walsh–Hadamard incoherence, Grassmannian subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. QML has been validated end-to-end on synthetic benchmarks (`exp-001`) and **five real openly licensed pretrained language models** across `135M → 3.09B` parameters (`SmolLM2-135M`, `SmolLM2-360M`, `SmolLM2-1.7B`, `Qwen2.5-1.5B`, and 2-shard `Qwen2.5-3B` in `exp-002` through `exp-005`; weights stored locally outside Git). Every byte—including scales, zero-points, biases, codebooks, recovery adapters, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported complete BPP; negative controls and sub-2-bit cliffs are preserved alongside breakthroughs.
+> **Scientific Integrity Notice:** Quantum Morph Laboratory (QML) is active experimental research software (`v0.6.0 — PROJECT EVENT HORIZON Wave III`), not production software. "Quantum-inspired" refers strictly to classical mathematics (tensor networks, spectral decompositions, Walsh–Hadamard incoherence, Grassmannian subspace geometry) and makes **no** claim of physical quantum computation or quantum advantage. QML has been validated end-to-end on synthetic benchmarks (`exp-001`) and **six real openly licensed pretrained language models** spanning **`135M → 7.62B` parameters** (`SmolLM2-135M`, `SmolLM2-360M`, `SmolLM2-1.7B`, `Qwen2.5-1.5B`, 2-shard `Qwen2.5-3B`, and **4-shard `14.19 GiB` `Qwen2.5-7B-Instruct`** in `exp-002` through `exp-006`; weights stored locally outside Git). Every byte—including scales, zero-points, biases, codebooks, recovery adapters, shared bases, sparse indices, JSON manifests, and checksums—is counted in reported complete BPP; negative controls and sub-2-bit cliffs are preserved alongside breakthroughs.
 
 ---
 
@@ -98,64 +98,49 @@ Launch the native desktop scientific observatory directly on your computer — *
 | Subsystem | Crate | Implemented Capabilities | Maturity |
 |---|---|---|---|
 | **Core Math & SHA-256** | `qml-core` | Validated dense matrices, `matmul`/`transpose`/`matvec_transposed`, SplitMix64 PRNG, exact **one-sided Jacobi thin SVD**, HMT randomized SVD, spectral metrics, Grassmannian subspace affinity, pure-Rust FIPS 180-4 **SHA-256** | Implemented & tested |
-| **Hardware & WGPU** | `qml-hardware` | CPU/SIMD/RAM telemetry, WGPU discovery, **9 compressed matvec WGSL shaders** + **6 Full GPU-Resident Transformer WGSL shaders (`gpu_full.rs`)** (`RMSNorm`, bit-exact GPU `Hadamard FWHT`, `RoPE + KV-Append`, online-softmax `GQA Attention`, `SwiGLU`, `VecAdd`) | Implemented & GPU-verified |
-| **Model Ingestion** | `qml-model` | Bounded read-only single & **multi-shard Safetensors (`SafetensorsSource`)** up to `4 GiB/tensor`, exact safe-Rust codecs (`F64`, `F32`, `F16`, `BF16`, `FP8`, ints), HF `config.json` parser, bounded **GGUF v2/v3 payload decoding including K-quants (`Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`)** | Implemented & tested |
+| **Hardware & WGPU** | `qml-hardware` | CPU/SIMD/RAM telemetry, hardware-only WGPU compute selection, **10 compressed matvec WGSL shaders** (incl. **`MATVEC_VQ_WGSL`** for GPU 1/2-stage RVQ) + **8 Full GPU-Resident Transformer WGSL shaders (`gpu_full.rs`)** incl. **GPU-resident per-head INT8 KV-cache (`~3.88×` smaller VRAM)** | Implemented & GPU-verified |
+| **Model Ingestion** | `qml-model` | Bounded read-only single & **multi-shard Safetensors (`SafetensorsSource`)** up to `8 GiB/tensor` & `64 GiB/total`, direct row-seek & zero-f64 BF16 readers, exact codecs (`F64..FP8`), HF `config.json`, **GGUF v2/v3 incl. K-quants (`Q2_K..Q6_K`)** | Implemented & tested |
 | **Q-Scope Observatory** | `qml-scope` | Two-pass streaming Welford statistics (mean, std, skewness, kurtosis, norms, sparsity, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy), 2D SVD structure, transformer role classification, cross-layer Grassmannian subspace affinity | Implemented & tested |
-| **Quant, RMQ, Resonance & GPTQ** | `qml-quant` | Conventional baselines, **RMQ Shared-Basis/Core**, **Sub-3-Bit PROJECT RESONANCE** (FWHT, LS-refitted `INT3`/`INT2`/base-3 `TERNARY`, LUT RVQ, ECHO, `MAP-B`), and **Activation-Aware Blockwise Cholesky GPTQ (`gptq.rs`)** with orthogonal `Q H_b Qᵀ` covariance rotation, `actorder`, adaptive shrinkage damping & AWQ-weighted ECHO | Experimental & benchmarked |
+| **Quant, RMQ, Resonance & GPTQ** | `qml-quant` | Conventional baselines, **RMQ Shared-Basis/Core**, **Sub-3-Bit PROJECT RESONANCE** (FWHT, LS-refitted `INT3`/`INT2`/base-3 `TERNARY`, LUT RVQ, ECHO, `MAP-B`), **Activation-Aware Blockwise Cholesky GPTQ (`gptq.rs`)**, binary **`QCAL1` Hessian disk cache**, and activation-weighted 2-stage RVQ (`fit_vq_calibrated`) | Experimental & benchmarked |
 | **QMF Container** | `qml-format` | Experimental **QMF v0** & multi-GB **QMF v1** (`QmfFileReader` out-of-core lazy reader, `write_to_file_atomic` with source-output alias protection, 64 KiB streaming CRC-32 + SHA-256, `Arc` deduplication, RMQ & sub-3-bit operators, on-demand `decode_row`) | Experimental (unstable) |
-| **Q-Forge Engine** | `qml-forge` | Memory-bounded single & **multi-shard streaming** (`forge_path_to_file_atomic`, zero duplicate full-file RAM) with **Activation-Calibrated GPTQ**, cooperative `ForgeControl` cancellation, `QMR-300..150`, `RmqAffinityGated`, SHA-256 provenance, and round-trip verification | Experimental & tested |
+| **Q-Forge Engine** | `qml-forge` | Memory-bounded single & **multi-shard streaming** (`forge_path_to_file_atomic`, zero duplicate full-file RAM) with **Activation-Calibrated GPTQ & RVQ**, cooperative `ForgeControl` cancellation, `QMR-300..150`, `RmqAffinityGated`, SHA-256 provenance, and verification | Experimental & tested |
 | **Pure-Rust Tokenizer** | `qml-tokenizer` | Pure safe Rust Hugging Face `tokenizer.json` Byte-Level BPE tokenizer (GPT-2/SmolLM/Llama-3/Qwen2 style) with individual-digit pre-tokenization, special tokens, ChatML formatting, and stateful UTF-8 `StreamingDecoder` | Implemented & tested |
-| **Q-Core Runtime** | `qml-runtime` | Native **Llama & Qwen2** Transformer (RMSNorm, RoPE, optional `q/k/v` biases, GQA + **FP64 / INT8 KV-cache**, SwiGLU MLP, `tie_word_embeddings`, calibration Hessian collector) executing directly over QMF v1 on **`Cpu`**, **`GpuHybrid`**, or **Single-Submission `GpuFull`** | Experimental CPU + GPU runtime |
-| **Q-Behavior Observatory** | `qml-behavior` | Layer-by-layer hidden activation tracing, cosine/L2 drift, **RSA**, reversible causal ablations (`ScaleResidual`, `AblateAttention`, `AblateMlp`), **`ReferenceSuiteCache`** (zero reference VRAM contention), and **4-category held-out Capability Retention Suite** | Experimental & verified |
+| **Q-Core Runtime** | `qml-runtime` | Native **Llama & Qwen2** Transformer (`q/k/v` biases, **FP32/FP64 & GPU-resident INT8 KV-cache**), **Layer-by-Layer Streaming BF16 Calibration & Reference Evaluator (`streaming.rs`, `< 450 MiB` peak VRAM for 7B–32B!)**, executing over QMF v1 on `Cpu`, `GpuHybrid`, or **Single-Submission `GpuFull`** | Experimental CPU + GPU runtime |
+| **Q-Behavior Observatory** | `qml-behavior` | Layer-by-layer hidden activation tracing, cosine/L2 drift, **RSA**, reversible causal ablations, **`ReferenceSuiteCache` with compact binary `QREF1` disk caching**, and **4-category held-out Capability Retention Suite** | Experimental & verified |
 | **Q-Genesis Extreme** | `qml-genesis` | Multi-objective NSGA-II evolutionary search with role/depth-stratified sampling, user profiles, **sub-3-bit Hadamard & ECHO layer genes**, and direct **Genome-to-QMF v1 export** | Experimental & tested |
-| **Laboratory CLI** | `qml-cli` | 15 commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `resonance-ladder --calibrate`, `infer-demo`, `generate`, `behavior`, `genesis`, `demo-rank1`) with text and `--json` output | Implemented & tested |
-| **Native Desktop App** | `qml-desktop` | **PROJECT PRISM** native WGPU 3D scientific observatory (`eframe`/`egui` + `wgpu 24` + 7 custom WGSL shaders + HDR bloom + 3D ray picking) across **11 real-engine views**, **`GpuFull` inference**, `QMR-300..150` Q-Forge presets, and the **Consumer VRAM Fit Matrix (`1.7B–32B`)** | `v0.5.1` |
+| **Laboratory CLI** | `qml-cli` | 15 commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `resonance-ladder --calibrate --streaming-ref --kv-cache int8`, `infer-demo`, `generate --kv-cache int8`, `behavior`, `genesis`, `demo-rank1`) | Implemented & tested |
+| **Native Desktop App** | `qml-desktop` | **PROJECT PRISM** native WGPU 3D scientific observatory (`eframe`/`egui` + `wgpu 24` + 7 custom WGSL shaders + HDR bloom + 3D ray picking) across **11 real-engine views**, **`GpuFull` inference**, `QMR-300..150` Q-Forge presets, and the **Consumer VRAM Fit Matrix (`1.7B–32B`)** | `v0.6.0` |
 
 ---
 
 ## Real Pretrained Model Validation
 
-### 1. PROJECT EVENT HORIZON Wave II — Activation-Calibrated GPTQ+Hadamard & `GpuFull` Scaling (`360M → 3B`, `exp-005`)
+### 1. PROJECT EVENT HORIZON Wave III — Stage D `Qwen2.5-7B-Instruct` (`14.19 GiB` BF16 → `1.63 GiB` VRAM) & Breaking the `2.000 bpp` Barrier (`exp-006`)
 
-Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, NVIDIA GeForce RTX 4070 Laptop GPU 8 GB VRAM) using **single-submission `QCoreBackend::GpuFull`** and **196 disjoint multi-domain calibration tokens** (`64×64` block-diagonal Hessians, **zero extra bytes** stored in QMF v1; see [`experiments/exp-005-event-horizon-wave2-gptq-scaling.toml`](experiments/exp-005-event-horizon-wave2-gptq-scaling.toml)):
+Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, **8 GB NVIDIA GeForce RTX 4070 Laptop GPU**) on **4-shard `Qwen/Qwen2.5-7B-Instruct` (`7.62B` params, `14.19 GiB` BF16 — nearly `2×` larger than the GPU's entire VRAM!)** using automatic **Layer-by-Layer Streaming BF16 Calibration (`444.5 MiB` peak VRAM, `196.8s`)**, **single-submission `GpuFull`** (`197/197` GPU ops, `0` CPU ops), and **GPU-resident INT8 KV-cache (`3.88×` smaller KV VRAM)** (see [`experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml`](experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml)):
 
-- **Single-Submission `GpuFull` vs `GpuHybrid` Speedup (`SmolLM2-360M` `Q4_0`, identical word-for-word output):** `1.84 tok/s` (`36,923 ms`) → **`40.70 tok/s` (`1,671 ms` — `22.1×` real end-to-end speedup)**, reaching **`63.3 tok/s`** at 2-bit on `SmolLM2-360M` and **`18.6–31.5 tok/s`** on `1.5B–3B` models!
+| `Qwen2.5-7B-Instruct` Profile | Exact Complete BPP | Disk MiB (vs `14,525 MiB` BF16) | VRAM MiB | `GpuFull` Tok/s | PPLx vs BF16 | Mean KL | Held-out Top-1 | Ret% | Status |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| **`INT4_Q4_0_GPTQ`** | 4.501 | 4,086.5 *(3.55×)* | 3,795.1 | 6.8 | **0.98×** | **0.077** | **90.9%** | **95.4%** | **OK** |
+| **`INT3_HADAMARD_GPTQ`** | **3.251** | **2,951.8** *(4.92×)* | **2,741.5** | 6.8 | **1.07×** | **0.164** | **86.3%** | **89.7%** | **OK** |
+| **`INT2_HADAMARD_GPTQ`** | **2.251** | **2,043.9** *(7.11×)* | **1,898.7** *(1.85 GiB!)* | **9.7** | **1.43×** | **0.854** | **65.7%** | **67.8%** | **OK** |
+| **`QMR-200_GPTQ` (`MAP-B`)** | **2.000** | **1,815.7** *(8.00×!)* | **1,670.4** *(1.63 GiB!)* | **9.1** | **2.13×** | **1.633** | **52.6%** | **49.8%** | **OK** |
+| `QMR-175_GPTQ` (`MAP-B`) | 1.750 | 1,588.7 *(9.14×)* | 1,477.6 | 6.9 | 204.53× | 6.403 | 8.0% | 4.2% | CLIFF |
+| `TERNARY_HADAMARD_GPTQ` | 1.727 | 1,567.7 *(9.27×)* | 1,456.5 | 9.5 | 115.92× | 5.948 | 6.3% | 3.6% | CLIFF |
 
-#### A. Progressive Scaling Law Across 4 Real Pretrained Models (`360M → 1.5B → 1.7B → 2-Shard 3B`)
+- **2-Bit (`2.251 bpp`) & Exact `2.000 bpp` Fluency on `7.62B`:** At pure 2-bit (`1.85 GiB` VRAM), `Qwen2.5-7B` achieves **`PPLx = 1.43×`** and **`65.7%` Top-1** (*"Binary search is an efficient algorithm that repeatedly halves the search range to find a specific value in a sorted"*, plus coherent Rust code generation at `7.86 tok/s` with GPU INT8 KV-cache!). At exact **`2.000 bpp` (`1.63 GiB` VRAM — `8.00×` smaller than BF16!)**, `QMR-200_GPTQ` breaks the 2-bit barrier with **`PPLx = 2.13×`** and **`52.6%` Top-1** (*"Binary search is a algorithm that divides a sorted list into smaller sublists."*).
+- **Four-Scale Power-Law Scaling Confirmed at `2.25 bpp` (`INT2_HADAMARD_GPTQ`, `360M → 7.62B`):**
+  - `SmolLM2-360M`: `PPLx = 13.53×`, `KL = 2.811`, `Top-1 = 29.5%` (`CLIFF`)
+  - `Qwen2.5-1.5B`: `PPLx = 4.12×`, `KL = 1.993`, `Top-1 = 41.7%`, `Ret = 33.0%` (`OK`)
+  - `Qwen2.5-3B`: `PPLx = 2.76×`, `KL = 1.606`, `Top-1 = 55.4%`, `Ret = 45.8%` (`OK`)
+  - **`Qwen2.5-7B`: `PPLx = 1.43×`, `KL = 0.854`, `Top-1 = 65.7%`, `Ret = 67.8%` (`OK`)**
+- **Honest Sub-2-Bit Boundary & GPU RVQ Controls Preserved:** Both `QMR-175_GPTQ` (`1.750 bpp`) and `TERNARY_HADAMARD_GPTQ` (`1.727 bpp`) still cross into `CLIFF` (`PPLx 116–205×`) at 7.6B, and our live `SmolLM2-360M` GPU `MATVEC_VQ_WGSL` controls (`RVQ2_D8_G128_GPTQ` `2.180 bpp`, `KL = 9.865`; `RVQ2_D10_G128_GPTQ` `1.790 bpp`, `KL = 10.336` at `15.5 tok/s` 100% GPU-resident vs Cholesky-compensated `TERNARY` `1.738 bpp` `KL = 5.397` and `INT2` `2.270 bpp` `KL = 2.811`) prove second-order Hessian compensation (`H⁻¹`) dominates uncompensated non-uniform codebook shape alone—directly guiding Wave IV's Hessian-compensated lattice/trellis kernels and `14B–32B` scaling.
 
-| Model (Architecture, BF16 Size) | Profile | Complete BPP | VRAM MiB | `GpuFull` Tok/s | PPLx vs BF16 | Mean KL | Held-out Top-1 | Ret% | Status |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| **Stage C: `Qwen2.5-3B-Instruct`** *(2-shard, 6.17 GB, Qwen2 biases)* | `INT4_Q4_0_GPTQ` | 4.502 | 1,657.2 | 11.2 | **1.01×** | **0.147** | **84.0%** | **91.4%** | **OK** |
-| **Stage C: `Qwen2.5-3B-Instruct`** *(2-shard, 6.17 GB, Qwen2 biases)* | `INT3_HADAMARD_GPTQ` | **3.253** | **1,197.4** *(5.15×)* | 8.7 | **1.07×** | **0.237** | **78.3%** | **85.8%** | **OK** |
-| **Stage C: `Qwen2.5-3B-Instruct`** *(2-shard, 6.17 GB, Qwen2 biases)* | **`INT2_HADAMARD_GPTQ`** | **2.253** | **829.6** *(7.43×)* | **18.6** | **2.76×** | **1.606** | **55.4%** | **45.8%** | **OK** |
-| **Stage B-2: `Qwen2.5-1.5B-Instruct`** *(3.09 GB, Qwen2 biases)* | `INT4_Q4_0_GPTQ` | 4.503 | 829.7 | 23.3 | 1.28× | 0.161 | **84.0%** | 81.0% | OK |
-| **Stage B-2: `Qwen2.5-1.5B-Instruct`** *(3.09 GB, Qwen2 biases)* | **`INT3_HADAMARD_GPTQ`** | **3.253** | **599.7** *(5.15×)* | **22.8** | **1.03×** *(+3%!)* | **0.295** | **77.7%** | **87.2%** | **OK** |
-| **Stage B-2: `Qwen2.5-1.5B-Instruct`** *(3.09 GB, Qwen2 biases)* | **`INT2_HADAMARD_GPTQ`** | **2.253** | **415.7** *(7.43×)* | **31.5** | **4.12×** | **1.993** | **41.7%** | **33.0%** | **OK** |
-| **Stage B-2: `Qwen2.5-1.5B-Instruct`** *(3.09 GB, Qwen2 biases)* | `TERNARY_HADAMARD_GPTQ` | 1.731 | 319.6 | 27.6 | 590.16× | 7.239 | 7.4% | 3.8% | CLIFF |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | `INT4_Q4_0_GPTQ` | 4.502 | 918.9 | 19.7 | 1.68× | 0.605 | **83.5%** | 71.6% | OK |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | `INT3_HADAMARD_GPTQ` | 3.252 | 663.9 | 14.1 | 1.71× | 0.698 | **83.0%** | 70.7% | OK |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | `QMR-300_GPTQ` | **3.000** | **612.5** | 16.3 | 2.27× | 1.046 | **71.6%** | 57.9% | OK |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | **`QMR-250_GPTQ`** | **2.500** | **510.5** *(6.70×)* | **22.6** | **2.79×** | **1.327** | **58.0%** | **46.9%** | **OK** |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | `INT2_HADAMARD_GPTQ` | 2.252 | 459.9 | 30.7 | 8.09× | 2.460 | 39.2% | 25.8% | CLIFF |
-| **Stage B-1: `SmolLM2-1.7B-Instruct`** *(3.42 GB, Llama)* | `TERNARY_HADAMARD_GPTQ` | 1.728 | 353.1 | 25.7 | 116.14× | 5.110 | 10.2% | 5.5% | CLIFF |
+### 2. Earlier Validated Research Archive (`exp-001` through `exp-005`)
 
-#### B. Direct Matched-Byte Ablation: `v0.4.0` Weight-Only vs `v0.5.1` Activation-Calibrated GPTQ (`SmolLM2-360M`, Zero Extra Bytes)
-
-| Profile | Exact BPP | VRAM MiB | `v0.4.0` Weight-Only PPLx | **`v0.5.1` GPTQ PPLx** | `v0.4.0` KL | **`v0.5.1` KL** | **`v0.5.1` Top-1** | **`GpuFull` Tok/s** |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `INT3_HADAMARD` | 3.270 | 141.4 | 5.63× | **1.64×** *(3.4× lower)* | 1.910 | **0.624** *(−67.3%)* | **68.2%** *(+26.7 pp)* | **41.8** |
-| `QMR-300 (MAP-B)` | 3.000 | 129.7 | 13.35× | **2.49×** *(5.4× lower)* | 2.803 | **1.072** *(−61.8%)* | **58.5%** *(+26.7 pp)* | **44.8** |
-| **`QMR-275 (MAP-B)`** | **2.750** | **119.0** | *(CLIFF)* | **3.52× (OK!)** | — | **1.457** | **44.3%** | **50.7** |
-| `QMR-250 (MAP-B)` | 2.500 | 108.2 | 393.75× | **5.45×** *(72.2× lower)* | 6.566 | **1.981** *(−69.8%)* | **36.9%** *(7.2× higher)* | **54.5** |
-| `INT2_HADAMARD` | 2.270 | 98.3 | 2,653.66× *(555,653× plain)* | **13.53×** *(196× lower)* | 8.242 | **2.811** *(−65.9%)* | **29.5%** | **63.3** |
-| `TERNARY_HADAMARD` | 1.738 | 75.3 | 5,797.78× | **161.98×** *(35.8× lower)* | 9.208 | **5.397** *(−41.4%)* | 9.1% | 46.9 |
-
-- **Honest Boundary Preserved (`1.73 bpp` Ternary):** While Activation-Calibrated GPTQ+Hadamard broke `QMR-275` (`360M`), `QMR-250` (`1.7B`), and `2.25 bpp INT2` (`1.5B` & `3B`, down to `PPLx = 2.76×` and `55.4%` Top-1 in `829.6 MiB` VRAM!), `1.73 bpp` ternary PTQ still cliffs (`PPLx 116–590×`) at `<= 1.7B` — motivating GPU 2-stage RVQ/AQLM lookup-table kernels and `7B–32B` scaling in Wave III.
-
-### 2. Earlier Validated Research Archive (`exp-001` through `exp-004`)
-
-- **Matched-Byte Hadamard Incoherence Control & Layer-31 Study ([`exp-004`](experiments/exp-004-event-horizon-sub3bit.toml)):** At identical `2.27–2.285 bpp` (zero extra bytes), Randomized FWHT cut plain 2-bit Mean KL by **`−37.9%`** (`135M`, `137.5×` lower PPLx) and **`−39.5%`** (`360M`, `209.4×` lower PPLx). Promoting `SmolLM2-360M` Layer 31 alone to `INT8_SYM` (`+0.102 bpp`) cut L31 `Rel L2` by `−24.0%` (`0.6002 → 0.4560`) but slightly raised KL (`1.284 → 1.499`), proving the cliff was upstream-amplified (subsequently solved across all layers by Wave II GPTQ!).
-- **Persistent GPU Hybrid Baselines & Nuanced Controls ([`exp-003`](experiments/exp-003-smollm2-360m-gpu.toml), [`exp-002`](experiments/exp-002-smollm2-135m.toml), [`exp-001`](experiments/exp-001-rmq-map-qcore-baseline.toml)):** Reconciled verbatim: `SmolLM2-360M` `BF16` (`12.10 tok/s`), `INT8_SYM` (`20.97 tok/s`, `95.5%` Top-1), `Q4_0` (`11.65 tok/s`, `77.3%` Top-1), weight-only `MAP 4.516 bpp` (`11.92 tok/s`, `5.30×` GPU speedup, `68.2%` Top-1 preserved nuanced control); `SmolLM2-135M` quant-only MAP (`−16.4%` KL vs `Q4_0`) + unrestricted SVD-8 negative control; and synthetic `exp-001` outlier-peeled RMQ (`−49.2%` error) vs uncorrelated Gaussian control.
+- **Wave II Multi-Scale GPTQ & `GpuFull` `22.1×` Speedup ([`exp-005`](experiments/exp-005-event-horizon-wave2-gptq-scaling.toml)):** `GpuFull` accelerated `SmolLM2-360M` `Q4_0` **`22.1×`** (`1.84 → 40.70 tok/s`, up to `63.3 tok/s` at 2-bit) with identical output; matched-byte GPTQ+Hadamard cut `SmolLM2-360M` `INT3` KL `−67.3%` (`1.910 → 0.624`), broke `QMR-275` (`360M`, `PPLx 3.52×`), `QMR-250` (`SmolLM2-1.7B`, `PPLx 2.79×`), and `INT2` `2.25 bpp` on `Qwen2.5-1.5B` (`PPLx 4.12×`) and 2-shard `Qwen2.5-3B` (`PPLx 2.76×`, `55.4%` Top-1, `829.6 MiB` VRAM, `18.6 tok/s`).
+- **Matched-Byte Hadamard Incoherence Control & Layer-31 Study ([`exp-004`](experiments/exp-004-event-horizon-sub3bit.toml)):** Randomized FWHT cut plain 2-bit Mean KL by **`−37.9%`** (`135M`, `137.5×` lower PPLx) and **`−39.5%`** (`360M`, `209.4×` lower PPLx) at zero extra bytes. Layer-31-only protection (`+0.102 bpp`) cut L31 `Rel L2` `−24.0%` but slightly raised KL (`1.284 → 1.499`), falsifying single-layer-only fixes.
+- **Persistent GPU Hybrid Baselines & Nuanced Controls ([`exp-003`](experiments/exp-003-smollm2-360m-gpu.toml), [`exp-002`](experiments/exp-002-smollm2-135m.toml), [`exp-001`](experiments/exp-001-rmq-map-qcore-baseline.toml)):** Verified verbatim across `SmolLM2-360M` (`BF16` `12.10 tok/s`, `INT8_SYM` `20.97 tok/s` / `95.5%` Top-1, `Q4_0` `11.65 tok/s` / `77.3%` Top-1, weight-only `MAP` `4.516 bpp` nuanced control), `SmolLM2-135M` quant-only MAP (`−16.4%` KL), and synthetic outlier-peeled RMQ (`−49.2%` error) vs Gaussian control.
 
 <p align="center">
   <img src="assets/benchmarks.svg" alt="QML Measured RMQ Ablation and Q-Core Direct Inference Benchmarks" width="100%"/>
@@ -177,14 +162,11 @@ cargo build --workspace --release
 # Launch the native PROJECT PRISM WGPU 3D desktop observatory (with GpuFull inference)
 cargo run --release -p qml-desktop
 
-# Transform single OR multi-shard Safetensors -> QMF v1 atomically (supports Llama & Qwen2)
-cargo run --release -p qml-cli -- morph ./model.safetensors.index.json --method int3 --output ./out-int3.qmf
+# Calibrate & benchmark a 7B–32B multi-shard model in < 1 GiB peak VRAM + GPU INT8 KV-cache
+cargo run --release -p qml-cli -- resonance-ladder --model ./model-dir --config ./config.json --tokenizer ./tokenizer.json --out-dir ./work --backend gpu --kv-cache int8 --calibrate --no-echo --profiles "int4,int3,int2,qmr-200"
 
-# Run the Activation-Calibrated Sub-3-Bit GPTQ+Hadamard Ladder on single-submission GpuFull
-cargo run --release -p qml-cli -- resonance-ladder --model ./model.safetensors.index.json --config ./config.json --tokenizer ./tokenizer.json --backend gpu-full --calibrate --no-echo --profiles "int4,int3,qmr-300,qmr-250,int2"
-
-# Run single-submission Full GPU-Resident compressed inference
-cargo run --release -p qml-cli -- generate ./out-int3.qmf --config ./config.json --tokenizer ./tokenizer.json --backend gpu-full --chat --prompt "Explain SVD."
+# Run single-submission Full GPU-Resident compressed inference with GPU INT8 KV-cache
+cargo run --release -p qml-cli -- generate ./work/int2_hadamard.qmf --config ./config.json --tokenizer ./tokenizer.json --backend gpu --kv-cache int8 --chat --prompt "Explain binary search."
 ```
 
 See [BUILD.md](BUILD.md) for `cargo-deny` policy checks and CI workflow details.

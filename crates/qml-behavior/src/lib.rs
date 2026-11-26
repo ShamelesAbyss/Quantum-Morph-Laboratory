@@ -371,6 +371,84 @@ impl ReferenceSuiteCache {
             ref_logits: all_logits,
         })
     }
+
+    /// Construct a [`ReferenceSuiteCache`] directly from precomputed reference logits
+    /// (e.g., produced by layer-by-layer streaming BF16 evaluation for 7B–32B models).
+    pub fn from_precomputed(
+        examples: Vec<CapabilityExample>,
+        ref_logits: Vec<Vec<Vec<f64>>>,
+    ) -> Self {
+        Self {
+            examples,
+            ref_logits,
+        }
+    }
+
+    /// Save precomputed reference logits to a compact binary file (`QREF1\0`, f32 logits).
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::{BufWriter, Write};
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut w = BufWriter::new(std::fs::File::create(path)?);
+        w.write_all(b"QREF1\0")?;
+        w.write_all(&(self.ref_logits.len() as u32).to_le_bytes())?;
+        for seq in &self.ref_logits {
+            w.write_all(&(seq.len() as u32).to_le_bytes())?;
+            for logits in seq {
+                w.write_all(&(logits.len() as u32).to_le_bytes())?;
+                for &v in logits {
+                    w.write_all(&(v as f32).to_le_bytes())?;
+                }
+            }
+        }
+        w.flush()
+    }
+
+    /// Load previously cached reference logits (`QREF1\0`) paired with the same `examples`.
+    pub fn load_from_file(
+        path: &std::path::Path,
+        examples: Vec<CapabilityExample>,
+    ) -> std::io::Result<Self> {
+        use std::io::{BufReader, Read};
+        let mut r = BufReader::new(std::fs::File::open(path)?);
+        let mut magic = [0u8; 6];
+        r.read_exact(&mut magic)?;
+        if &magic != b"QREF1\0" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid QREF1 reference logit cache magic",
+            ));
+        }
+        let read_u32 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u32> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(u32::from_le_bytes(b))
+        };
+        let n_ex = read_u32(&mut r)? as usize;
+        let mut ref_logits = Vec::with_capacity(n_ex);
+        for _ in 0..n_ex {
+            let steps = read_u32(&mut r)? as usize;
+            let mut seq = Vec::with_capacity(steps);
+            for _ in 0..steps {
+                let vocab = read_u32(&mut r)? as usize;
+                let mut raw = vec![0u8; vocab * 4];
+                r.read_exact(&mut raw)?;
+                let logits: Vec<f64> = raw
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f64::from(f32::from_le_bytes(c)))
+                    .collect();
+                seq.push(logits);
+            }
+            ref_logits.push(seq);
+        }
+        Ok(Self {
+            examples,
+            ref_logits,
+        })
+    }
 }
 
 /// Fast Full-GPU-compatible Capability Retention Suite evaluation against a precomputed

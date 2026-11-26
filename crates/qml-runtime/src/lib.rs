@@ -9,10 +9,13 @@
 //! with incremental KV-cache, SwiGLU MLP, autoregressive token generation, and
 //! rigorous reference-vs-transformed logit KL divergence & perplexity evaluation.
 
+pub mod streaming;
+pub use streaming::{StreamingCalibAndRefResult, stream_calibrate_and_reference};
+
 use qml_core::{DeterministicRng, MatrixError};
 use qml_format::{QmfArchiveV1, QmfError, QmfFileReader, QmfLatentCache, QmfOperator};
 use qml_hardware::{
-    GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache,
+    GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache, GpuKvMode,
     PersistentGpuMatrix, WgpuMatvecEngine,
 };
 use qml_model::{DType, encode_safetensors, f16_to_f32, f32_to_f16};
@@ -529,13 +532,16 @@ impl GpuUploadContext {
                 self.vram_weight_bytes += p.vram_bytes();
                 GpuOperator::Single(Arc::new(p))
             }),
-            QmfOperator::VectorQuant(_) => None,
+            QmfOperator::VectorQuant(m) => self.engine.upload_vector_quant(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(Arc::new(p))
+            }),
             QmfOperator::EchoCorrected(echo) => {
                 let base_gpu = match echo.base() {
                     EchoBaseOperator::Int3Asym(m) => self.engine.upload_int3_asym(m).ok(),
                     EchoBaseOperator::Int2Asym(m) => self.engine.upload_int2_asym(m).ok(),
                     EchoBaseOperator::Ternary(m) => self.engine.upload_ternary_packed(m).ok(),
-                    EchoBaseOperator::VectorQuant(_) => None,
+                    EchoBaseOperator::VectorQuant(m) => self.engine.upload_vector_quant(m).ok(),
                 };
                 if let Some(base) = base_gpu {
                     self.vram_weight_bytes += base.vram_bytes();
@@ -1059,9 +1065,13 @@ impl QCoreModel {
                 });
             }
             let embed = self.embed_tokens.decode_row(token_id)?;
-            let gkv = cache
-                .gpu_kv
-                .get_or_insert_with(|| full.create_kv_cache(self.config.max_seq_len.min(4096)));
+            let gpu_kv_mode = match cache.mode {
+                KvCacheMode::Fp64 => GpuKvMode::Fp32,
+                KvCacheMode::Int8 => GpuKvMode::Int8,
+            };
+            let gkv = cache.gpu_kv.get_or_insert_with(|| {
+                full.create_kv_cache_with_mode(self.config.max_seq_len.min(4096), gpu_kv_mode)
+            });
             return full
                 .forward_embedding(&embed, position, gkv)
                 .map_err(|e| RuntimeError::InvalidConfig(format!("GPU Full error: {e}")));
@@ -1438,14 +1448,15 @@ impl QCoreModel {
         )
     }
 
-    /// Generate up to `max_new_tokens`, stopping early on `eos_token` or when
-    /// `on_token(token_id)` returns `false` (enabling live streaming & cancellation).
-    pub fn generate_with_callback<F>(
+    /// Generate up to `max_new_tokens` with an explicit [`KvCacheMode`] (`Fp64`/`Fp32` or `Int8` GPU/CPU KV).
+    #[allow(clippy::too_many_arguments)]
+    pub fn generate_with_kv_mode<F>(
         &self,
         prompt_tokens: &[usize],
         max_new_tokens: usize,
         temperature: f64,
         eos_token: Option<usize>,
+        kv_mode: KvCacheMode,
         seed: u64,
         mut on_token: F,
     ) -> Result<GenerationResult, RuntimeError>
@@ -1456,7 +1467,7 @@ impl QCoreModel {
             return Err(RuntimeError::EmptyPrompt);
         }
         let start = Instant::now();
-        let mut cache = KvCache::new(self.config.num_layers);
+        let mut cache = KvCache::with_mode(self.config.num_layers, kv_mode);
         let mut rng = DeterministicRng::new(seed);
         let mut logits = Vec::new();
 
@@ -1492,6 +1503,31 @@ impl QCoreModel {
             elapsed_micros,
             tokens_per_second: tps,
         })
+    }
+
+    /// Generate up to `max_new_tokens`, stopping early on `eos_token` or when
+    /// `on_token(token_id)` returns `false` (enabling live streaming & cancellation).
+    pub fn generate_with_callback<F>(
+        &self,
+        prompt_tokens: &[usize],
+        max_new_tokens: usize,
+        temperature: f64,
+        eos_token: Option<usize>,
+        seed: u64,
+        on_token: F,
+    ) -> Result<GenerationResult, RuntimeError>
+    where
+        F: FnMut(usize) -> bool,
+    {
+        self.generate_with_kv_mode(
+            prompt_tokens,
+            max_new_tokens,
+            temperature,
+            eos_token,
+            KvCacheMode::Fp64,
+            seed,
+            on_token,
+        )
     }
 }
 
@@ -1954,7 +1990,7 @@ mod tests {
             );
         }
 
-        // 2. Verify INT8 KV-cache matches FP64 KV-cache tightly
+        // 2. Verify GPU-resident INT8 KV-cache (and CPU INT8 KV-cache) match FP32/FP64 KV tightly!
         let mut fp64_kv = KvCache::new(cfg.num_layers);
         let mut int8_kv = KvCache::new_int8(cfg.num_layers);
         let mut max_kv_diff = 0.0_f64;
@@ -1967,8 +2003,36 @@ mod tests {
         }
         assert!(
             max_kv_diff < 5e-2,
-            "INT8 KV-cache drifted too far from FP64: max_diff={max_kv_diff:.6}"
+            "CPU INT8 KV-cache drifted too far from FP64: max_diff={max_kv_diff:.6}"
         );
+
+        let mut gpu_fp_kv = KvCache::new(cfg.num_layers);
+        let mut gpu_i8_kv = KvCache::new_int8(cfg.num_layers);
+        let mut max_gpu_kv_diff = 0.0_f64;
+        for (pos, &tok) in seq.iter().enumerate() {
+            let l_fp = full_gpu_model
+                .forward_token(tok, pos, &mut gpu_fp_kv)
+                .unwrap();
+            let l_i8 = full_gpu_model
+                .forward_token(tok, pos, &mut gpu_i8_kv)
+                .unwrap();
+            for (&a, &b) in l_fp.iter().zip(&l_i8) {
+                max_gpu_kv_diff = max_gpu_kv_diff.max((a - b).abs());
+            }
+        }
+        assert!(
+            max_gpu_kv_diff < 5e-2,
+            "GpuFull INT8 KV-cache drifted too far from FP32 KV: max_diff={max_gpu_kv_diff:.6}"
+        );
+        if let (Some(gfp), Some(gi8)) = (&gpu_fp_kv.gpu_kv, &gpu_i8_kv.gpu_kv) {
+            assert_eq!(gi8.mode(), GpuKvMode::Int8);
+            assert!(
+                gi8.vram_bytes() < gfp.vram_bytes() / 2,
+                "expected GPU INT8 KV VRAM ({}) < half FP32 KV VRAM ({})",
+                gi8.vram_bytes(),
+                gfp.vram_bytes()
+            );
+        }
 
         // 3. Verify calibration profile collection covers all layers and lm_head
         let cal = cpu_model
@@ -1978,5 +2042,56 @@ mod tests {
         assert!(cal.get("model.layers.0.self_attn.q_proj.weight").is_some());
         assert!(cal.get("model.layers.1.mlp.down_proj.weight").is_some());
         assert!(cal.get("lm_head.weight").is_some());
+
+        // 4. Verify Layer-by-Layer Streaming BF16 Calibration & Reference Evaluator matches full model!
+        let tmp_st = std::env::temp_dir().join("qml_test_streaming_calib.safetensors");
+        std::fs::write(&tmp_st, &model_bytes).unwrap();
+        let (bf16_archive, _) = forge_safetensors_to_qmf(
+            Cursor::new(&model_bytes),
+            "mini-llama-bf16",
+            "synthetic",
+            "llama",
+            &TransformStrategy::Bf16,
+            &budget,
+            77,
+        )
+        .unwrap();
+        let bf16_model = QCoreModel::from_qmf(&bf16_archive, cfg.clone()).unwrap();
+        let mut ref_kv = KvCache::new(cfg.num_layers);
+        let mut expected_logits = Vec::new();
+        for (pos, &tok) in seq.iter().take(seq.len() - 1).enumerate() {
+            expected_logits.push(bf16_model.forward_token(tok, pos, &mut ref_kv).unwrap());
+        }
+        let streamed = stream_calibrate_and_reference(
+            &tmp_st,
+            "mini-llama-stream",
+            &cfg,
+            &[seq.to_vec()],
+            &[seq.to_vec()],
+            DEFAULT_HESSIAN_BLOCK_SIZE,
+            true,
+            &budget,
+            |_, _, _| {},
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&tmp_st);
+        assert_eq!(streamed.calibration.calibration_tokens, seq.len());
+        assert!(
+            streamed
+                .calibration
+                .get("model.layers.0.self_attn.q_proj.weight")
+                .is_some()
+        );
+        assert_eq!(streamed.eval_logits[0].len(), expected_logits.len());
+        let mut max_stream_diff = 0.0_f64;
+        for (a_vec, b_vec) in expected_logits.iter().zip(&streamed.eval_logits[0]) {
+            for (&a, &b) in a_vec.iter().zip(b_vec) {
+                max_stream_diff = max_stream_diff.max((a - b).abs());
+            }
+        }
+        assert!(
+            max_stream_diff < 5e-2,
+            "Streaming BF16 evaluator diverged from full BF16 QCoreModel: max_diff={max_stream_diff:.6}"
+        );
     }
 }

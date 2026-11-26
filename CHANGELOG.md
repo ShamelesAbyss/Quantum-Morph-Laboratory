@@ -1,5 +1,23 @@
 # Changelog
 
+## `v0.6.0` — PROJECT EVENT HORIZON Wave III (2026-11-26)
+
+- **Layer-by-Layer Streaming BF16 Calibration & Exact Reference Evaluator (`qml-runtime::streaming`, `qml-model::payload`):**
+  - Added `stream_calibrate_and_reference` streaming single-file and multi-shard Safetensors checkpoints **one transformer layer at a time** (with `read_tensor_rows_f64` distinct-row embedding seek, zero-`f64` `read_tensor_bf16_bits`, and `<= 32,768`-row chunked `lm_head` GPU evaluation), enabling `14.19 GiB` 7B (and `14B–32B`) calibration & exact BF16 reference evaluation in **`444.5 MiB` peak VRAM** on an 8 GB consumer GPU.
+  - Raised default `PayloadBudget` ceilings to `8 GiB/tensor` and `64 GiB/total`, and added compact binary disk caching for `ModelCalibrationProfile` (`QCAL1`) and `ReferenceSuiteCache` (`QREF1`) with automatic cache reuse in `qml resonance-ladder`.
+- **GPU-Resident Per-Head INT8 KV-Cache (`qml-hardware::gpu_full`, `qml-runtime`, `qml-cli`):**
+  - Added `GpuKvMode::Int8` (`ROPE_AND_KV_APPEND_INT8_WGSL` + `GQA_ATTN_INT8_WGSL`) packing 4× signed `i8` codes per `u32` word with per-head `f32` scales inside VRAM (`~3.88×` smaller KV VRAM than FP32 at `head_dim=128`), exposed via `--kv-cache int8` in `qml generate` and `qml resonance-ladder`.
+- **10th Persistent GPU WGSL Kernel (`MATVEC_VQ_WGSL`) & Activation-Weighted 2-Stage RVQ (`qml-hardware`, `qml-quant::gptq`, `qml-forge`, `qml-runtime`):**
+  - Implemented `GpuMatrixKind::VectorQuant` and `MATVEC_VQ_WGSL`, wired directly into `GpuHybrid` and single-submission `GpuFull` (`< 1e-4` CPU/GPU parity across all 10 compressed matrix formats).
+  - Added `fit_vq_calibrated` (Hadamard-rotated activation-weighted 1/2-stage RVQ with joint alternating stage refinement) and `rvq-200` / `rvq-175` / `rvq-150` CLI ladder presets.
+- **Stage D `Qwen2.5-7B-Instruct` (`7.62B`, `14.19 GiB` BF16) Live 8 GB GPU Breakthrough (`exp-006`):**
+  - Stream-calibrated 4-shard `14.19 GiB` `Qwen2.5-7B-Instruct` in `196.8s` at **`444.5 MiB` peak VRAM**; all `197/197` compressed projections ran natively on `GpuFull` + GPU INT8 KV-cache (`0` CPU fallback).
+  - `INT4_Q4_0_GPTQ` (`4.501 bpp`, `3,795.1 MiB` VRAM, `6.8 tok/s`): `PPLx = 0.98×`, `KL = 0.077`, `Top-1 = 90.9%`, `Ret = 95.4%`.
+  - `INT3_HADAMARD_GPTQ` (`3.251 bpp`, `2,741.5 MiB` VRAM, `6.8 tok/s`): `PPLx = 1.07×`, `KL = 0.164`, `Top-1 = 86.3%`, `Ret = 89.7%`.
+  - **`INT2_HADAMARD_GPTQ` (`2.251 bpp`, `1,898.7 MiB` VRAM — `7.11×` smaller than BF16, `9.7 tok/s`):** **`PPLx = 1.43×`, `KL = 0.854`, `Top-1 = 65.7%`, `Ret = 67.8%`** (`OK` — fluent explanations & Rust code generation in `1.85 GiB` VRAM!).
+  - **`QMR-200_GPTQ` (`2.000` exact complete BPP, `1,670.4 MiB` VRAM — `8.00×` smaller than BF16, `9.1 tok/s`):** **`PPLx = 2.13×`, `KL = 1.633`, `Top-1 = 52.6%`, `Ret = 49.8%`** (`OK` — **exact `2.000 bpp` barrier broken!**).
+  - Preserved honest sub-2-bit boundary (`QMR-175_GPTQ` `1.750 bpp` & `TERNARY_HADAMARD_GPTQ` `1.727 bpp` cliff at `PPLx 116–205×`) and `SmolLM2-360M` GPU `MATVEC_VQ_WGSL` negative control (`RVQ2_D8_G128` without Cholesky `H⁻¹` compensation: `KL = 9.865` vs `2.811` Cholesky `INT2`).
+
 ## `v0.5.1` — PROJECT EVENT HORIZON Wave II (Public Release Fix, 2026-11-26)
 - **Strict WGSL Barrier Uniformity (`qml-hardware::gpu_full`):** Made every `workgroupBarrier()` in `HADAMARD_FWD_WGSL` strictly uniform across all 256 threads for clean cross-vendor WGSL/DX12/Vulkan/Metal execution.
 - **Hardware-Only WGPU Compute Selection (`qml-hardware`):** `WgpuMatvecEngine::try_new()` now declines software CPU emulators (`wgpu::DeviceType::Cpu`, such as headless Windows WARP `Microsoft Basic Render Driver` or `llvmpipe`), allowing GPU-less systems and headless CI runners to fall back automatically to native multi-threaded Rayon CPU without software driver faults.

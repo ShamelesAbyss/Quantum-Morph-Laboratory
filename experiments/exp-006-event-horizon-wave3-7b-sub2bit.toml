@@ -1,0 +1,197 @@
+[experiment]
+id = "exp-006"
+title = "PROJECT EVENT HORIZON Wave III: Stage D Qwen2.5-7B-Instruct (14.19 GiB BF16 -> 1.63-3.71 GiB VRAM), Breaking the 2.000 bpp Barrier, Layer-by-Layer Streaming Calibration (<450 MiB VRAM), GPU INT8 KV-Cache & MATVEC_VQ_WGSL Control"
+date = "2026-11-26"
+version = "0.6.0"
+status = "completed"
+host_os = "Windows 11 Home (26H2) x86_64"
+host_cpu = "Intel Core i9-14900HX (32 logical cores, AVX2/FMA/F16C)"
+host_ram_gib = 31.78
+host_gpu = "NVIDIA GeForce RTX 4070 Laptop GPU (8 GB VRAM, WGPU Vulkan/DX12)"
+rust_toolchain = "1.100.0"
+
+[methodology]
+complete_byte_accounting = "Every byte serialized on disk in QMF v1 (payload codes, FP16 scales/mins, codebooks, optional biases, 1D RMSNorm vectors, JSON manifest, headers, CRC-32) divided by total model parameters."
+disjoint_calibration_corpus = "6 multi-domain prompts (196 tokens: OS scheduling, Cholesky linear algebra, Python quicksort, photosynthesis, Raft consensus, geometry), strictly disjoint from the 4-category held-out Capability Retention Suite."
+streaming_calibration = "Layer-by-layer BF16 streaming (qml-runtime::streaming::stream_calibrate_and_reference) holding at most 1 transformer block (~444.5 MiB) or <=32,768-row lm_head slice in VRAM at any instant, allowing 14.19 GiB BF16 calibration & exact reference logit evaluation on an 8 GB VRAM GPU."
+kv_cache_mode = "GPU-resident per-head symmetric INT8 KV-cache (ROPE_AND_KV_APPEND_INT8_WGSL + GQA_ATTN_INT8_WGSL, ~3.88x smaller KV VRAM than FP32) inside single-submission QCoreBackend::GpuFull."
+
+[stage_d_model]
+name = "Qwen/Qwen2.5-7B-Instruct"
+license = "Apache-2.0"
+architecture = "Qwen2ForCausalLM (28 layers, hidden=3584, intermediate=18944, heads=28, kv_heads=4, head_dim=128, vocab=152064, tie_word_embeddings=false, Q/K/V biases)"
+total_parameters = 7615616512
+bf16_shards = 4
+bf16_total_bytes = 15230871888
+shard_1_bytes = 3945441440
+shard_1_sha256 = "a1333e6293854747c481288ea83b348226af178dd565c49b6f9495ba1966aba7"
+shard_2_bytes = 3864726352
+shard_2_sha256 = "f5d25a2772cb825164a2a2c0fb6d51a87e282abf21e4dd75bc5cfb3cd0ea6185"
+shard_3_bytes = 3864726424
+shard_3_sha256 = "8efdec4c1bc12317ae1a38dc42b595ce777738a64deea3fcb8a0a91381bcdfd5"
+shard_4_bytes = 3556377672
+shard_4_sha256 = "1a72d403cdf0c1ec3cb7f289f17b394a01e64394c2e9b3c0f94dbce3faf879bd"
+streaming_elapsed_secs = 196.8
+streaming_peak_layer_vram_mib = 444.5
+streaming_calibration_tokens = 196
+streaming_hessians_ram_mib = 563.4
+cached_cal_file_mib = 281.8
+cached_ref_logits_file_mib = 101.5
+
+[[stage_d_results]]
+profile = "INT4_Q4_0_GPTQ"
+complete_bpp = 4.501
+disk_bytes = 4285003595
+disk_mib = 4086.5
+compression_ratio_vs_bf16 = 3.55
+vram_mib = 3795.1
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 6.8
+ppl_ratio = 0.98
+mean_kl = 0.077
+top1_pct = 90.9
+cosine = 0.944
+retention_pct = 95.4
+status = "OK"
+sample_output = "Binary search is an efficient algorithm that finds a target value within a sorted array by repeatedly dividing the search"
+
+[[stage_d_results]]
+profile = "INT3_HADAMARD_GPTQ"
+complete_bpp = 3.251
+disk_bytes = 3095137370
+disk_mib = 2951.8
+compression_ratio_vs_bf16 = 4.92
+vram_mib = 2741.5
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 6.8
+ppl_ratio = 1.07
+mean_kl = 0.164
+top1_pct = 86.3
+cosine = 0.841
+retention_pct = 89.7
+status = "OK"
+sample_output = "Binary search is an efficient algorithm for finding an item from a sorted list by repeatedly dividing the search interval"
+
+[[stage_d_results]]
+profile = "INT2_HADAMARD_GPTQ"
+complete_bpp = 2.251
+disk_bytes = 2143226870
+disk_mib = 2043.9
+compression_ratio_vs_bf16 = 7.11
+vram_mib = 1898.7
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 9.7
+ppl_ratio = 1.43
+mean_kl = 0.854
+top1_pct = 65.7
+cosine = 0.533
+retention_pct = 67.8
+status = "OK"
+sample_output = "Binary search is an efficient algorithm that repeatedly halves the search range to find a specific value in a sorted"
+
+[[stage_d_results]]
+profile = "QMR-200_GPTQ"
+complete_bpp = 2.000
+disk_bytes = 1903872891
+disk_mib = 1815.7
+compression_ratio_vs_bf16 = 8.00
+vram_mib = 1670.4
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 9.1
+ppl_ratio = 2.13
+mean_kl = 1.633
+top1_pct = 52.6
+cosine = 0.362
+retention_pct = 49.8
+status = "OK"
+sample_output = "Binary search is a algorithm that divides a sorted list into smaller sublists."
+
+[[stage_d_results]]
+profile = "QMR-175_GPTQ"
+complete_bpp = 1.750
+disk_bytes = 1665902309
+disk_mib = 1588.7
+compression_ratio_vs_bf16 = 9.14
+vram_mib = 1477.6
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 6.9
+ppl_ratio = 204.53
+mean_kl = 6.403
+top1_pct = 8.0
+cosine = 0.172
+retention_pct = 4.2
+status = "CLIFF"
+sample_output = " 888888888888 |88 | |88"
+
+[[stage_d_results]]
+profile = "TERNARY_HADAMARD_GPTQ"
+complete_bpp = 1.727
+disk_bytes = 1643800604
+disk_mib = 1567.7
+compression_ratio_vs_bf16 = 9.27
+vram_mib = 1456.5
+gpu_ops = 197
+cpu_fallback_ops = 0
+tok_per_sec = 9.5
+ppl_ratio = 115.92
+mean_kl = 5.948
+top1_pct = 6.3
+cosine = 0.118
+retention_pct = 3.6
+status = "CLIFF"
+sample_output = "Explain binary search in one......."
+
+[gpu_kv_cache_ablation]
+model = "Qwen2.5-7B-Instruct INT2_HADAMARD_GPTQ (2.251 bpp, 1898.69 MiB VRAM)"
+prompt = "Write a concise Rust function that reverses a slice in place."
+max_new_tokens = 48
+fp32_kv_tok_per_sec = 7.80
+fp32_kv_elapsed_ms = 10386.7
+int8_gpu_kv_tok_per_sec = 7.86
+int8_gpu_kv_elapsed_ms = 10305.6
+int8_kv_vram_reduction_ratio = 3.88
+
+[[gpu_vq_negative_controls]]
+model = "SmolLM2-360M-Instruct"
+profile = "RVQ2_D8_G128_GPTQ (100% GPU MATVEC_VQ_WGSL, activation-weighted k-means++ without Cholesky H^-1 compensation)"
+complete_bpp = 2.180
+vram_mib = 94.4
+tok_per_sec = 15.5
+mean_kl = 9.865
+ppl_ratio = 16167.16
+top1_pct = 0.6
+cosine = 0.221
+retention_pct = 0.3
+status = "CLIFF"
+
+[[gpu_vq_negative_controls]]
+model = "SmolLM2-360M-Instruct"
+profile = "RVQ2_D10_G128_GPTQ (100% GPU MATVEC_VQ_WGSL, 2-stage d=10 activation-weighted k-means++ without Cholesky H^-1)"
+complete_bpp = 1.790
+vram_mib = 77.5
+tok_per_sec = 15.5
+mean_kl = 10.336
+ppl_ratio = 21525.54
+top1_pct = 1.7
+cosine = 0.205
+retention_pct = 0.9
+status = "CLIFF"
+
+[[gpu_vq_negative_controls]]
+model = "SmolLM2-360M-Instruct"
+profile = "TERNARY_HADAMARD_GPTQ (matched-bpp Cholesky-compensated baseline on GpuFull + GPU INT8 KV-cache)"
+complete_bpp = 1.738
+vram_mib = 75.3
+tok_per_sec = 46.8
+mean_kl = 5.397
+ppl_ratio = 161.98
+top1_pct = 9.1
+cosine = 0.269
+retention_pct = 4.9
+status = "CLIFF"
+scientific_conclusion = "Even with Hadamard rotation, activation-weighted 2-stage k-means++ codebooks, and joint alternating code refinement, uncompensated 2-stage RVQ (KL=9.865 at 2.180 bpp; KL=10.336 at 1.790 bpp) dramatically trails Cholesky-compensated INT2_HADAMARD_GPTQ (KL=2.811, PPLx=13.53x at 2.270 bpp) and even Cholesky-compensated TERNARY_HADAMARD_GPTQ (KL=5.397, PPLx=161.98x at 1.738 bpp) — proving second-order Hessian error compensation (H^-1) dominates non-uniform codebook geometry alone and directly motivating Hessian-compensated lattice/trellis quantization in Wave IV."

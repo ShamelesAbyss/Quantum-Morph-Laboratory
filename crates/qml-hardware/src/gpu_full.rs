@@ -356,6 +356,268 @@ fn main(
 }
 "#;
 
+/// WGSL in-place RoPE on Q and K heads + per-head symmetric INT8 quantization into packed VRAM KV-cache (`~3.88x` smaller KV VRAM).
+/// Dispatched with `max(num_heads, num_kv_heads)` workgroups (`@workgroup_size(64)`).
+const ROPE_AND_KV_APPEND_INT8_WGSL: &str = r#"
+struct StepParams {
+    pos: u32,
+    seq_len: u32,
+    num_heads: u32,
+    num_kv_heads: u32,
+    head_dim: u32,
+    kv_dim: u32,
+    rope_theta: f32,
+    inv_sqrt_head_dim: f32,
+};
+
+@group(0) @binding(0) var<uniform> sp: StepParams;
+@group(0) @binding(1) var<storage, read_write> q_buf: array<f32>;
+@group(0) @binding(2) var<storage, read_write> k_buf: array<f32>;
+@group(0) @binding(3) var<storage, read> v_buf: array<f32>;
+@group(0) @binding(4) var<storage, read_write> kv_k_i8: array<u32>;
+@group(0) @binding(5) var<storage, read_write> kv_v_i8: array<u32>;
+@group(0) @binding(6) var<storage, read_write> kv_scales: array<f32>;
+
+var<workgroup> sh_k: array<f32, 256>;
+var<workgroup> sh_v: array<f32, 256>;
+var<workgroup> sh_mk: array<f32, 64>;
+var<workgroup> sh_mv: array<f32, 64>;
+
+@compute @workgroup_size(64)
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let head = wid.x;
+    let tid = lid.x;
+    let half = sp.head_dim >> 1u;
+
+    // 1. Apply RoPE to Q head `head`
+    if (head < sp.num_heads) {
+        let q_off = head * sp.head_dim;
+        var i = tid;
+        while (i < half) {
+            let freq = 1.0 / pow(sp.rope_theta, f32(2u * i) / f32(sp.head_dim));
+            let angle = f32(sp.pos) * freq;
+            let c = cos(angle);
+            let s = sin(angle);
+            let x0 = q_buf[q_off + i];
+            let x1 = q_buf[q_off + i + half];
+            q_buf[q_off + i] = x0 * c - x1 * s;
+            q_buf[q_off + i + half] = x0 * s + x1 * c;
+            i = i + 64u;
+        }
+    }
+
+    // 2. Apply RoPE to K head `head`, quantize K & V to per-head symmetric INT8, pack 4x i8/u32
+    if (head < sp.num_kv_heads) {
+        let kv_off = head * sp.head_dim;
+        var i = tid;
+        while (i < half) {
+            let freq = 1.0 / pow(sp.rope_theta, f32(2u * i) / f32(sp.head_dim));
+            let angle = f32(sp.pos) * freq;
+            let c = cos(angle);
+            let s = sin(angle);
+            let x0 = k_buf[kv_off + i];
+            let x1 = k_buf[kv_off + i + half];
+            let r0 = x0 * c - x1 * s;
+            let r1 = x0 * s + x1 * c;
+            k_buf[kv_off + i] = r0;
+            k_buf[kv_off + i + half] = r1;
+            sh_k[i] = r0;
+            sh_k[i + half] = r1;
+            sh_v[i] = v_buf[kv_off + i];
+            sh_v[i + half] = v_buf[kv_off + i + half];
+            i = i + 64u;
+        }
+        workgroupBarrier();
+
+        var loc_mk: f32 = 0.0;
+        var loc_mv: f32 = 0.0;
+        var d = tid;
+        while (d < sp.head_dim) {
+            loc_mk = max(loc_mk, abs(sh_k[d]));
+            loc_mv = max(loc_mv, abs(sh_v[d]));
+            d = d + 64u;
+        }
+        sh_mk[tid] = loc_mk;
+        sh_mv[tid] = loc_mv;
+        workgroupBarrier();
+
+        var st: u32 = 32u;
+        while (st > 0u) {
+            if (tid < st) {
+                sh_mk[tid] = max(sh_mk[tid], sh_mk[tid + st]);
+                sh_mv[tid] = max(sh_mv[tid], sh_mv[tid + st]);
+            }
+            workgroupBarrier();
+            st = st >> 1u;
+        }
+
+        let k_scale = select(sh_mk[0] / 127.0, 0.0, sh_mk[0] <= 0.0);
+        let v_scale = select(sh_mv[0] / 127.0, 0.0, sh_mv[0] <= 0.0);
+        let inv_ks = select(1.0 / k_scale, 0.0, k_scale <= 0.0);
+        let inv_vs = select(1.0 / v_scale, 0.0, v_scale <= 0.0);
+
+        if (tid == 0u) {
+            let s_base = (sp.pos * sp.num_kv_heads + head) * 2u;
+            kv_scales[s_base] = k_scale;
+            kv_scales[s_base + 1u] = v_scale;
+        }
+
+        let words_per_head = sp.head_dim >> 2u;
+        let words_per_tok = sp.kv_dim >> 2u;
+        let cache_word_base = sp.pos * words_per_tok + head * words_per_head;
+        var w_idx = tid;
+        while (w_idx < words_per_head) {
+            let b = w_idx << 2u;
+            var pk: u32 = 0u;
+            var pv: u32 = 0u;
+            for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+                let qk = u32(i32(clamp(round(sh_k[b + j] * inv_ks), -127.0, 127.0))) & 0xFFu;
+                let qv = u32(i32(clamp(round(sh_v[b + j] * inv_vs), -127.0, 127.0))) & 0xFFu;
+                pk = pk | (qk << (j * 8u));
+                pv = pv | (qv << (j * 8u));
+            }
+            kv_k_i8[cache_word_base + w_idx] = pk;
+            kv_v_i8[cache_word_base + w_idx] = pv;
+            w_idx = w_idx + 64u;
+        }
+    }
+}
+"#;
+
+/// WGSL Grouped-Query Attention reading packed per-head symmetric INT8 KV-cache directly in VRAM.
+const GQA_ATTN_INT8_WGSL: &str = r#"
+struct StepParams {
+    pos: u32,
+    seq_len: u32,
+    num_heads: u32,
+    num_kv_heads: u32,
+    head_dim: u32,
+    kv_dim: u32,
+    rope_theta: f32,
+    inv_sqrt_head_dim: f32,
+};
+
+@group(0) @binding(0) var<uniform> sp: StepParams;
+@group(0) @binding(1) var<storage, read> q_buf: array<f32>;
+@group(0) @binding(2) var<storage, read> kv_k_i8: array<u32>;
+@group(0) @binding(3) var<storage, read> kv_v_i8: array<u32>;
+@group(0) @binding(4) var<storage, read> kv_scales: array<f32>;
+@group(0) @binding(5) var<storage, read_write> attn_out: array<f32>;
+
+var<workgroup> sh_dot: array<f32, 64>;
+var<workgroup> sh_prob: f32;
+var<workgroup> sh_alpha: f32;
+
+@compute @workgroup_size(64)
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let h = wid.x;
+    if (h >= sp.num_heads) {
+        return;
+    }
+    let tid = lid.x;
+    let kv_groups = sp.num_heads / sp.num_kv_heads;
+    let kv_h = h / kv_groups;
+    let q_off = h * sp.head_dim;
+    let words_per_head = sp.head_dim >> 2u;
+    let words_per_tok = sp.kv_dim >> 2u;
+
+    var acc0: f32 = 0.0;
+    var acc1: f32 = 0.0;
+    var acc2: f32 = 0.0;
+    var acc3: f32 = 0.0;
+
+    var running_max: f32 = -1e30;
+    var running_sum: f32 = 0.0;
+
+    for (var t: u32 = 0u; t < sp.seq_len; t = t + 1u) {
+        let word_base = t * words_per_tok + kv_h * words_per_head;
+        let s_base = (t * sp.num_kv_heads + kv_h) * 2u;
+        let k_scale = kv_scales[s_base];
+        let v_scale = kv_scales[s_base + 1u];
+
+        var part: f32 = 0.0;
+        var d = tid;
+        while (d < sp.head_dim) {
+            let w = kv_k_i8[word_base + (d >> 2u)];
+            let kv = f32(extractBits(i32(w), (d & 3u) * 8u, 8u)) * k_scale;
+            part = part + q_buf[q_off + d] * kv;
+            d = d + 64u;
+        }
+        sh_dot[tid] = part;
+        workgroupBarrier();
+
+        var s: u32 = 32u;
+        while (s > 0u) {
+            if (tid < s) {
+                sh_dot[tid] = sh_dot[tid] + sh_dot[tid + s];
+            }
+            workgroupBarrier();
+            s = s >> 1u;
+        }
+
+        if (tid == 0u) {
+            let score = sh_dot[0] * sp.inv_sqrt_head_dim;
+            let new_max = max(running_max, score);
+            let alpha = exp(running_max - new_max);
+            let p = exp(score - new_max);
+            running_sum = running_sum * alpha + p;
+            running_max = new_max;
+            sh_alpha = alpha;
+            sh_prob = p;
+        }
+        workgroupBarrier();
+
+        let alpha = sh_alpha;
+        let p_scaled = sh_prob * v_scale;
+        if (tid < sp.head_dim) {
+            let w = kv_v_i8[word_base + (tid >> 2u)];
+            acc0 = acc0 * alpha + p_scaled * f32(extractBits(i32(w), (tid & 3u) * 8u, 8u));
+        }
+        if (tid + 64u < sp.head_dim) {
+            let d1 = tid + 64u;
+            let w = kv_v_i8[word_base + (d1 >> 2u)];
+            acc1 = acc1 * alpha + p_scaled * f32(extractBits(i32(w), (d1 & 3u) * 8u, 8u));
+        }
+        if (tid + 128u < sp.head_dim) {
+            let d2 = tid + 128u;
+            let w = kv_v_i8[word_base + (d2 >> 2u)];
+            acc2 = acc2 * alpha + p_scaled * f32(extractBits(i32(w), (d2 & 3u) * 8u, 8u));
+        }
+        if (tid + 192u < sp.head_dim) {
+            let d3 = tid + 192u;
+            let w = kv_v_i8[word_base + (d3 >> 2u)];
+            acc3 = acc3 * alpha + p_scaled * f32(extractBits(i32(w), (d3 & 3u) * 8u, 8u));
+        }
+        workgroupBarrier();
+    }
+
+    if (tid == 0u) {
+        sh_alpha = 1.0 / max(running_sum, 1e-30);
+    }
+    workgroupBarrier();
+    let inv_sum = sh_alpha;
+
+    if (tid < sp.head_dim) {
+        attn_out[q_off + tid] = acc0 * inv_sum;
+    }
+    if (tid + 64u < sp.head_dim) {
+        attn_out[q_off + tid + 64u] = acc1 * inv_sum;
+    }
+    if (tid + 128u < sp.head_dim) {
+        attn_out[q_off + tid + 128u] = acc2 * inv_sum;
+    }
+    if (tid + 192u < sp.head_dim) {
+        attn_out[q_off + tid + 192u] = acc3 * inv_sum;
+    }
+}
+"#;
+
 /// WGSL SwiGLU activation: `gate[i] = silu(gate[i]) * up[i]`.
 const SWIGLU_WGSL: &str = r#"
 struct Params {
@@ -443,18 +705,34 @@ pub struct GpuFullLayerSpec {
     pub down_proj: GpuFullOperator,
 }
 
-/// Persistent GPU-resident KV-cache (`[layer][max_kv_len * kv_dim]` f32s in VRAM).
+/// Precision mode for GPU-resident persistent VRAM KV-cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuKvMode {
+    /// Full-precision FP32 KV-cache in VRAM.
+    #[default]
+    Fp32,
+    /// Per-head symmetric INT8 KV-cache in VRAM (`~3.88x` smaller KV VRAM for long context on 8 GB GPUs).
+    Int8,
+}
+
+/// Persistent GPU-resident KV-cache (`FP32` or packed `INT8` in VRAM).
 pub struct GpuKvCache {
+    mode: GpuKvMode,
     max_kv_len: usize,
     seq_len: usize,
     kv_bytes: u64,
     _k_bufs: Vec<wgpu::Buffer>,
     _v_bufs: Vec<wgpu::Buffer>,
+    _scale_bufs: Vec<wgpu::Buffer>,
     rope_kv_bgs: Vec<wgpu::BindGroup>,
     attn_bgs: Vec<wgpu::BindGroup>,
 }
 
 impl GpuKvCache {
+    pub fn mode(&self) -> GpuKvMode {
+        self.mode
+    }
+
     pub fn seq_len(&self) -> usize {
         self.seq_len
     }
@@ -511,10 +789,14 @@ pub struct GpuFullModel {
     pipeline_hadamard: wgpu::ComputePipeline,
     pipeline_rope_kv: wgpu::ComputePipeline,
     pipeline_gqa_attn: wgpu::ComputePipeline,
+    pipeline_rope_kv_int8: wgpu::ComputePipeline,
+    pipeline_gqa_attn_int8: wgpu::ComputePipeline,
     pipeline_swiglu: wgpu::ComputePipeline,
     pipeline_vec_add: wgpu::ComputePipeline,
     bgl_rope_kv: wgpu::BindGroupLayout,
     bgl_gqa_attn: wgpu::BindGroupLayout,
+    bgl_rope_kv_int8: wgpu::BindGroupLayout,
+    bgl_gqa_attn_int8: wgpu::BindGroupLayout,
     step_params_buf: wgpu::Buffer,
     hidden_buf: wgpu::Buffer,
     q_buf: wgpu::Buffer,
@@ -574,6 +856,8 @@ impl GpuFullModel {
         let sh_had = mk_shader("qml-full-hadamard", HADAMARD_FWD_WGSL);
         let sh_rope = mk_shader("qml-full-rope-kv", ROPE_AND_KV_APPEND_WGSL);
         let sh_attn = mk_shader("qml-full-gqa-attn", GQA_ATTN_WGSL);
+        let sh_rope_i8 = mk_shader("qml-full-rope-kv-int8", ROPE_AND_KV_APPEND_INT8_WGSL);
+        let sh_attn_i8 = mk_shader("qml-full-gqa-attn-int8", GQA_ATTN_INT8_WGSL);
         let sh_swiglu = mk_shader("qml-full-swiglu", SWIGLU_WGSL);
         let sh_add = mk_shader("qml-full-vec-add", VEC_ADD_WGSL);
 
@@ -624,6 +908,14 @@ impl GpuFullModel {
             label: Some("full-gqa-attn-bgl"),
             entries: &[u_entry, ro(1), ro(2), ro(3), rw(4)],
         });
+        let bgl_rope_kv_int8 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("full-rope-kv-int8-bgl"),
+            entries: &[u_entry, rw(1), rw(2), ro(3), rw(4), rw(5), rw(6)],
+        });
+        let bgl_gqa_attn_int8 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("full-gqa-attn-int8-bgl"),
+            entries: &[u_entry, ro(1), ro(2), ro(3), ro(4), rw(5)],
+        });
         let bgl_2vec = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("full-2vec-bgl"),
             entries: &[u_entry, rw(1), ro(2)],
@@ -649,6 +941,10 @@ impl GpuFullModel {
         let pipeline_hadamard = mk_pipe("full-had-pipe", &bgl_had, &sh_had);
         let pipeline_rope_kv = mk_pipe("full-rope-kv-pipe", &bgl_rope_kv, &sh_rope);
         let pipeline_gqa_attn = mk_pipe("full-gqa-attn-pipe", &bgl_gqa_attn, &sh_attn);
+        let pipeline_rope_kv_int8 =
+            mk_pipe("full-rope-kv-int8-pipe", &bgl_rope_kv_int8, &sh_rope_i8);
+        let pipeline_gqa_attn_int8 =
+            mk_pipe("full-gqa-attn-int8-pipe", &bgl_gqa_attn_int8, &sh_attn_i8);
         let pipeline_swiglu = mk_pipe("full-swiglu-pipe", &bgl_2vec, &sh_swiglu);
         let pipeline_vec_add = mk_pipe("full-vec-add-pipe", &bgl_2vec, &sh_add);
 
@@ -1096,10 +1392,14 @@ impl GpuFullModel {
             pipeline_hadamard,
             pipeline_rope_kv,
             pipeline_gqa_attn,
+            pipeline_rope_kv_int8,
+            pipeline_gqa_attn_int8,
             pipeline_swiglu,
             pipeline_vec_add,
             bgl_rope_kv,
             bgl_gqa_attn,
+            bgl_rope_kv_int8,
+            bgl_gqa_attn_int8,
             step_params_buf,
             hidden_buf,
             q_buf,
@@ -1137,104 +1437,222 @@ impl GpuFullModel {
         self.vram_runtime_bytes
     }
 
-    /// Allocate a persistent GPU-resident KV-cache for up to `max_kv_len` tokens.
+    /// Allocate a persistent GPU-resident FP32 KV-cache for up to `max_kv_len` tokens.
     pub fn create_kv_cache(&self, max_kv_len: usize) -> GpuKvCache {
+        self.create_kv_cache_with_mode(max_kv_len, GpuKvMode::Fp32)
+    }
+
+    /// Allocate a persistent GPU-resident KV-cache (`Fp32` or `~3.88x` smaller `Int8`) in VRAM.
+    pub fn create_kv_cache_with_mode(&self, max_kv_len: usize, mode: GpuKvMode) -> GpuKvCache {
         let len = max_kv_len.min(self.config.max_kv_len).max(1);
         let head_dim = self.config.hidden_size / self.config.num_heads;
+        let effective_mode = if mode == GpuKvMode::Int8 && head_dim.is_multiple_of(4) {
+            GpuKvMode::Int8
+        } else {
+            GpuKvMode::Fp32
+        };
         let kv_dim = self.config.num_kv_heads * head_dim;
-        let per_buf_bytes = (len * kv_dim * std::mem::size_of::<f32>()) as u64;
         let mut k_bufs = Vec::with_capacity(self.config.num_layers);
         let mut v_bufs = Vec::with_capacity(self.config.num_layers);
+        let mut scale_bufs = Vec::new();
         let mut rope_kv_bgs = Vec::with_capacity(self.config.num_layers);
         let mut attn_bgs = Vec::with_capacity(self.config.num_layers);
+        let mut total_kv_bytes: u64 = 0;
 
         for _ in 0..self.config.num_layers {
-            let kb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("gpu-kv-k"),
-                size: per_buf_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
-            let vb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("gpu-kv-v"),
-                size: per_buf_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
-            let r_bg = self
-                .engine
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("gpu-rope-kv-bg"),
-                    layout: &self.bgl_rope_kv,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.step_params_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: self.q_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: self.k_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: self.v_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: kb.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: vb.as_entire_binding(),
-                        },
-                    ],
-                });
-            let a_bg = self
-                .engine
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("gpu-gqa-attn-bg"),
-                    layout: &self.bgl_gqa_attn,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.step_params_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: self.q_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: kb.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: vb.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: self.attn_out_buf.as_entire_binding(),
-                        },
-                    ],
-                });
-            k_bufs.push(kb);
-            v_bufs.push(vb);
-            rope_kv_bgs.push(r_bg);
-            attn_bgs.push(a_bg);
+            match effective_mode {
+                GpuKvMode::Fp32 => {
+                    let per_buf_bytes = (len * kv_dim * std::mem::size_of::<f32>()) as u64;
+                    let kb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("gpu-kv-k"),
+                        size: per_buf_bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    let vb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("gpu-kv-v"),
+                        size: per_buf_bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    let r_bg = self
+                        .engine
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("gpu-rope-kv-bg"),
+                            layout: &self.bgl_rope_kv,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: self.step_params_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: self.q_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: self.k_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: self.v_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 4,
+                                    resource: kb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 5,
+                                    resource: vb.as_entire_binding(),
+                                },
+                            ],
+                        });
+                    let a_bg = self
+                        .engine
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("gpu-gqa-attn-bg"),
+                            layout: &self.bgl_gqa_attn,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: self.step_params_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: self.q_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: kb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: vb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 4,
+                                    resource: self.attn_out_buf.as_entire_binding(),
+                                },
+                            ],
+                        });
+                    total_kv_bytes += per_buf_bytes * 2;
+                    k_bufs.push(kb);
+                    v_bufs.push(vb);
+                    rope_kv_bgs.push(r_bg);
+                    attn_bgs.push(a_bg);
+                }
+                GpuKvMode::Int8 => {
+                    let per_buf_bytes = (len * kv_dim).max(4) as u64;
+                    let scale_bytes =
+                        (len * self.config.num_kv_heads * 2 * std::mem::size_of::<f32>()) as u64;
+                    let kb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("gpu-kv-k-i8"),
+                        size: per_buf_bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    let vb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("gpu-kv-v-i8"),
+                        size: per_buf_bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    let sb = self.engine.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("gpu-kv-scales"),
+                        size: scale_bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    });
+                    let r_bg = self
+                        .engine
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("gpu-rope-kv-i8-bg"),
+                            layout: &self.bgl_rope_kv_int8,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: self.step_params_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: self.q_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: self.k_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: self.v_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 4,
+                                    resource: kb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 5,
+                                    resource: vb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 6,
+                                    resource: sb.as_entire_binding(),
+                                },
+                            ],
+                        });
+                    let a_bg = self
+                        .engine
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("gpu-gqa-attn-i8-bg"),
+                            layout: &self.bgl_gqa_attn_int8,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: self.step_params_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: self.q_buf.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: kb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: vb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 4,
+                                    resource: sb.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 5,
+                                    resource: self.attn_out_buf.as_entire_binding(),
+                                },
+                            ],
+                        });
+                    total_kv_bytes += per_buf_bytes * 2 + scale_bytes;
+                    k_bufs.push(kb);
+                    v_bufs.push(vb);
+                    scale_bufs.push(sb);
+                    rope_kv_bgs.push(r_bg);
+                    attn_bgs.push(a_bg);
+                }
+            }
         }
 
         GpuKvCache {
+            mode: effective_mode,
             max_kv_len: len,
             seq_len: 0,
-            kv_bytes: per_buf_bytes * 2 * self.config.num_layers as u64,
+            kv_bytes: total_kv_bytes,
             _k_bufs: k_bufs,
             _v_bufs: v_bufs,
+            _scale_bufs: scale_bufs,
             rope_kv_bgs,
             attn_bgs,
         }
@@ -1350,15 +1768,30 @@ impl GpuFullModel {
                     pass.dispatch_workgroups(*wg, 1, 1);
                 }
 
-                // 3. In-place RoPE + append K/V to VRAM KV-cache
-                pass.set_pipeline(&self.pipeline_rope_kv);
-                pass.set_bind_group(0, &cache.rope_kv_bgs[l_idx], &[]);
-                pass.dispatch_workgroups(rope_wg, 1, 1);
+                // 3. In-place RoPE + append K/V to VRAM KV-cache (FP32 or packed INT8)
+                match cache.mode {
+                    GpuKvMode::Fp32 => {
+                        pass.set_pipeline(&self.pipeline_rope_kv);
+                        pass.set_bind_group(0, &cache.rope_kv_bgs[l_idx], &[]);
+                        pass.dispatch_workgroups(rope_wg, 1, 1);
 
-                // 4. Causal GQA Attention in VRAM
-                pass.set_pipeline(&self.pipeline_gqa_attn);
-                pass.set_bind_group(0, &cache.attn_bgs[l_idx], &[]);
-                pass.dispatch_workgroups(self.config.num_heads as u32, 1, 1);
+                        // 4. Causal GQA Attention in VRAM (FP32 KV)
+                        pass.set_pipeline(&self.pipeline_gqa_attn);
+                        pass.set_bind_group(0, &cache.attn_bgs[l_idx], &[]);
+                        pass.dispatch_workgroups(self.config.num_heads as u32, 1, 1);
+                    }
+                    GpuKvMode::Int8 => {
+                        let head_wg = self.config.num_heads.max(self.config.num_kv_heads) as u32;
+                        pass.set_pipeline(&self.pipeline_rope_kv_int8);
+                        pass.set_bind_group(0, &cache.rope_kv_bgs[l_idx], &[]);
+                        pass.dispatch_workgroups(head_wg, 1, 1);
+
+                        // 4. Causal GQA Attention in VRAM (packed INT8 KV)
+                        pass.set_pipeline(&self.pipeline_gqa_attn_int8);
+                        pass.set_bind_group(0, &cache.attn_bgs[l_idx], &[]);
+                        pass.dispatch_workgroups(self.config.num_heads as u32, 1, 1);
+                    }
+                }
 
                 // 5. O projection + residual add
                 self.dispatch_op(&mut pass, &layer.o_proj);

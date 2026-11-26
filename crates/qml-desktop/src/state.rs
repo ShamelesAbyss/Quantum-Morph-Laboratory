@@ -52,6 +52,8 @@ pub struct PersistedState {
     pub library: Vec<ModelEntry>,
     pub resource_preset: ResourcePreset,
     pub scan_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    pub graphics: crate::prism::GraphicsSettings,
 }
 
 impl Default for PersistedState {
@@ -60,6 +62,7 @@ impl Default for PersistedState {
             library: Vec::new(),
             resource_preset: ResourcePreset::Balanced,
             scan_dirs: Vec::new(),
+            graphics: crate::prism::GraphicsSettings::default(),
         }
     }
 }
@@ -319,6 +322,7 @@ pub struct GpuSelfTestResult {
 /// Events streamed back from background worker threads to the GUI thread.
 pub enum WorkerEvent {
     Status(String),
+    ForgeProgress(f32, String),
     ScopeComplete(Box<ModelScopeReport>),
     ForgeComplete {
         report: Box<ForgeReport>,

@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="obsidianBg" cx="50%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#141030"/>
+      <stop offset="55%" stop-color="#090B16"/>
+      <stop offset="100%" stop-color="#04050B"/>
+    </radialGradient>
+    <radialGradient id="horizonGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22D3EE" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="#8B5CF6" stop-opacity="0.55"/>
+      <stop offset="70%" stop-color="#6D28D9" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#05060D" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="crystalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="48%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#22D3EE" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#A78BFA" stop-opacity="0.35"/>
+    </linearGradient>
+    <filter id="prismGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="url(#obsidianBg)"/>
+  <circle cx="256" cy="256" r="220" fill="url(#horizonGlow)"/>
+
+  <!-- Subtle scientific reticle -->
+  <circle cx="256" cy="256" r="204" fill="none" stroke="#8B5CF6" stroke-opacity="0.28" stroke-width="1.5"/>
+  <circle cx="256" cy="256" r="168" fill="none" stroke="#22D3EE" stroke-opacity="0.20" stroke-width="1" stroke-dasharray="6 8"/>
+
+  <!-- Layered tilted mathematical orbital rings -->
+  <g transform="translate(256 256) rotate(-26)">
+    <ellipse cx="0" cy="0" rx="192" ry="74" fill="none" stroke="url(#ringGrad)" stroke-width="4.5" filter="url(#prismGlow)"/>
+  </g>
+  <g transform="translate(256 256) rotate(32)">
+    <ellipse cx="0" cy="0" rx="176" ry="62" fill="none" stroke="#A78BFA" stroke-opacity="0.78" stroke-width="2.5"/>
+  </g>
+  <g transform="translate(256 256) rotate(88)">
+    <ellipse cx="0" cy="0" rx="158" ry="48" fill="none" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="1.6"/>
+  </g>
+
+  <!-- Central Octahedral Amethyst-Cyan Prism -->
+  <g filter="url(#prismGlow)">
+    <polygon points="256,118 352,256 256,394 160,256" fill="url(#crystalGrad)" fill-opacity="0.88" stroke="#E0F7FA" stroke-width="2"/>
+    <polygon points="256,118 352,256 256,284" fill="#22D3EE" fill-opacity="0.45"/>
+    <polygon points="256,118 160,256 256,284" fill="#7C3AED" fill-opacity="0.55"/>
+    <line x1="256" y1="118" x2="256" y2="394" stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="1.5"/>
+    <line x1="160" y1="256" x2="352" y2="256" stroke="#22D3EE" stroke-opacity="0.7" stroke-width="1.5"/>
+    <circle cx="256" cy="256" r="24" fill="#070812" stroke="#22D3EE" stroke-width="3"/>
+    <circle cx="256" cy="256" r="10" fill="#22D3EE"/>
+  </g>
+
+  <!-- Orbiting satellite nodes -->
+  <circle cx="94" cy="196" r="7" fill="#22D3EE" filter="url(#prismGlow)"/>
+  <circle cx="418" cy="316" r="7" fill="#A78BFA" filter="url(#prismGlow)"/>
+  <circle cx="386" cy="142" r="5" fill="#10B981" filter="url(#prismGlow)"/>
+  <circle cx="132" cy="368" r="5" fill="#8B5CF6" filter="url(#prismGlow)"/>
+</svg>

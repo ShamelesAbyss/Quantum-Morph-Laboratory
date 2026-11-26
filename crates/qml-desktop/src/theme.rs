@@ -178,3 +178,365 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{bytes} B")
     }
 }
+
+/// Generate a crisp procedural 64×64 RGBA Singularity Prism window icon (zero external asset deps).
+pub fn generate_app_icon_data() -> egui::IconData {
+    let size = 64u32;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+    let half = size as f32 * 0.5;
+    for y in 0..size {
+        for x in 0..size {
+            let nx = (x as f32 + 0.5 - half) / half;
+            let ny = (y as f32 + 0.5 - half) / half;
+            let r = (nx * nx + ny * ny).sqrt();
+            let idx = ((y * size + x) * 4) as usize;
+            if r > 0.98 {
+                rgba[idx..idx + 4].copy_from_slice(&[0, 0, 0, 0]);
+                continue;
+            }
+            // Deep obsidian disc
+            let mut cr = 8.0_f32;
+            let mut cg = 10.0_f32;
+            let mut cb = 22.0_f32;
+
+            // Outer ultraviolet halo ring
+            let ring = (-((r - 0.78) * 14.0).powi(2)).exp();
+            cr += 139.0 * ring;
+            cg += 92.0 * ring;
+            cb += 246.0 * ring;
+
+            // Tilted cyan orbital ellipse
+            let rx = nx * 0.866 + ny * 0.5;
+            let ry = (-nx * 0.5 + ny * 0.866) * 2.15;
+            let er = (rx * rx + ry * ry).sqrt();
+            let orbit = (-((er - 0.68) * 15.0).powi(2)).exp();
+            cr += 34.0 * orbit;
+            cg += 211.0 * orbit;
+            cb += 238.0 * orbit;
+
+            // Central diamond crystal prism
+            let d = nx.abs() + ny.abs();
+            if d < 0.36 {
+                let f = 1.0 - d / 0.36;
+                cr = cr * (1.0 - f) + (167.0 * (1.0 - f * 0.5) + 34.0 * f * 0.5) * f;
+                cg = cg * (1.0 - f) + (139.0 * (1.0 - f * 0.6) + 235.0 * f * 0.6) * f;
+                cb = cb * (1.0 - f) + 252.0 * f;
+            }
+
+            let alpha = ((1.0 - ((r - 0.90) / 0.08).clamp(0.0, 1.0)) * 255.0) as u8;
+            rgba[idx] = cr.clamp(0.0, 255.0) as u8;
+            rgba[idx + 1] = cg.clamp(0.0, 255.0) as u8;
+            rgba[idx + 2] = cb.clamp(0.0, 255.0) as u8;
+            rgba[idx + 3] = alpha;
+        }
+    }
+    egui::IconData {
+        rgba,
+        width: size,
+        height: size,
+    }
+}
+
+/// Draw an original minimalist scientific vector icon for each laboratory subsystem tab.
+pub fn draw_subsystem_icon(ui: &mut egui::Ui, index: usize, size: f32, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    let p = ui.painter();
+    let c = rect.center();
+    let r = size * 0.38;
+    let st = Stroke::new(1.35_f32, color);
+
+    match index {
+        0 => {
+            // Singularity Command Center: concentric horizon + nucleus
+            p.circle_stroke(c, r, st);
+            p.circle_stroke(c, r * 0.55, Stroke::new(1.0_f32, AMETHYST));
+            p.circle_filled(c, r * 0.24, color);
+        }
+        1 => {
+            // Model Library: stacked data strata
+            for dy in [-r * 0.65, 0.0, r * 0.65] {
+                p.line_segment(
+                    [egui::pos2(c.x - r, c.y + dy), egui::pos2(c.x + r, c.y + dy)],
+                    st,
+                );
+            }
+        }
+        2 => {
+            // Q-Scope: octahedral prism crystal
+            let pts = vec![
+                egui::pos2(c.x, c.y - r),
+                egui::pos2(c.x + r * 0.85, c.y),
+                egui::pos2(c.x, c.y + r),
+                egui::pos2(c.x - r * 0.85, c.y),
+                egui::pos2(c.x, c.y - r),
+            ];
+            p.add(egui::Shape::line(pts, st));
+            p.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.85, c.y),
+                    egui::pos2(c.x + r * 0.85, c.y),
+                ],
+                Stroke::new(0.9_f32, color),
+            );
+        }
+        3 => {
+            // Q-Entangle: 3-node subspace constellation
+            let a = egui::pos2(c.x - r * 0.8, c.y + r * 0.55);
+            let b = egui::pos2(c.x + r * 0.8, c.y + r * 0.35);
+            let d = egui::pos2(c.x, c.y - r * 0.8);
+            p.line_segment([a, b], st);
+            p.line_segment([b, d], st);
+            p.line_segment([d, a], st);
+            for pt in [a, b, d] {
+                p.circle_filled(pt, 2.2, color);
+            }
+        }
+        4 => {
+            // Q-Forge: morphogenesis chevron transform
+            p.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.8, c.y - r * 0.6),
+                    egui::pos2(c.x, c.y),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.8, c.y + r * 0.6),
+                    egui::pos2(c.x, c.y),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x + r * 0.1, c.y - r * 0.6),
+                    egui::pos2(c.x + r * 0.9, c.y),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x + r * 0.1, c.y + r * 0.6),
+                    egui::pos2(c.x + r * 0.9, c.y),
+                ],
+                st,
+            );
+        }
+        5 => {
+            // Q-Genesis: Pareto frontier arc + star nodes
+            let p1 = egui::pos2(c.x - r * 0.75, c.y - r * 0.7);
+            let p2 = egui::pos2(c.x - r * 0.15, c.y + r * 0.15);
+            let p3 = egui::pos2(c.x + r * 0.8, c.y + r * 0.7);
+            p.line_segment([p1, p2], st);
+            p.line_segment([p2, p3], st);
+            for pt in [p1, p2, p3] {
+                p.circle_filled(pt, 2.4, color);
+            }
+        }
+        6 => {
+            // QMF Explorer: isometric container cube
+            p.rect_stroke(
+                egui::Rect::from_center_size(c, Vec2::splat(r * 1.45)),
+                2.0,
+                st,
+                egui::StrokeKind::Inside,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x, c.y - r * 0.72),
+                    egui::pos2(c.x, c.y + r * 0.72),
+                ],
+                Stroke::new(0.9_f32, color),
+            );
+        }
+        7 => {
+            // Q-Core Inference Nexus: luminous neural spark
+            p.line_segment([egui::pos2(c.x - r, c.y), egui::pos2(c.x + r, c.y)], st);
+            p.line_segment([egui::pos2(c.x, c.y - r), egui::pos2(c.x, c.y + r)], st);
+            p.circle_filled(c, 2.5, CYAN);
+        }
+        8 => {
+            // Q-Behavior: twin parallel activation columns + bridge
+            p.line_segment(
+                [
+                    egui::pos2(c.x - r * 0.6, c.y - r),
+                    egui::pos2(c.x - r * 0.6, c.y + r),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x + r * 0.6, c.y - r),
+                    egui::pos2(c.x + r * 0.6, c.y + r),
+                ],
+                st,
+            );
+            for dy in [-r * 0.5, 0.0, r * 0.5] {
+                p.line_segment(
+                    [
+                        egui::pos2(c.x - r * 0.6, c.y + dy),
+                        egui::pos2(c.x + r * 0.6, c.y + dy),
+                    ],
+                    Stroke::new(1.0_f32, AMETHYST),
+                );
+            }
+        }
+        9 => {
+            // Benchmarks: 3 bar columns
+            for (i, h) in [0.45_f32, 0.95, 0.7].iter().enumerate() {
+                let x = c.x - r * 0.7 + i as f32 * r * 0.7;
+                p.line_segment(
+                    [
+                        egui::pos2(x, c.y + r * 0.8),
+                        egui::pos2(x, c.y + r * 0.8 - r * 1.6 * *h),
+                    ],
+                    Stroke::new(2.2_f32, color),
+                );
+            }
+        }
+        _ => {
+            // Hardware Observatory: silicon die with pins
+            p.rect_stroke(
+                egui::Rect::from_center_size(c, Vec2::splat(r * 1.25)),
+                2.0,
+                st,
+                egui::StrokeKind::Inside,
+            );
+            p.circle_filled(c, 2.2, color);
+        }
+    }
+}
+
+/// Interactive horizontal treemap + radial composition ring for QMF v1 Storage Architecture.
+pub fn draw_qmf_storage_visuals(
+    ui: &mut egui::Ui,
+    segments: &[(String, u64, Color32)],
+    total_bytes: u64,
+) {
+    if segments.is_empty() || total_bytes == 0 {
+        return;
+    }
+    ui.horizontal_top(|ui| {
+        // Left: Radial Precision & Overhead Ring Diagram
+        let ring_size = 148.0;
+        let (ring_rect, _) = ui.allocate_exact_size(Vec2::splat(ring_size), egui::Sense::hover());
+        let p = ui.painter();
+        let center = ring_rect.center();
+        let rad = ring_size * 0.40;
+        let mut start_a = -std::f32::consts::FRAC_PI_2;
+        for (_, bytes, col) in segments {
+            let frac = (*bytes as f64 / total_bytes as f64).clamp(0.0, 1.0) as f32;
+            let sweep = frac * std::f32::consts::TAU;
+            let steps = ((sweep * 18.0).ceil() as usize).max(2);
+            let mut pts = Vec::with_capacity(steps + 1);
+            for s in 0..=steps {
+                let a = start_a + sweep * (s as f32 / steps as f32);
+                pts.push(egui::pos2(
+                    center.x + rad * a.cos(),
+                    center.y + rad * a.sin(),
+                ));
+            }
+            p.add(egui::Shape::line(pts, Stroke::new(11.0_f32, *col)));
+            start_a += sweep;
+        }
+        p.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            format_bytes(total_bytes),
+            egui::FontId::monospace(11.5),
+            TEXT_PRIMARY,
+        );
+
+        ui.add_space(14.0);
+
+        // Right: Proportional Storage Composition Treemap Strip + Legend
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("STORAGE ARCHITECTURE COMPOSITION (PROPORTIONAL BYTES)")
+                    .color(CYAN)
+                    .size(11.5)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            let bar_w = (ui.available_width() - 8.0).max(260.0);
+            let (bar_rect, _) =
+                ui.allocate_exact_size(Vec2::new(bar_w, 34.0), egui::Sense::hover());
+            let bp = ui.painter();
+            bp.rect_filled(bar_rect, 6.0, OBSIDIAN_BG);
+            let mut cursor_x = bar_rect.left();
+            for (name, bytes, col) in segments {
+                let frac = (*bytes as f64 / total_bytes as f64).clamp(0.0, 1.0) as f32;
+                let seg_w = (frac * bar_rect.width()).max(2.0);
+                let seg_rect = egui::Rect::from_min_size(
+                    egui::pos2(cursor_x, bar_rect.top()),
+                    Vec2::new(seg_w.min(bar_rect.right() - cursor_x), bar_rect.height()),
+                );
+                bp.rect_filled(seg_rect.shrink(1.0), 4.0, *col);
+                if seg_w > 54.0 {
+                    bp.text(
+                        seg_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{:.0}%", frac * 100.0),
+                        egui::FontId::monospace(10.5),
+                        OBSIDIAN_BG,
+                    );
+                }
+                cursor_x += seg_w;
+                let _ = name;
+            }
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                for (name, bytes, col) in segments {
+                    let pct = (*bytes as f64 / total_bytes as f64) * 100.0;
+                    pill_badge(
+                        ui,
+                        &format!("{name}: {} ({pct:.1}%)", format_bytes(*bytes)),
+                        *col,
+                    );
+                }
+            });
+        });
+    });
+}
+
+/// Compact ambient neural-pulse strip for Q-Core Inference Nexus (explicitly artistic/ambient).
+pub fn draw_ambient_inference_pulse(ui: &mut egui::Ui, active: bool, time_sec: f64) {
+    let w = ui.available_width().max(240.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 28.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, 6.0, Color32::from_rgb(9, 11, 22));
+    p.rect_stroke(
+        rect,
+        6.0,
+        Stroke::new(0.9_f32, BORDER_SUBTLE),
+        egui::StrokeKind::Inside,
+    );
+
+    let speed = if active { 3.6 } else { 0.7 };
+    let amp = if active { 8.5 } else { 2.5 };
+    let samples = 72;
+    let mut pts = Vec::with_capacity(samples);
+    for i in 0..samples {
+        let u = i as f32 / (samples - 1) as f32;
+        let x = rect.left() + 8.0 + u * (rect.width() - 16.0);
+        let env = (u * std::f32::consts::PI).sin();
+        let wave = ((u * 18.0 - time_sec as f32 * speed).sin()
+            + 0.45 * (u * 31.0 + time_sec as f32 * speed * 1.4).cos())
+            * amp
+            * env;
+        pts.push(egui::pos2(x, rect.center().y + wave));
+    }
+    let col = if active { CYAN } else { ULTRAVIOLET };
+    p.add(egui::Shape::line(pts, Stroke::new(1.6_f32, col)));
+    p.text(
+        egui::pos2(rect.right() - 10.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        if active {
+            "AMBIENT STREAMING PULSE (ILLUSTRATIVE)"
+        } else {
+            "AMBIENT IDLE FIELD"
+        },
+        egui::FontId::monospace(9.5),
+        TEXT_MUTED,
+    );
+}

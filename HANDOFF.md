@@ -4,47 +4,48 @@
 
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
 - Development branch: `main` only.
-- Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM).
-- Active takeover milestone: **PROJECT TRANSCENDENCE (`v0.2.0-alpha.2`) Complete — Out-of-Core Streaming QMF, Atomic Publication, GGUF Payload Decoding, Persistent GPU-Resident Compressed Q-Core (`SmolLM2-360M` 20.97 tok/s on RTX 4070), Q-Behavior Mechanistic Observatory, and Scalable Q-Genesis with Genome-to-QMF Export**.
-- The workspace now contains **13 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-behavior`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
-- **License:** Officially licensed under the **MIT License** ([LICENSE](LICENSE), approved by repository owner). All 12 workspace crates inherit `license.workspace = true`.
+- Local workspace: `C:\Users\Shame\.gemini\antigravity\scratch\Quantum-Morph-Laboratory` (Windows 11, Intel Core i9-14900HX, RTX 4070 Laptop GPU 8 GB VRAM, 32 GB RAM, 2560×1440 144 Hz display).
+- Local pretrained model cache (NEVER commit to Git): `C:\Users\Shame\.gemini\antigravity\scratch\qml-models-cache` (`smollm2-135m` and `smollm2-360m`).
+- Latest completed milestone: **PROJECT PRISM (`v0.3.0-alpha.1`) — Native Multi-Pass WGPU 3D Scientific Observatory**.
+- The workspace contains **13 cohesive safe-Rust crates** (`qml-core`, `qml-hardware`, `qml-model`, `qml-scope`, `qml-quant`, `qml-format`, `qml-forge`, `qml-tokenizer`, `qml-runtime`, `qml-behavior`, `qml-genesis`, `qml-cli`, `qml-desktop`) with `#![forbid(unsafe_code)]` and zero Python dependencies.
+- **License:** MIT ([LICENSE](LICENSE)). All workspace crates inherit `license.workspace = true`.
+- **Permanent Memorial Dedication:** The memorial dedication to Ashlan Haley Rapponotti at the end of `README.md` MUST be preserved verbatim across all future updates and releases.
 
 ## Implemented capabilities
 
-- `qml-core`: Validated dense-matrix primitives (`transpose`, `matmul`, `matvec_transposed`, element-wise ops, cosine similarity), deterministic SplitMix64 PRNG, deterministic one-sided Jacobi exact thin SVD, deterministic Halko–Martinsson–Tropp randomized SVD, direct factorized matrix-vector multiplication (`U (Σ (Vᵀ x))`), spectral summary metrics (spectral norm, stable rank, Roy–Vetterli effective rank, 90%/95%/99% Frobenius energy ranks, Grassmannian subspace affinity), plus the original largest-pivot rank-one baseline.
-- `qml-model`: Bounded read-only Safetensors header inspection (16 MiB cap), bounded & constant-memory streaming Safetensors payload reader (`SafetensorsFile`, `PayloadBudget`), pure safe Rust bit-exact codecs (`F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, integer/bool), sharded Safetensors index parser (`model.safetensors.index.json`), Hugging Face `config.json` parser, and bounded read-only GGUF v2/v3 metadata/tensor-directory inspector (`inspect_gguf`).
-- `qml-scope`: Q-Scope Neural Model Observatory computing two-pass constant-memory streaming statistics (Welford mean/variance, skewness, excess kurtosis, norms, sparsity fractions, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy), 2D matrix SVD spectrum analysis, transformer layer-role classification, and pairwise cross-layer Grassmannian subspace affinity analysis.
-- `qml-quant`: Reproducible conventional baselines (`FP16`, `BF16`, `INT8_SYM`, `INT8_ASYM`, `INT4_SYM_G32(Q4_0)`, `INT4_ASYM_G32(Q4_1)`, `INT4_SYM_G128`, `SVD_FP16`, `SVD_INT8`, `SparseResidual`) with exact byte-for-byte storage accounting (`StorageBreakdown`) and direct compressed `LinearOperator::matvec`; experimental RMQ Shared-Basis (`U_shared C_l V_sharedᵀ + R_l` via deterministic 2D-HOOI) and RMQ Shared-Core (`A_l S B_l + R_l`) engines with sparse/INT4 residuals and baseline ablation comparator; experimental MAP (Morphological Adaptive Precision) sensitivity + downstream spectral propagation mixed-precision allocator.
-- `qml-format`: Bounded reader and deterministic writer for experimental QMF v0 (single rank-one `f64`) and QMF v1 (`QmfArchiveV1`, `QmfV1Builder`, `QmfOperator`) supporting multi-tensor containers, shared latent structure tables (for RMQ), dense FP32/FP16/BF16, groupwise INT8/INT4, truncated SVD, sparse COO FP16 residuals, per-blob + whole-file CRC-32 checks, and direct compressed operator execution (`research/qmf-experimental-v1.md`).
-- `qml-forge`: Modular Q-Forge transformation pipeline (`forge_safetensors_to_qmf`, `compare_safetensors_and_qmf`) converting immutable Safetensors inputs into verified QMF v1 artifacts with full provenance, complete file-level byte accounting, and direct round-trip matvec verification.
-- `qml-runtime`: Q-Core CPU reference Llama-style decoder-only Transformer executing directly over QMF v1 compressed `QmfOperator` layers (RMSNorm, RoPE, Grouped-Query Attention with KV-cache, SwiGLU MLP, greedy/sampled autoregressive token generation, and exact KL-divergence / logit-RMSE / top-1 agreement / perplexity fidelity evaluation).
-- `qml-genesis`: Q-Genesis deterministic multi-objective evolutionary search engine optimizing per-layer & RMQ-cluster genomes over complete effective bpp, measured matvec error, and estimated matvec FLOPs, outputting non-dominated Pareto frontiers and full persistent JSON archives (including dominated trials).
-- `qml-cli`: `doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf` (v0 & v1), `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `genesis`, and `demo-rank1`.
+- `qml-core`: Dense linear algebra, SplitMix64 PRNG, deterministic one-sided Jacobi exact thin SVD, HMT randomized SVD, spectral metrics, Grassmannian subspace affinity, and pure safe-Rust FIPS 180-4 SHA-256.
+- `qml-hardware`: Cross-platform CPU/SIMD/RAM telemetry, WGPU GPU adapter discovery, enforced `ResourcePreset` budgets, and 6 persistent VRAM WGSL compute kernels (`FP32`, `FP16`, `BF16`, `INT8_SYM`, `Q4_0`, `Q4_1`) with reusable zero-allocation scratch buffers (`GPU_SCRATCH_MAX_ELEMS = 131,072`).
+- `qml-model`: Bounded read-only Safetensors & GGUF v2/v3 streaming payload readers (`PayloadBudget` up to 16 GiB), exact safe-Rust codecs (`F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`, `Q8_0`, `Q4_0`, `Q4_1`, ints, bool), sharded `index.json` & HF `config.json` parsers.
+- `qml-scope`: Two-pass streaming Welford statistics, sparsity, 3σ/6σ outliers, crest factor, 32-bin histogram & Shannon entropy, quantization susceptibility proxy, 2D SVD spectrum, transformer role classification, and pairwise cross-layer Grassmannian subspace affinity.
+- `qml-quant`: Rayon-parallelized conventional baselines (`FP16`, `BF16`, `INT8_SYM`, `INT8_ASYM`, `Q4_0`, `Q4_1`, `LowRankSvd`, `SparseResidual`) with exact `StorageBreakdown`; RMQ Shared-Basis (`U·C_l·Vᵀ + R_l` via 2D-HOOI + RPCA-inspired outlier peeling); RMQ Shared-Core (`A_l·S·B_l + R_l`); two-pass streaming MAP allocator.
+- `qml-format`: Experimental QMF v0 & multi-GB QMF v1 with out-of-core lazy `QmfFileReader`, atomic publication (`write_to_file_atomic`) with source-output alias protection, 64 KiB streaming CRC-32 + SHA-256 verification, `Arc` shared-latent deduplication, `RmqSharedCore`, and on-demand `decode_row`.
+- `qml-forge`: Streaming tensor-by-tensor & cluster-by-cluster Safetensors → QMF v1 pipeline with cooperative `ForgeControl` cancellation, live progress callbacks, `RmqAffinityGated` hybrid routing, atomic publication, and direct round-trip matvec verification.
+- `qml-tokenizer`: Pure safe-Rust Hugging Face `tokenizer.json` Byte-Level BPE tokenizer with individual-digit pre-tokenization, ChatML formatting, and stateful UTF-8 `StreamingDecoder`.
+- `qml-runtime`: Native Llama-style Transformer executing directly over QMF v1 compressed operators on CPU (Rayon) or Persistent GPU Hybrid (`QCoreBackend::GpuHybrid`), plus `forward_token_with_trace` and strictly runtime-only reversible `LayerIntervention` hooks.
+- `qml-behavior`: Layer-by-layer hidden activation tracing (`compare_model_behavior`), cosine similarity, relative L2 divergence, Representational Similarity Analysis (RSA), peak drift layer detection, and reversible causal ablation studies (`run_intervention_study`).
+- `qml-genesis`: Role- and depth-stratified multi-objective NSGA-II evolutionary search (`select_stratified_tensor_names`), user profiles (`Balanced`, `Smallest`, `BestQuality`, `Fastest`), persistent JSON archives, and direct Genome-to-QMF v1 export (`export_genome_to_qmf_v1`).
+- `qml-cli`: 14 laboratory commands (`doctor`, `inspect-safetensors`, `inspect-gguf`, `inspect-qmf`, `scope`, `baseline`, `rmq-ablate`, `morph`, `compare`, `infer-demo`, `generate`, `behavior`, `genesis`, `demo-rank1`).
+- `qml-desktop`: **PROJECT PRISM** native WGPU 3D scientific observatory (`eframe` WGPU + `wgpu 24`, 7 custom WGSL shaders, `Rgba16Float` HDR selective bloom, ACES filmic tone mapping, interactive Orbit/Ortho cameras & 3D ray picking, automatic 2.5D CPU fallback, 5 persisted graphics presets, 11 custom procedural vector subsystem icons, collapsible navigation rail, Q-Core Zen Mode, and 11 real-engine views).
 
-## Validation actually executed on the implementation
+## Validation actually executed on `v0.3.0-alpha.1`
 
-All of the following passed locally on Windows 11 with Rust 1.100.0 (`cargo +1.100.0`) and `cargo-deny 0.21.0`:
+All of the following passed locally on Windows 11 with Rust `1.100.0` (`cargo +1.100.0`) and `cargo-deny 0.21.0`:
 
 - `cargo +1.100.0 fmt --all -- --check`
 - `cargo +1.100.0 clippy --workspace --all-targets -- -D warnings`
-- `cargo +1.100.0 test --workspace` — all tests across 12 crates passed (including NIST SHA-256 vectors, `Arc` latent deduplication, `RmqSharedCore`, `RmqAffinityGated`, `decode_row`, streaming header inspection, matched-budget MAP, `StreamingDecoder` split multi-byte UTF-8, and RTX 4070 WGPU dense `FP32` + direct compressed `INT8_SYM` & `Q4_0` WGSL compute shader equivalence tests).
+- `cargo +1.100.0 test --workspace` — all **81 automated tests** across **13 crates** passed (including live WGPU shader & multi-pass pipeline validation on NVIDIA RTX 4070).
+- `cargo +1.100.0 build --workspace --release`
 - `cargo deny check` — `advisories ok, bans ok, licenses ok, sources ok` (zero ignored vulnerabilities).
-- `cargo +1.100.0 build --release -p qml-desktop -p qml-cli` — verified native Windows launch of `qml-desktop.exe` with zero panics.
-
-## Research and design findings
-
-- **Outlier-Peeling RMQ Discovery (`exp-001`):** Isolated large weight outliers in correlated multi-layer matrices can steal a shared subspace dimension during 2D-HOOI. Adding RPCA-inspired sparse outlier peeling before 2D-HOOI reduced `RMQ_SHARED_BASIS + SPARSE 1%` relative Frobenius error by **49.2%** (`0.28006 -> 0.14223`) at an identical `0.867` effective bpp (all overhead counted).
-- **Falsifiable Boundary Condition:** On an uncorrelated i.i.d. full-rank Gaussian control, `Q4_0` (`0.09677`) decisively outperforms all low-rank/RMQ methods (`0.80–0.97`). RMQ should only be applied to layer clusters where Q-Scope measures significant cross-layer Grassmannian subspace affinity.
-- **Direct Compressed Inference Speedup (`exp-001`):** Executing `U_shared (C_l (V_sharedᵀ x)) + R_l x` directly in Q-Core without dense weight reconstruction reached `9,057 tok/s` (`2.43×` faster than FP16 and `3.54×` faster than Q4_0 on CPU) with lower KL divergence (`0.06037`) than uniform `Q4_0` (`0.06702`).
-- **MAP Precision Allocation (`exp-001`):** Sensitivity + downstream spectral propagation allocation reduced Mean KL divergence on the synthetic mini-Llama by **11.8×** vs uniform `Q4_0` (`0.00566` vs `0.06702`, `77.8%` vs `44.4%` top-1 token agreement).
-- **QMF v1 Manifest Overhead:** On tiny 40K-parameter models, canonical JSON manifests add ~1.15 bpp to complete file size; on realistic models (>10M params) this amortizes to `<0.05` bpp.
+- **Live Native GPU Visual Audit:** Launched `target/release/qml-desktop.exe` across 6 workspaces (`2560×1440` Command Center + `1920×1080` real `SmolLM2-135M` Q-Scope 3D Anatomy & Q-Entangle Constellation + live Q-Genesis 3D Crucible + Q-Forge Morphogenesis + Hardware Observatory), verified `157–187 FPS` on RTX 4070, visually inspected every captured PNG in `assets/screenshots/`, and confirmed zero overlaps, zero broken glyphs, and clean scientific provenance labeling.
 
 ## Known limits and blockers
 
-- QMF v0/v1 are experimental research formats and are not yet compatibility-stable across major milestones.
-- `QCoreBackend::GpuHybrid` currently dispatches persistent compressed linear projections on GPU while keeping lightweight RMSNorm, RoPE, and attention on CPU; full GPU-resident KV-cache & fused attention kernels remain future optimization work.
-- `qml-behavior` (intermediate activation capture, RSA, reversible layer interventions) and scalable whole-model `qml-genesis` with direct Genome-to-QMF export remain to be built (next milestone: `v0.2.0-alpha.2`).
+- QMF v0/v1 remain experimental research formats and are not yet compatibility-stable across major milestones.
+- `QCoreBackend::GpuHybrid` keeps persistent compressed linear projections on GPU while running lightweight RMSNorm, RoPE, and KV-cache attention on CPU; full GPU-resident attention & KV-cache kernels remain future optimization work.
+- Safe cross-platform WGPU intentionally does not expose GPU temperature, board power draw, or OS-wide VRAM usage; `qml-desktop` explicitly notes this and never fabricates telemetry.
 
 ## Next steps
 
-1. **PROJECT GENESIS & Q-BEHAVIOR (`v0.2.0-alpha.2`):** Build `qml-behavior` (layer activation capture, cosine/L2 divergence, RSA, reversible interventions) and upgrade `qml-genesis` for role-stratified whole-model search + direct Genome-to-QMF export, integrating both into `qml-desktop`.
+1. **Full GPU-Resident Attention & KV-Cache:** Eliminate per-token CPU↔GPU synchronization in `qml-runtime` for interactive 1B–7B model throughput.
+2. **Large-Scale (1B–3B) Perplexity & Mechanistic Studies:** Evaluate affinity-gated RMQ, Q-Genesis exported QMF v1 models, and Q-Behavior layer-drift interventions (e.g., protecting Layer 31 precision) on 1B–3B pretrained transformers.
+3. **Extended Model Architectures:** Support Qwen2/Mistral attention biases and Mixture-of-Experts routing inside `QCoreModel` and `qml-scope`.

@@ -3,15 +3,23 @@
 //! `qml-forge`, `qml-format`, `qml-runtime`, `qml-tokenizer`, `qml-genesis`,
 //! `qml-hardware`). Unsupported/experimental statuses are explicitly labeled.
 
+use crate::prism::scenes::{
+    ScopeVisualMode, build_hardware_anatomy_scene, build_qbehavior_dual_scene,
+    build_qentangle_constellation_scene, build_qforge_morphogenesis_scene,
+    build_qgenesis_crucible_scene, build_qscope_anatomy_scene, build_singularity_scene,
+};
+use crate::prism::{GraphicsPreset, GraphicsSettings, render_prism_viewport};
 use crate::state::{ModelFormat, QmfInspection, save_persisted_state};
 use crate::theme::{
     self, AMBER, AMETHYST, BORDER_SUBTLE, CRIMSON, CYAN, EMERALD, TEXT_MUTED, TEXT_PRIMARY,
-    ULTRAVIOLET, accent_card, format_bytes, glass_card, metric_tile, pill_badge, spectral_color,
+    ULTRAVIOLET, accent_card, draw_ambient_inference_pulse, draw_qmf_storage_visuals, format_bytes,
+    glass_card, metric_tile, pill_badge, spectral_color,
 };
 use crate::{ForgeMethodChoice, NavTab, QmlDesktopApp};
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, Points};
 use qml_format::{QmfRepresentation, SharedLatentEncoding};
+use qml_genesis::GenesisProfile;
 use qml_hardware::ResourcePreset;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -109,24 +117,72 @@ fn section_header(ui: &mut egui::Ui, title: &str, subtitle: &str, badge: Option<
 }
 
 pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    section_header(
-        ui,
-        "Laboratory Command Center",
-        "Don't just compress intelligence. Transform its representation.",
-        Some(("PROJECT SINGULARITY", ULTRAVIOLET)),
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let gpu_name = app.hardware.gpus.first().map(|g| g.name.as_str());
+    let scene = build_singularity_scene(
+        time_sec,
+        app.is_busy(),
+        app.busy_label.as_deref(),
+        app.persisted.library.len(),
+        gpu_name,
     );
 
-    // Top metric strip
-    ui.horizontal_wrapped(|ui| {
+    let viewport_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        420.0
+    };
+    let w = ui.available_width();
+    let res = render_prism_viewport(
+        ui,
+        ctx,
+        "cmd_singularity",
+        Vec2::new(w, viewport_h),
+        &mut app.cam_singularity,
+        scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        None,
+        app.fullscreen_3d,
+    );
+    if res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if let Some(clicked) = res.clicked_id {
+        match clicked.as_str() {
+            "qscope" => app.active_tab = NavTab::QScope,
+            "qentangle" => app.active_tab = NavTab::QEntangle,
+            "qforge" => app.active_tab = NavTab::QForge,
+            "qgenesis" => app.active_tab = NavTab::QGenesis,
+            "qcore" => app.active_tab = NavTab::QCore,
+            "qbehavior" => app.active_tab = NavTab::QBehavior,
+            "qmf" => app.active_tab = NavTab::QmfExplorer,
+            "library" => app.active_tab = NavTab::ModelLibrary,
+            "rmq" => app.active_tab = NavTab::Benchmarks,
+            "hardware" => app.active_tab = NavTab::SystemObservatory,
+            _ => {}
+        }
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+
+    ui.add_space(12.0);
+
+    // Top real-telemetry metric strip (symmetric 4-column grid)
+    ui.columns(4, |cols| {
         metric_tile(
-            ui,
+            &mut cols[0],
             "LOCAL LIBRARY",
             &format!("{} Artifacts", app.persisted.library.len()),
             "Safetensors, GGUF & QMF (read-only)",
             CYAN,
         );
         metric_tile(
-            ui,
+            &mut cols[1],
             "COMPUTE HOST",
             &format!("{} Threads", app.hardware.logical_cores),
             &app.hardware.cpu_brand,
@@ -139,14 +195,14 @@ pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egu
             .map(|g| g.name.clone())
             .unwrap_or_else(|| "CPU Only".to_owned());
         metric_tile(
-            ui,
+            &mut cols[2],
             "PRIMARY ACCELERATOR",
             &gpu_val,
             &format!("{} WGPU adapter(s) detected", app.hardware.gpus.len()),
             EMERALD,
         );
         metric_tile(
-            ui,
+            &mut cols[3],
             "SYSTEM MEMORY",
             &format!(
                 "{:.1} / {:.1} GiB",
@@ -160,12 +216,12 @@ pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egu
 
     ui.add_space(12.0);
 
-    // Quick-launch laboratory workflows
+    // Quick-launch laboratory portals
     accent_card().show(ui, |ui| {
         ui.label(
-            RichText::new("QUICK LABORATORY ACTIONS")
+            RichText::new("DIRECT OBSERVATORY PORTALS")
                 .color(CYAN)
-                .size(12.0)
+                .size(11.5)
                 .strong(),
         );
         ui.add_space(6.0);
@@ -182,14 +238,20 @@ pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egu
             {
                 app.scan_directory(dir);
             }
-            if ui.button("Open Q-Scope Observatory").clicked() {
+            if ui.button("Q-Scope 3D Anatomy").clicked() {
                 app.active_tab = NavTab::QScope;
             }
-            if ui.button("Open Q-Forge Studio").clicked() {
+            if ui.button("Q-Forge Morphogenesis").clicked() {
                 app.active_tab = NavTab::QForge;
             }
-            if ui.button("Open Q-Core Inference").clicked() {
+            if ui.button("Q-Genesis Crucible").clicked() {
+                app.active_tab = NavTab::QGenesis;
+            }
+            if ui.button("Q-Core Inference Nexus").clicked() {
                 app.active_tab = NavTab::QCore;
+            }
+            if ui.button("Q-Behavior Observatory").clicked() {
+                app.active_tab = NavTab::QBehavior;
             }
             if ui
                 .add_enabled(!app.is_busy(), egui::Button::new("Run RMQ Ablation Demo"))
@@ -207,55 +269,55 @@ pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egu
     ui.columns(2, |cols| {
         glass_card().show(&mut cols[0], |ui| {
             ui.label(
-                RichText::new("RESEARCH SUBSYSTEM STATUS")
+                RichText::new("LABORATORY SUBSYSTEM STATUS (13 SAFE-RUST CRATES)")
                     .color(AMETHYST)
-                    .size(12.0)
+                    .size(11.5)
                     .strong(),
             );
             ui.add_space(6.0);
             let rows = [
                 (
-                    "Q-Scope Observatory",
-                    "Streaming stats, SVD & Grassmannian affinity",
+                    "Q-Scope & Q-Entangle",
+                    "3D Neural Anatomy, streaming stats, SVD & Grassmannian constellation",
                     "ACTIVE",
                     EMERALD,
                 ),
                 (
                     "Q-Forge Pipeline",
-                    "Memory-bounded Safetensors -> QMF v1",
+                    "Atomic out-of-core Safetensors -> QMF v1 + two-pass streaming MAP",
                     "ACTIVE",
                     EMERALD,
                 ),
                 (
-                    "Q-Core Runtime",
-                    "Direct compressed Transformer + BPE tokenizer",
+                    "Q-Core GPU Hybrid",
+                    "Persistent VRAM compressed inference (FP16/BF16/INT8/Q4_0/Q4_1/RMQ)",
                     "ACTIVE",
                     EMERALD,
                 ),
                 (
-                    "MAP & RMQ Engines",
-                    "Adaptive precision & Shared-Basis/Core RMQ",
-                    "EXPERIMENTAL",
-                    AMBER,
-                ),
-                (
-                    "Q-Genesis Evolution",
-                    "3-objective NSGA-II Pareto representation search",
-                    "EXPERIMENTAL",
-                    AMBER,
-                ),
-                (
-                    "WGPU Compute Kernel",
-                    "Validated WGSL matvec prototype (f32)",
-                    "PROTOTYPE",
+                    "Q-Behavior Observatory",
+                    "Layer activation trajectories, RSA & reversible causal interventions",
+                    "ACTIVE",
                     CYAN,
+                ),
+                (
+                    "Q-Genesis Crucible",
+                    "Role-stratified 3D NSGA-II evolution + Genome-to-QMF v1 export",
+                    "EXPERIMENTAL",
+                    AMBER,
+                ),
+                (
+                    "PRISM 3D Renderer",
+                    "Multi-pass WGPU HDR instanced geometry + separable Gaussian bloom",
+                    "ACTIVE",
+                    ULTRAVIOLET,
                 ),
             ];
             for (name, desc, status, col) in rows {
                 ui.horizontal(|ui| {
                     pill_badge(ui, status, col);
                     ui.label(RichText::new(name).color(TEXT_PRIMARY).strong());
-                    ui.label(RichText::new(desc).color(TEXT_MUTED).size(12.0));
+                    ui.label(RichText::new(desc).color(TEXT_MUTED).size(11.5));
                 });
                 ui.add_space(2.0);
             }
@@ -265,7 +327,7 @@ pub fn show_command_center(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egu
             ui.label(
                 RichText::new("LABORATORY TELEMETRY LOG")
                     .color(CYAN)
-                    .size(12.0)
+                    .size(11.5)
                     .strong(),
             );
             ui.add_space(6.0);
@@ -484,10 +546,60 @@ pub fn show_qscope(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
 
     ui.add_space(10.0);
 
+    // 6-Mode 3D Neural Anatomy Observatory (interactive WGPU crystal picking)
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("3D Anatomy Mode:").color(CYAN).strong());
+        for mode in ScopeVisualMode::ALL {
+            ui.selectable_value(&mut app.scope_visual_mode, mode, mode.label());
+        }
+    });
+    ui.add_space(6.0);
+
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let scope_scene = build_qscope_anatomy_scene(
+        app.scope_report.as_ref(),
+        app.scope_visual_mode,
+        app.scope_selected_tensor,
+        time_sec,
+    );
+    let sel_str = app.scope_selected_tensor.to_string();
+    let v_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        360.0
+    };
+    let v_res = render_prism_viewport(
+        ui,
+        ctx,
+        "qscope_3d_anatomy",
+        Vec2::new(ui.available_width(), v_h),
+        &mut app.cam_qscope,
+        scope_scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        Some(&sel_str),
+        app.fullscreen_3d,
+    );
+    if v_res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if let Some(cid) = v_res.clicked_id
+        && let Ok(idx) = cid.parse::<usize>()
+    {
+        app.scope_selected_tensor = idx;
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+    ui.add_space(10.0);
+
     let Some(report) = &app.scope_report else {
         glass_card().show(ui, |ui| {
             ui.label(
-                RichText::new("No Q-Scope report loaded yet. Choose a local .safetensors model and click 'Run Q-Scope Analysis'.")
+                RichText::new("No Q-Scope report loaded yet. Choose a local .safetensors model and click 'Run Q-Scope Analysis' to replace the illustrative 3D preview with real tensor telemetry.")
                     .color(TEXT_MUTED),
             );
         });
@@ -659,10 +771,66 @@ pub fn show_qscope(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
 pub fn show_qentangle(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
     section_header(
         ui,
-        "Q-Entangle — Cross-Layer Grassmannian Subspace Affinity",
-        "Visualizes shared left/right singular subspaces across transformer layers to identify genuine RMQ compression candidates.",
-        Some(("GRASSMANNIAN", ULTRAVIOLET)),
+        "Q-Entangle — The Latent Constellation",
+        "Spatial 3D visualization of classical cross-layer Grassmannian subspace affinity (not physical quantum entanglement).",
+        Some(("GRASSMANNIAN CONSTELLATION", CYAN)),
     );
+
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut app.entangle_view_mode, 0, "3D Latent Constellation");
+        ui.selectable_value(&mut app.entangle_view_mode, 1, "2D Affinity Heatmap");
+        ui.selectable_value(&mut app.entangle_view_mode, 2, "RMQ Cluster Overview");
+        ui.selectable_value(&mut app.entangle_view_mode, 3, "Pair Comparison");
+        ui.separator();
+        ui.label("Min Affinity Filter:");
+        ui.add(egui::Slider::new(&mut app.entangle_threshold, 0.0..=0.65).fixed_decimals(2));
+    });
+    ui.add_space(8.0);
+
+    if app.entangle_view_mode == 0 {
+        let ctx = ui.ctx().clone();
+        let time_sec = app.start_time.elapsed().as_secs_f32();
+        let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+        let scene = build_qentangle_constellation_scene(
+            app.scope_report.as_ref(),
+            app.entangle_selected_pair,
+            app.entangle_threshold,
+            time_sec,
+        );
+        let sel_key = app.entangle_selected_pair.map(|i| format!("pair:{i}"));
+        let v_h = if app.fullscreen_3d {
+            (ui.available_height() - 12.0).max(520.0)
+        } else {
+            420.0
+        };
+        let res = render_prism_viewport(
+            ui,
+            &ctx,
+            "qentangle_constellation",
+            Vec2::new(ui.available_width(), v_h),
+            &mut app.cam_qentangle,
+            scene,
+            &app.persisted.graphics,
+            app.wgpu_ready,
+            time_sec,
+            dt,
+            sel_key.as_deref(),
+            app.fullscreen_3d,
+        );
+        if res.fullscreen_toggled {
+            app.fullscreen_3d = !app.fullscreen_3d;
+        }
+        if let Some(cid) = res.clicked_id
+            && let Some(idx_s) = cid.strip_prefix("pair:")
+            && let Ok(idx) = idx_s.parse::<usize>()
+        {
+            app.entangle_selected_pair = Some(idx);
+        }
+        if app.fullscreen_3d {
+            return;
+        }
+        ui.add_space(10.0);
+    }
 
     let Some(report) = &app.scope_report else {
         glass_card().show(ui, |ui| {
@@ -683,6 +851,91 @@ pub fn show_qentangle(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
                 RichText::new("No cross-layer pairs were found in the current Q-Scope report (requires multiple 2D matrices of matching shape).")
                     .color(TEXT_MUTED),
             );
+        });
+        return;
+    }
+
+    if let Some(sel_i) = app.entangle_selected_pair
+        && let Some(rel) = report.cross_layer_relations.get(sel_i)
+    {
+        accent_card().show(ui, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "SELECTED RELATIONSHIP: {}  <->  {}",
+                    rel.tensor_a, rel.tensor_b
+                ))
+                .color(CYAN)
+                .strong(),
+            );
+            ui.horizontal_wrapped(|ui| {
+                metric_tile(
+                    ui,
+                    "SHARED AFFINITY",
+                    &format!("{:.4}", rel.shared_structure_score),
+                    "Mean(Left, Right)",
+                    CYAN,
+                );
+                metric_tile(
+                    ui,
+                    "LEFT SUBSPACE",
+                    &format!("{:.4}", rel.left_subspace_affinity),
+                    "Column-space Grassmannian",
+                    ULTRAVIOLET,
+                );
+                metric_tile(
+                    ui,
+                    "RIGHT SUBSPACE",
+                    &format!("{:.4}", rel.right_subspace_affinity),
+                    "Row-space Grassmannian",
+                    AMETHYST,
+                );
+                metric_tile(
+                    ui,
+                    "ELEMENT COSINE",
+                    &format!("{:.4}", rel.weight_cosine_similarity),
+                    "Direct weight correlation",
+                    EMERALD,
+                );
+            });
+        });
+        ui.add_space(8.0);
+    }
+
+    if app.entangle_view_mode == 2 {
+        // RMQ Cluster Overview grouped by LayerRole
+        let mut by_role: BTreeMap<&'static str, (usize, f64, f64)> = BTreeMap::new();
+        for rel in &report.cross_layer_relations {
+            let e = by_role.entry(rel.role.as_str()).or_insert((0, 0.0, 0.0));
+            e.0 += 1;
+            e.1 += rel.shared_structure_score;
+            e.2 = e.2.max(rel.shared_structure_score);
+        }
+        glass_card().show(ui, |ui| {
+            ui.label(
+                RichText::new("RMQ CLUSTER ELIGIBILITY BY TRANSFORMER ROLE")
+                    .color(CYAN)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            for (role, (cnt, sum, peak)) in by_role {
+                let mean = sum / cnt.max(1) as f64;
+                ui.horizontal(|ui| {
+                    pill_badge(
+                        ui,
+                        if peak >= 0.25 {
+                            "RMQ CANDIDATE"
+                        } else {
+                            "LOW AFFINITY"
+                        },
+                        if peak >= 0.25 { EMERALD } else { TEXT_MUTED },
+                    );
+                    ui.label(RichText::new(role).monospace().color(TEXT_PRIMARY).strong());
+                    ui.label(
+                        RichText::new(format!("pairs={cnt}  •  mean={mean:.4}  •  peak={peak:.4}"))
+                            .color(TEXT_MUTED),
+                    );
+                });
+            }
         });
         return;
     }
@@ -798,10 +1051,50 @@ pub fn show_qentangle(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
 pub fn show_qforge(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     section_header(
         ui,
-        "Q-Forge Transformation Studio",
-        "Memory-bounded streaming transformation from immutable Safetensors into verified QMF v1 compressed containers.",
-        Some(("STREAMING PIPELINE", EMERALD)),
+        "Q-Forge — The Morphogenesis Chamber",
+        "Streaming, atomic Safetensors -> QMF v1 representation transformation with live progress coupling and exact byte accounting.",
+        Some(("MORPHOGENESIS CHAMBER", ULTRAVIOLET)),
     );
+
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let (cr, shared_l) = app.forge_report.as_ref().map_or((None, 0), |(r, _)| {
+        (Some(r.compression_ratio_vs_source), r.shared_latent_count)
+    });
+    let forge_scene = build_qforge_morphogenesis_scene(
+        app.forge_method.label(),
+        app.is_busy(),
+        app.forge_progress_frac,
+        cr,
+        shared_l,
+        time_sec,
+    );
+    let v_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        320.0
+    };
+    let v_res = render_prism_viewport(
+        ui,
+        ctx,
+        "qforge_morphogenesis",
+        Vec2::new(ui.available_width(), v_h),
+        &mut app.cam_qforge,
+        forge_scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        None,
+        app.fullscreen_3d,
+    );
+    if v_res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+    ui.add_space(10.0);
 
     glass_card().show(ui, |ui| {
         egui::Grid::new("qforge_config_grid")
@@ -967,9 +1260,9 @@ pub fn show_qforge(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
 pub fn show_qgenesis(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     section_header(
         ui,
-        "Q-Genesis Evolutionary Representation Lab",
-        "Multi-objective NSGA-II Pareto search optimizing Complete BPP vs Direct Matvec Error vs Estimated FLOPs.",
-        Some(("EXPERIMENTAL", AMBER)),
+        "Q-Genesis — The Evolutionary Crucible",
+        "Interactive 3D objective-space Pareto evolution (BPP × Matvec Error × FLOPs) with recorded parent-child lineage and direct Genome-to-QMF v1 export.",
+        Some(("3D EVOLUTIONARY CRUCIBLE", EMERALD)),
     );
 
     glass_card().show(ui, |ui| {
@@ -981,7 +1274,7 @@ pub fn show_qgenesis(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Con
             if !app.genesis_use_synthetic {
                 ui.add(
                     egui::TextEdit::singleline(&mut app.genesis_source_path)
-                        .desired_width(320.0)
+                        .desired_width(300.0)
                         .hint_text("Local .safetensors file..."),
                 );
                 if ui.button("Browse...").clicked()
@@ -996,32 +1289,163 @@ pub fn show_qgenesis(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Con
             ui.add(egui::DragValue::new(&mut app.genesis_population).range(6..=32));
             ui.label("Generations:");
             ui.add(egui::DragValue::new(&mut app.genesis_generations).range(2..=15));
+            ui.label("Profile:");
+            egui::ComboBox::from_id_salt("genesis_profile_combo")
+                .selected_text(app.genesis_profile.label())
+                .show_ui(ui, |ui| {
+                    for p in [
+                        GenesisProfile::Balanced,
+                        GenesisProfile::Smallest,
+                        GenesisProfile::BestQuality,
+                        GenesisProfile::Fastest,
+                    ] {
+                        ui.selectable_value(&mut app.genesis_profile, p, p.label());
+                    }
+                });
             if ui
                 .add_enabled(!app.is_busy(), egui::Button::new("Run Q-Genesis Evolution"))
                 .clicked()
             {
                 app.start_genesis_job(ctx.clone());
             }
-            if let Some(arch) = &app.genesis_archive
-                && let Some(msg) =
+            if let Some(arch) = &app.genesis_archive {
+                if let Some(msg) =
                     export_json_report(ui, "Export JSON...", "qgenesis-archive.json", arch)
-            {
-                app.log(msg);
+                {
+                    app.log(msg);
+                }
+                if !app.genesis_use_synthetic
+                    && ui
+                        .add_enabled(
+                            !app.is_busy(),
+                            egui::Button::new("Export Winner to QMF v1..."),
+                        )
+                        .clicked()
+                    && let Some(out) = rfd::FileDialog::new()
+                        .add_filter("QMF v1", &["qmf"])
+                        .set_file_name("genesis-winner.qmf")
+                        .save_file()
+                {
+                    app.start_genesis_export_job(ctx.clone(), out);
+                }
             }
         });
     });
 
     ui.add_space(10.0);
 
+    // 3D Evolutionary Crucible Viewport
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let gen_scene = build_qgenesis_crucible_scene(
+        app.genesis_archive.as_ref(),
+        app.genesis_profile,
+        app.genesis_selected_id,
+        app.genesis_gen_filter,
+        time_sec,
+    );
+    let sel_s = app.genesis_selected_id.map(|id| id.to_string());
+    let v_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        380.0
+    };
+    let v_res = render_prism_viewport(
+        ui,
+        ctx,
+        "qgenesis_3d_crucible",
+        Vec2::new(ui.available_width(), v_h),
+        &mut app.cam_qgenesis,
+        gen_scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        sel_s.as_deref(),
+        app.fullscreen_3d,
+    );
+    if v_res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if let Some(cid) = v_res.clicked_id
+        && let Ok(id) = cid.parse::<usize>()
+    {
+        app.genesis_selected_id = Some(id);
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+
+    ui.add_space(10.0);
+
     let Some(archive) = &app.genesis_archive else {
         glass_card().show(ui, |ui| {
             ui.label(
-                RichText::new("Click 'Run Q-Genesis Evolution' to evolve hybrid precision / SVD / RMQ genomes and plot the live Pareto frontier.")
+                RichText::new("Click 'Run Q-Genesis Evolution' to evolve hybrid precision / SVD / RMQ genomes and explore the 3D objective-space crucible.")
                     .color(TEXT_MUTED),
             );
         });
         return;
     };
+
+    // Generation scrubber for inspecting recorded evolutionary transitions
+    ui.horizontal(|ui| {
+        let mut filter_on = app.genesis_gen_filter.is_some();
+        if ui.checkbox(&mut filter_on, "Scrub Generation:").changed() {
+            app.genesis_gen_filter = if filter_on {
+                Some(archive.config.generations)
+            } else {
+                None
+            };
+        }
+        if let Some(ref mut g) = app.genesis_gen_filter {
+            ui.add(egui::Slider::new(g, 0..=archive.config.generations));
+        }
+        if let Some(win) = archive.select_best(app.genesis_profile) {
+            ui.separator();
+            pill_badge(
+                ui,
+                &format!(
+                    "Profile Winner #{}: {:.3} bpp • MV err {:.5}",
+                    win.id, win.fitness.effective_bpp, win.fitness.mean_matvec_rel_error
+                ),
+                EMERALD,
+            );
+        }
+    });
+    ui.add_space(6.0);
+
+    if let Some(sel_id) = app.genesis_selected_id
+        && let Some(cand) = archive.all_candidates.iter().find(|c| c.id == sel_id)
+    {
+        accent_card().show(ui, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "INSPECTING GENOME #{} (Generation {} • Parents: {:?})",
+                    cand.id, cand.generation, cand.parent_ids
+                ))
+                .color(CYAN)
+                .strong(),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "Eff BPP: {:.3}  •  Matvec Rel Err: {:.5}  •  Est. FLOPs: {}  •  Pareto: {}",
+                    cand.fitness.effective_bpp,
+                    cand.fitness.mean_matvec_rel_error,
+                    cand.fitness.estimated_matvec_flops,
+                    cand.on_pareto_frontier
+                ))
+                .color(TEXT_PRIMARY),
+            );
+            ui.label(
+                RichText::new(format!("Genes: {:?}", cand.genes))
+                    .monospace()
+                    .size(10.5)
+                    .color(TEXT_MUTED),
+            );
+        });
+        ui.add_space(6.0);
+    }
 
     glass_card().show(ui, |ui| {
         ui.label(
@@ -1212,6 +1636,26 @@ pub fn show_qmf_explorer(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
                     (manifest.shared_latents.len(), shared_bytes),
                 );
             }
+            let palette = [CYAN, ULTRAVIOLET, AMETHYST, EMERALD, AMBER, CRIMSON];
+            let mut segments: Vec<(String, u64, Color32)> = rep_stats
+                .iter()
+                .enumerate()
+                .map(|(i, (name, (_, bytes)))| {
+                    ((*name).to_owned(), *bytes, palette[i % palette.len()])
+                })
+                .collect();
+            if *manifest_bytes > 0 {
+                segments.push((
+                    "JSON_MANIFEST".to_owned(),
+                    *manifest_bytes,
+                    Color32::from_rgb(130, 145, 190),
+                ));
+            }
+            let grand_total: u64 = segments.iter().map(|(_, b, _)| *b).sum();
+            ui.add_space(8.0);
+            accent_card().show(ui, |ui| {
+                draw_qmf_storage_visuals(ui, &segments, grand_total);
+            });
 
             ui.add_space(8.0);
             ui.columns(2, |cols| {
@@ -1361,12 +1805,28 @@ pub fn show_qmf_explorer(app: &mut QmlDesktopApp, ui: &mut egui::Ui) {
 }
 
 pub fn show_qcore(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    section_header(
-        ui,
-        "Q-Core Native Compressed Inference Chamber",
-        "Executes Transformer models directly over compressed QMF v1 operators with pure-Rust Byte-Level BPE tokenization and live streaming output.",
-        Some(("ZERO DENSE RECONSTRUCTION", EMERALD)),
-    );
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            section_header(
+                ui,
+                "Q-Core — The Inference Nexus",
+                "Executes compressed QMF v1 Transformers natively on Rayon CPU or Persistent GPU Hybrid VRAM with pure-Rust Byte-Level BPE.",
+                Some(("ZERO DENSE RECONSTRUCTION", EMERALD)),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+            let zen_lbl = if app.qcore_zen_mode {
+                "Exit Distraction-Free Mode [Esc]"
+            } else {
+                "Distraction-Free Mode"
+            };
+            if ui.button(RichText::new(zen_lbl).color(CYAN)).clicked() {
+                app.qcore_zen_mode = !app.qcore_zen_mode;
+            }
+        });
+    });
+    draw_ambient_inference_pulse(ui, app.is_busy(), app.start_time.elapsed().as_secs_f64());
+    ui.add_space(8.0);
 
     glass_card().show(ui, |ui| {
         egui::Grid::new("qcore_files_grid")
@@ -1535,10 +1995,52 @@ pub fn show_qcore(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Contex
 pub fn show_qbehavior(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     section_header(
         ui,
-        "Q-Behavior Mechanistic & Activation Observatory",
-        "Captures intermediate hidden-state trajectories across every layer, computes Representational Similarity Analysis (RSA) and activation drift, and runs strictly reversible causal layer interventions.",
-        Some(("REVERSIBLE RUNTIME PROBES", CYAN)),
+        "Q-Behavior — The Consciousness Observatory",
+        "Dual-column 3D activation observatory measuring classical layer cosine similarity, relative L2 drift, RSA geometry, and strictly reversible causal interventions.",
+        Some(("CLASSICAL ACTIVATION SCIENCE", CYAN)),
     );
+
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let bhv_scene = build_qbehavior_dual_scene(
+        app.behavior_report.as_ref(),
+        app.intervention_report.as_ref(),
+        app.behavior_selected_layer,
+        time_sec,
+    );
+    let sel_l = app.behavior_selected_layer.to_string();
+    let v_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        360.0
+    };
+    let v_res = render_prism_viewport(
+        ui,
+        ctx,
+        "qbehavior_3d_dual",
+        Vec2::new(ui.available_width(), v_h),
+        &mut app.cam_qbehavior,
+        bhv_scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        Some(&sel_l),
+        app.fullscreen_3d,
+    );
+    if v_res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if let Some(cid) = v_res.clicked_id
+        && let Ok(l) = cid.parse::<usize>()
+    {
+        app.behavior_selected_layer = l;
+        app.behavior_intervention_layer = l;
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+    ui.add_space(10.0);
 
     glass_card().show(ui, |ui| {
         ui.label(
@@ -1774,28 +2276,132 @@ pub fn show_benchmarks(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::C
 pub fn show_system_observatory(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     section_header(
         ui,
-        "System Observatory & Hardware Acceleration",
-        "Real-time CPU, SIMD, RAM, and WGPU GPU adapter diagnostics with live WGSL compute shader verification.",
-        Some(("WGPU + RAYON", EMERALD)),
+        "Hardware Observatory — Computational Anatomy",
+        "Procedural 3D silicon schematic, real CPU/SIMD/RAM/WGPU telemetry, PROJECT PRISM graphics presets, and live WGSL compute shader verification.",
+        Some(("COMPUTATIONAL ANATOMY", EMERALD)),
     );
 
-    ui.horizontal_wrapped(|ui| {
+    let time_sec = app.start_time.elapsed().as_secs_f32();
+    let dt = (1.0 / app.smoothed_fps.max(15.0)).clamp(0.004, 0.05);
+    let hw_scene = build_hardware_anatomy_scene(&app.hardware, time_sec);
+    let v_h = if app.fullscreen_3d {
+        (ui.available_height() - 12.0).max(520.0)
+    } else {
+        320.0
+    };
+    let v_res = render_prism_viewport(
+        ui,
+        ctx,
+        "hardware_3d_anatomy",
+        Vec2::new(ui.available_width(), v_h),
+        &mut app.cam_hardware,
+        hw_scene,
+        &app.persisted.graphics,
+        app.wgpu_ready,
+        time_sec,
+        dt,
+        None,
+        app.fullscreen_3d,
+    );
+    if v_res.fullscreen_toggled {
+        app.fullscreen_3d = !app.fullscreen_3d;
+    }
+    if app.fullscreen_3d {
+        return;
+    }
+    ui.add_space(10.0);
+
+    // PROJECT PRISM Graphics Quality Presets & Controls (persisted cleanly)
+    accent_card().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("PROJECT PRISM — 3D GRAPHICS QUALITY & ADAPTIVE CONTROLS")
+                    .color(CYAN)
+                    .size(12.0)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                pill_badge(
+                    ui,
+                    &format!("Measured Frame Rate: {:.0} FPS", app.smoothed_fps),
+                    EMERALD,
+                );
+            });
+        });
+        ui.add_space(6.0);
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
+            for p in GraphicsPreset::ALL {
+                if ui
+                    .selectable_value(&mut app.persisted.graphics.preset, p, p.label())
+                    .changed()
+                {
+                    app.persisted.graphics = GraphicsSettings::from_preset(p);
+                    changed = true;
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Resolution Scale:");
+            changed |= ui
+                .add(egui::Slider::new(&mut app.persisted.graphics.resolution_scale, 0.50..=1.0).fixed_decimals(2))
+                .changed();
+            ui.label("Particle Density:");
+            changed |= ui
+                .add(egui::Slider::new(&mut app.persisted.graphics.particle_density, 0.0..=1.0).fixed_decimals(2))
+                .changed();
+            changed |= ui
+                .checkbox(&mut app.persisted.graphics.bloom_enabled, "HDR Bloom")
+                .changed();
+            if app.persisted.graphics.bloom_enabled {
+                changed |= ui
+                    .add(egui::Slider::new(&mut app.persisted.graphics.bloom_intensity, 0.0..=1.6).fixed_decimals(2))
+                    .changed();
+            }
+            ui.label("Animation:");
+            changed |= ui
+                .add(egui::Slider::new(&mut app.persisted.graphics.animation_intensity, 0.0..=1.5).fixed_decimals(2))
+                .changed();
+            changed |= ui
+                .checkbox(&mut app.persisted.graphics.reduced_motion, "Reduced Motion")
+                .changed();
+            ui.label("FPS Cap:");
+            for cap in [30u32, 60, 120, 144] {
+                changed |= ui
+                    .selectable_value(&mut app.persisted.graphics.fps_limit, cap, format!("{cap}"))
+                    .changed();
+            }
+        });
+        if changed {
+            save_persisted_state(&app.persisted);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Telemetry Honesty: GPU temperature, board power draw, and live OS-wide VRAM usage are not exposed by safe cross-platform WGPU and are intentionally never fabricated.")
+                .color(TEXT_MUTED)
+                .size(11.0),
+        );
+    });
+    ui.add_space(10.0);
+
+    ui.columns(3, |cols| {
         metric_tile(
-            ui,
+            &mut cols[0],
             "PROCESSOR",
             &format!("{} Threads", app.hardware.logical_cores),
             &app.hardware.cpu_brand,
             CYAN,
         );
         metric_tile(
-            ui,
+            &mut cols[1],
             "SIMD INSTRUCTION SETS",
             &format!("{} Detected", app.hardware.simd_features.len()),
             &app.hardware.simd_features.join(", "),
             AMETHYST,
         );
         metric_tile(
-            ui,
+            &mut cols[2],
             "PHYSICAL RAM",
             &format_bytes(app.hardware.total_ram_bytes),
             &format!(
@@ -1879,12 +2485,17 @@ pub fn show_system_observatory(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: 
                             pill_badge(ui, &gpu.device_type, ULTRAVIOLET);
                             ui.label(RichText::new(&gpu.name).color(TEXT_PRIMARY).strong());
                         });
+                        let max_buf_label = if gpu.max_buffer_size > 1_099_511_627_776 {
+                            "Device Max (>1 TiB)".to_owned()
+                        } else {
+                            format_bytes(gpu.max_buffer_size)
+                        };
                         ui.label(
                             RichText::new(format!(
                                 "Driver: {} ({})  •  Max Buffer: {}  •  Max Workgroup X: {}",
                                 gpu.driver,
                                 gpu.driver_info,
-                                format_bytes(gpu.max_buffer_size),
+                                max_buf_label,
                                 gpu.max_compute_workgroup_size_x
                             ))
                             .color(TEXT_MUTED)

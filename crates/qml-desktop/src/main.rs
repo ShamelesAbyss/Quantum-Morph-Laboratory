@@ -1,15 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod prism;
 mod state;
 mod theme;
 mod views;
 
 use eframe::egui::{self, RichText, Vec2};
+use prism::scenes::ScopeVisualMode;
+use prism::{OrbitCamera, init_prism_renderer};
 use qml_forge::{
     ForgeControl, ForgeReport, TransformStrategy, forge_safetensors_to_qmf_with_control,
 };
 use qml_format::{QmfBudget, QmfFileReader};
-use qml_genesis::{GenesisArchive, GenesisConfig, run_genesis};
+use qml_genesis::{GenesisArchive, GenesisConfig, GenesisProfile, run_genesis};
 use qml_hardware::{HardwareReport, WgpuMatvecEngine, probe_hardware};
 use qml_model::{PayloadBudget, SafetensorsFile};
 use qml_quant::{
@@ -207,11 +210,47 @@ pub struct QmlDesktopApp {
 
     // System Observatory state
     pub gpu_selftest: Option<GpuSelfTestResult>,
+
+    // PROJECT PRISM — Native WGPU 3D Renderer & Global UX state
+    pub wgpu_ready: bool,
+    pub nav_collapsed: bool,
+    pub fullscreen_3d: bool,
+    pub qcore_zen_mode: bool,
+    pub last_frame_instant: Instant,
+    pub smoothed_fps: f32,
+
+    pub cam_singularity: OrbitCamera,
+    pub cam_qscope: OrbitCamera,
+    pub cam_qentangle: OrbitCamera,
+    pub cam_qforge: OrbitCamera,
+    pub cam_qgenesis: OrbitCamera,
+    pub cam_qbehavior: OrbitCamera,
+    pub cam_hardware: OrbitCamera,
+
+    pub scope_visual_mode: ScopeVisualMode,
+    pub entangle_view_mode: usize, // 0=3D Constellation, 1=2D Heatmap, 2=Cluster Overview, 3=Pair Detail
+    pub entangle_selected_pair: Option<usize>,
+    pub entangle_threshold: f64,
+    pub forge_progress_frac: f32,
+    pub genesis_profile: GenesisProfile,
+    pub genesis_selected_id: Option<usize>,
+    pub genesis_gen_filter: Option<usize>,
+    pub behavior_selected_layer: usize,
+    pub capture_png_path: Option<PathBuf>,
+    pub capture_requested: bool,
+    pub frames_rendered: u32,
 }
 
 impl QmlDesktopApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        initial_tab: NavTab,
+        capture_png_path: Option<PathBuf>,
+        auto_genesis: bool,
+        auto_scope: Option<String>,
+    ) -> Self {
         theme::apply_laboratory_theme(&cc.egui_ctx);
+        let wgpu_ready = init_prism_renderer(cc);
         let hardware = probe_hardware();
         let persisted = load_persisted_state();
         // Model discovery is strictly opt-in via Model Library actions (no automatic background scanning).
@@ -257,14 +296,14 @@ impl QmlDesktopApp {
             .unwrap_or_default();
 
         let mut app = Self {
-            active_tab: NavTab::CommandCenter,
+            active_tab: initial_tab,
             persisted,
             hardware,
             status_banner:
-                "Laboratory online — all engines ready (imported models are strictly read-only)."
+                "Laboratory online — PRISM WGPU 3D Observatory ready (models opened strictly read-only)."
                     .to_owned(),
             activity_log: vec![
-                "Quantum Morph Laboratory v0.1.0-alpha.1 (PROJECT SINGULARITY) initialized."
+                "Quantum Morph Laboratory v0.3.0-alpha.1 (PROJECT PRISM) initialized."
                     .to_owned(),
             ],
             busy_label: None,
@@ -320,7 +359,42 @@ impl QmlDesktopApp {
             ablation_result: None,
 
             gpu_selftest: None,
+
+            wgpu_ready,
+            nav_collapsed: false,
+            fullscreen_3d: false,
+            qcore_zen_mode: false,
+            last_frame_instant: Instant::now(),
+            smoothed_fps: 60.0,
+
+            cam_singularity: OrbitCamera::new(0.45, 0.28, 7.6, 0.14),
+            cam_qscope: OrbitCamera::new(0.62, 0.22, 8.8, 0.06),
+            cam_qentangle: OrbitCamera::new(0.55, 0.26, 7.8, 0.08),
+            cam_qforge: OrbitCamera::new(0.20, 0.20, 8.4, 0.05),
+            cam_qgenesis: OrbitCamera::new(0.65, 0.34, 8.6, 0.07),
+            cam_qbehavior: OrbitCamera::new(0.32, 0.18, 8.2, 0.05),
+            cam_hardware: OrbitCamera::new(0.48, 0.42, 7.8, 0.07),
+
+            scope_visual_mode: ScopeVisualMode::Anatomy,
+            entangle_view_mode: 0,
+            entangle_selected_pair: None,
+            entangle_threshold: 0.12,
+            forge_progress_frac: 0.0,
+            genesis_profile: GenesisProfile::Balanced,
+            genesis_selected_id: None,
+            genesis_gen_filter: None,
+            behavior_selected_layer: 0,
+            capture_png_path,
+            capture_requested: false,
+            frames_rendered: 0,
         };
+
+        if auto_genesis {
+            app.start_genesis_job(cc.egui_ctx.clone());
+        } else if let Some(path) = auto_scope {
+            app.scope_source_path = path;
+            app.start_scope_job(cc.egui_ctx.clone());
+        }
 
         app.log(format!(
             "Detected CPU: {} ({} threads), {} WGPU adapter(s).",
@@ -490,9 +564,15 @@ impl QmlDesktopApp {
             let control = ForgeControl {
                 cancel,
                 on_progress: Some(Arc::new(move |done, total, stage| {
-                    let _ = tx_prog.send(WorkerEvent::Status(format!(
-                        "Q-Forge [{done}/{total}] {stage}"
-                    )));
+                    let frac = if total > 0 {
+                        (done as f32 / total as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let _ = tx_prog.send(WorkerEvent::ForgeProgress(
+                        frac,
+                        format!("Q-Forge [{done}/{total}] {stage}"),
+                    ));
                     ctx_prog.request_repaint();
                 })),
             };
@@ -1075,6 +1155,136 @@ impl QmlDesktopApp {
         });
     }
 
+    /// Export the selected (or profile-winning) Q-Genesis Pareto genome directly to a verified QMF v1 file.
+    pub fn start_genesis_export_job(&mut self, ctx: egui::Context, output_path: PathBuf) {
+        if self.is_busy() {
+            return;
+        }
+        let Some(arch) = self.genesis_archive.clone() else {
+            return;
+        };
+        let src_path = PathBuf::from(self.genesis_source_path.trim());
+        if !src_path.is_file() {
+            self.log("Q-Genesis Export: requires a real .safetensors source model (uncheck synthetic mode).");
+            return;
+        }
+        let winner = self
+            .genesis_selected_id
+            .and_then(|id| arch.all_candidates.iter().find(|c| c.id == id))
+            .or_else(|| arch.select_best(self.genesis_profile))
+            .cloned();
+        let Some(winner) = winner else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.worker_rx = Some(rx);
+        self.busy_label = Some(format!(
+            "Exporting Q-Genesis Genome #{} -> {}...",
+            winner.id,
+            output_path.display()
+        ));
+        std::thread::spawn(move || {
+            let res = File::open(&src_path)
+                .map_err(|e| e.to_string())
+                .and_then(|f| {
+                    let model_id = src_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("genesis-model");
+                    let qmf = qml_genesis::export_genome_to_qmf_v1(
+                        f,
+                        model_id,
+                        "local-readonly-source",
+                        "safetensors",
+                        &arch.layer_names,
+                        &winner.genes,
+                        &PayloadBudget::default(),
+                        arch.config.seed,
+                    )?;
+                    qmf.write_to_file_atomic(&output_path, Some(&src_path), &QmfBudget::default())
+                        .map_err(|e| e.to_string())?;
+                    Ok(format!(
+                        "Exported Q-Genesis Genome #{} ({:.3} bpp) atomically -> {}",
+                        winner.id,
+                        winner.fitness.effective_bpp,
+                        output_path.display()
+                    ))
+                });
+            match res {
+                Ok(msg) => {
+                    let _ = tx.send(WorkerEvent::Status(msg));
+                    let _ = tx.send(WorkerEvent::Error(
+                        "Q-Genesis QMF v1 export completed.".to_owned(),
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkerEvent::Error(format!("Q-Genesis export failed: {e}")));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn active_camera_mut(&mut self) -> Option<&mut OrbitCamera> {
+        match self.active_tab {
+            NavTab::CommandCenter => Some(&mut self.cam_singularity),
+            NavTab::QScope => Some(&mut self.cam_qscope),
+            NavTab::QEntangle => Some(&mut self.cam_qentangle),
+            NavTab::QForge => Some(&mut self.cam_qforge),
+            NavTab::QGenesis => Some(&mut self.cam_qgenesis),
+            NavTab::QBehavior => Some(&mut self.cam_qbehavior),
+            NavTab::SystemObservatory => Some(&mut self.cam_hardware),
+            _ => None,
+        }
+    }
+
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        ctx.input(|i| {
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::B) {
+                self.nav_collapsed = !self.nav_collapsed;
+            }
+            if i.key_pressed(egui::Key::F) {
+                self.fullscreen_3d = !self.fullscreen_3d;
+            }
+            if i.key_pressed(egui::Key::Escape) {
+                self.fullscreen_3d = false;
+                self.qcore_zen_mode = false;
+            }
+            if i.key_pressed(egui::Key::R)
+                && let Some(cam) = self.active_camera_mut()
+            {
+                cam.reset();
+            }
+            if i.key_pressed(egui::Key::P)
+                && let Some(cam) = self.active_camera_mut()
+            {
+                cam.orthographic = !cam.orthographic;
+            }
+            let num_tabs = [
+                (egui::Key::Num1, NavTab::CommandCenter),
+                (egui::Key::Num2, NavTab::ModelLibrary),
+                (egui::Key::Num3, NavTab::QScope),
+                (egui::Key::Num4, NavTab::QEntangle),
+                (egui::Key::Num5, NavTab::QForge),
+                (egui::Key::Num6, NavTab::QGenesis),
+                (egui::Key::Num7, NavTab::QmfExplorer),
+                (egui::Key::Num8, NavTab::QCore),
+                (egui::Key::Num9, NavTab::QBehavior),
+                (egui::Key::Num0, NavTab::Benchmarks),
+                (egui::Key::Minus, NavTab::SystemObservatory),
+            ];
+            for (key, tab) in num_tabs {
+                if i.key_pressed(key) {
+                    self.active_tab = tab;
+                    self.fullscreen_3d = false;
+                }
+            }
+        });
+    }
+
     fn poll_worker(&mut self) {
         let mut clear_rx = false;
         let mut events = Vec::new();
@@ -1086,6 +1296,11 @@ impl QmlDesktopApp {
         for ev in events {
             match ev {
                 WorkerEvent::Status(s) => {
+                    self.busy_label = Some(s.clone());
+                    self.status_banner = s;
+                }
+                WorkerEvent::ForgeProgress(frac, s) => {
+                    self.forge_progress_frac = frac;
                     self.busy_label = Some(s.clone());
                     self.status_banner = s;
                 }
@@ -1218,52 +1433,130 @@ impl QmlDesktopApp {
 impl eframe::App for QmlDesktopApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker();
-        if self.is_busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        self.handle_global_shortcuts(ctx);
+        self.frames_rendered = self.frames_rendered.saturating_add(1);
+
+        // Optional automated native GPU screenshot capture (`--capture-png PATH`)
+        if let Some(out_path) = self.capture_png_path.clone() {
+            let mut captured_img: Option<Arc<egui::ColorImage>> = None;
+            ctx.input(|i| {
+                for ev in &i.events {
+                    if let egui::Event::Screenshot { image, .. } = ev {
+                        captured_img = Some(Arc::clone(image));
+                    }
+                }
+            });
+            if let Some(img) = captured_img {
+                if let Err(err) = save_color_image_png(&out_path, &img) {
+                    append_log_line("ERROR", &format!("Screenshot save failed: {err}"));
+                } else {
+                    append_log_line(
+                        "INFO",
+                        &format!(
+                            "Captured native GPU screenshot {} ({}x{})",
+                            out_path.display(),
+                            img.width(),
+                            img.height()
+                        ),
+                    );
+                }
+                self.capture_png_path = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if !self.capture_requested && !self.is_busy() && self.frames_rendered >= 12 {
+                self.capture_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+            ctx.request_repaint();
         }
 
-        // Top laboratory header & telemetry strip
-        egui::TopBottomPanel::top("qml_top_bar")
-            .exact_height(52.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::PANEL_BG)
-                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
-                    .inner_margin(egui::Margin::symmetric(16, 8)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    theme::draw_lab_emblem(ui, 30.0, self.start_time.elapsed().as_secs_f64());
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("QUANTUM MORPH LABORATORY")
-                            .color(theme::TEXT_PRIMARY)
-                            .size(16.0)
-                            .strong(),
-                    );
-                    theme::pill_badge(ui, "v0.1.0-alpha.1", theme::ULTRAVIOLET);
-                    theme::pill_badge(ui, "RESEARCH PROTOTYPE", theme::CYAN);
+        // Measure genuine frame delta & smoothed FPS (never fabricated)
+        let now = Instant::now();
+        let dt = now
+            .duration_since(self.last_frame_instant)
+            .as_secs_f32()
+            .clamp(0.001, 0.25);
+        self.last_frame_instant = now;
+        let inst_fps = (1.0 / dt).clamp(1.0, 240.0);
+        self.smoothed_fps = self.smoothed_fps * 0.90 + inst_fps * 0.10;
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let gpu_label = self
-                            .hardware
-                            .gpus
-                            .first()
-                            .map(|g| format!("GPU: {}", g.name))
-                            .unwrap_or_else(|| "GPU: CPU Fallback".to_owned());
-                        theme::pill_badge(ui, &gpu_label, theme::EMERALD);
-                        theme::pill_badge(
-                            ui,
-                            &format!("CPU: {}T", self.hardware.logical_cores),
-                            theme::AMETHYST,
+        // Avoid wasting GPU cycles when window is minimized
+        let is_minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        let has_3d_tab = self.active_camera_mut().is_some();
+        if !is_minimized {
+            if self.is_busy() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(33));
+            } else if has_3d_tab && self.persisted.graphics.effective_anim_scale() > 0.0 {
+                let fps = self.persisted.graphics.fps_limit.clamp(24, 144);
+                let ms = (1000 / fps).max(7) as u64;
+                ctx.request_repaint_after(std::time::Duration::from_millis(ms));
+            }
+        }
+
+        // Top laboratory header, breadcrumbs & live telemetry strip (hidden in Q-Core Zen mode)
+        if !self.qcore_zen_mode {
+            egui::TopBottomPanel::top("qml_top_bar")
+                .exact_height(50.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::PANEL_BG)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                        .inner_margin(egui::Margin::symmetric(14, 7)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let nav_btn = if self.nav_collapsed { "»" } else { "«" };
+                        if ui
+                            .small_button(RichText::new(nav_btn).size(13.0).color(theme::AMETHYST))
+                            .on_hover_text("Toggle navigation rail [Ctrl+B]")
+                            .clicked()
+                        {
+                            self.nav_collapsed = !self.nav_collapsed;
+                        }
+                        ui.add_space(4.0);
+                        theme::draw_lab_emblem(ui, 28.0, self.start_time.elapsed().as_secs_f64());
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("QUANTUM MORPH LABORATORY")
+                                .color(theme::TEXT_PRIMARY)
+                                .size(15.0)
+                                .strong(),
                         );
+                        ui.label(RichText::new("›").color(theme::TEXT_MUTED).size(14.0));
+                        ui.label(
+                            RichText::new(self.active_tab.label())
+                                .color(theme::CYAN)
+                                .size(13.5)
+                                .strong(),
+                        );
+                        theme::pill_badge(ui, "v0.3.0-alpha.1 PRISM", theme::ULTRAVIOLET);
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let gpu_label = self
+                                .hardware
+                                .gpus
+                                .first()
+                                .map(|g| format!("GPU: {}", g.name))
+                                .unwrap_or_else(|| "GPU: CPU Fallback".to_owned());
+                            theme::pill_badge(ui, &gpu_label, theme::EMERALD);
+                            let render_badge = if self.wgpu_ready {
+                                format!("PRISM WGPU • {:.0} FPS", self.smoothed_fps)
+                            } else {
+                                "2.5D FALLBACK".to_owned()
+                            };
+                            theme::pill_badge(ui, &render_badge, theme::CYAN);
+                            theme::pill_badge(
+                                ui,
+                                &format!("CPU: {}T", self.hardware.logical_cores),
+                                theme::AMETHYST,
+                            );
+                        });
                     });
                 });
-            });
+        }
 
         // Bottom live status bar & active worker cancel control
         egui::TopBottomPanel::bottom("qml_status_bar")
-            .exact_height(30.0)
+            .exact_height(28.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL_BG)
@@ -1274,9 +1567,9 @@ impl eframe::App for QmlDesktopApp {
                 ui.horizontal_centered(|ui| {
                     if let Some(busy) = &self.busy_label {
                         ui.spinner();
-                        ui.label(RichText::new(busy).color(theme::CYAN).size(12.0));
+                        ui.label(RichText::new(busy).color(theme::CYAN).size(11.5));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Cancel").clicked() {
+                            if ui.small_button("Cancel").clicked() {
                                 self.cancel_flag.store(true, Ordering::SeqCst);
                                 self.status_banner = "Cancellation requested...".to_owned();
                             }
@@ -1285,99 +1578,113 @@ impl eframe::App for QmlDesktopApp {
                         ui.label(
                             RichText::new(&self.status_banner)
                                 .color(theme::TEXT_MUTED)
-                                .size(12.0),
+                                .size(11.5),
                         );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new("Shortcuts: [1-9/0/-] Tabs • [Ctrl+B] Rail • [F] Expand 3D • [P] Ortho • [R] Reset Cam")
+                                    .color(egui::Color32::from_rgb(108, 118, 152))
+                                    .size(10.5),
+                            );
+                        });
                     }
                 });
             });
 
-        // Left navigation rail
-        egui::SidePanel::left("qml_nav_rail")
-            .exact_width(218.0)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::PANEL_BG)
-                    .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
-                    .inner_margin(egui::Margin::symmetric(10, 14)),
-            )
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new("LABORATORY SUBSYSTEMS")
-                        .color(theme::TEXT_MUTED)
-                        .size(10.5)
-                        .strong(),
-                );
-                ui.add_space(6.0);
-                for tab in NavTab::ALL {
-                    let selected = self.active_tab == tab;
-                    let fill = if selected {
-                        egui::Color32::from_rgba_unmultiplied(139, 92, 246, 52)
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    let stroke = if selected {
-                        egui::Stroke::new(1.0_f32, theme::ULTRAVIOLET)
-                    } else {
-                        egui::Stroke::NONE
-                    };
-                    let resp = egui::Frame::new()
-                        .fill(fill)
-                        .stroke(stroke)
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .inner_margin(egui::Margin::symmetric(8, 7))
-                        .show(ui, |ui| {
-                            ui.set_min_width(184.0);
-                            ui.horizontal(|ui| {
-                                let code_color = if selected {
-                                    theme::CYAN
-                                } else {
-                                    theme::TEXT_MUTED
-                                };
-                                ui.label(
-                                    RichText::new(tab.short_badge())
-                                        .color(code_color)
-                                        .monospace()
-                                        .size(11.0)
-                                        .strong(),
-                                );
-                                ui.add_space(4.0);
-                                let text_color = if selected {
-                                    theme::TEXT_PRIMARY
-                                } else {
-                                    theme::TEXT_MUTED
-                                };
-                                ui.label(RichText::new(tab.label()).color(text_color).size(13.0));
-                            });
-                        })
-                        .response
-                        .interact(egui::Sense::click());
-                    if resp.clicked() {
-                        self.active_tab = tab;
+        // Collapsible left navigation rail with original procedural vector iconography
+        if !self.qcore_zen_mode && !self.fullscreen_3d {
+            let rail_w = if self.nav_collapsed { 56.0 } else { 222.0 };
+            egui::SidePanel::left("qml_nav_rail")
+                .exact_width(rail_w)
+                .resizable(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::PANEL_BG)
+                        .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
+                        .inner_margin(egui::Margin::symmetric(8, 12)),
+                )
+                .show(ctx, |ui| {
+                    if !self.nav_collapsed {
+                        ui.label(
+                            RichText::new("OBSERVATORY MODULES")
+                                .color(theme::TEXT_MUTED)
+                                .size(10.0)
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
                     }
-                    ui.add_space(2.0);
-                }
+                    for (idx, tab) in NavTab::ALL.iter().copied().enumerate() {
+                        let selected = self.active_tab == tab;
+                        let fill = if selected {
+                            egui::Color32::from_rgba_unmultiplied(139, 92, 246, 56)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        let stroke = if selected {
+                            egui::Stroke::new(1.0_f32, theme::ULTRAVIOLET)
+                        } else {
+                            egui::Stroke::NONE
+                        };
+                        let resp = egui::Frame::new()
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(egui::CornerRadius::same(7))
+                            .inner_margin(egui::Margin::symmetric(8, 6))
+                            .show(ui, |ui| {
+                                ui.set_min_width(if self.nav_collapsed { 24.0 } else { 188.0 });
+                                ui.horizontal(|ui| {
+                                    let icon_col = if selected {
+                                        theme::CYAN
+                                    } else {
+                                        theme::TEXT_MUTED
+                                    };
+                                    theme::draw_subsystem_icon(ui, idx, 18.0, icon_col);
+                                    if !self.nav_collapsed {
+                                        ui.add_space(6.0);
+                                        let text_color = if selected {
+                                            theme::TEXT_PRIMARY
+                                        } else {
+                                            theme::TEXT_MUTED
+                                        };
+                                        ui.label(
+                                            RichText::new(tab.label()).color(text_color).size(12.8),
+                                        );
+                                    }
+                                });
+                            })
+                            .response
+                            .interact(egui::Sense::click())
+                            .on_hover_text(tab.label());
+                        if resp.clicked() {
+                            self.active_tab = tab;
+                            self.fullscreen_3d = false;
+                        }
+                        ui.add_space(2.0);
+                    }
 
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.label(
-                        RichText::new("Zero Python • 100% Safe Rust")
-                            .color(theme::TEXT_MUTED)
-                            .size(10.5),
-                    );
-                    ui.label(
-                        RichText::new("Models opened strictly read-only")
-                            .color(theme::TEXT_MUTED)
-                            .size(10.5),
-                    );
+                    if !self.nav_collapsed {
+                        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                            ui.label(
+                                RichText::new("Zero Python • 100% Safe Rust")
+                                    .color(theme::TEXT_MUTED)
+                                    .size(10.0),
+                            );
+                            ui.label(
+                                RichText::new("Models opened strictly read-only")
+                                    .color(theme::TEXT_MUTED)
+                                    .size(10.0),
+                            );
+                        });
+                    }
                 });
-            });
+        }
 
         // Main content viewport
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(theme::OBSIDIAN_BG)
-                    .inner_margin(egui::Margin::same(18)),
+                    .inner_margin(egui::Margin::same(if self.fullscreen_3d { 8 } else { 16 })),
             )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
@@ -1399,21 +1706,117 @@ impl eframe::App for QmlDesktopApp {
     }
 }
 
+fn save_color_image_png(path: &std::path::Path, image: &egui::ColorImage) -> Result<(), String> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let file = File::create(path).map_err(|e| e.to_string())?;
+    let w = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, image.width() as u32, image.height() as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
+    for px in &image.pixels {
+        bytes.extend_from_slice(&px.to_array());
+    }
+    writer.write_image_data(&bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+struct LaunchOptions {
+    initial_tab: NavTab,
+    capture_png: Option<PathBuf>,
+    window_size: Vec2,
+    auto_genesis: bool,
+    auto_scope: Option<String>,
+}
+
+fn parse_launch_options() -> LaunchOptions {
+    let mut opts = LaunchOptions {
+        initial_tab: NavTab::CommandCenter,
+        capture_png: None,
+        window_size: Vec2::new(1520.0, 940.0),
+        auto_genesis: false,
+        auto_scope: None,
+    };
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--tab" => {
+                if let Some(val) = args.next() {
+                    opts.initial_tab = match val.to_lowercase().as_str() {
+                        "command" | "singularity" => NavTab::CommandCenter,
+                        "library" => NavTab::ModelLibrary,
+                        "qscope" | "scope" => NavTab::QScope,
+                        "qentangle" | "entangle" => NavTab::QEntangle,
+                        "qforge" | "forge" => NavTab::QForge,
+                        "qgenesis" | "genesis" => NavTab::QGenesis,
+                        "qmf" | "explorer" => NavTab::QmfExplorer,
+                        "qcore" | "core" => NavTab::QCore,
+                        "qbehavior" | "behavior" => NavTab::QBehavior,
+                        "benchmarks" | "rmq" => NavTab::Benchmarks,
+                        "hardware" | "system" => NavTab::SystemObservatory,
+                        _ => NavTab::CommandCenter,
+                    };
+                }
+            }
+            "--capture-png" => {
+                if let Some(val) = args.next() {
+                    opts.capture_png = Some(PathBuf::from(val));
+                }
+            }
+            "--size" => {
+                if let Some(val) = args.next()
+                    && let Some((ws, hs)) = val.split_once('x')
+                    && let (Ok(w), Ok(h)) = (ws.parse::<f32>(), hs.parse::<f32>())
+                {
+                    opts.window_size = Vec2::new(w.clamp(1024.0, 3840.0), h.clamp(680.0, 2160.0));
+                }
+            }
+            "--auto-genesis" => {
+                opts.auto_genesis = true;
+            }
+            "--auto-scope" => {
+                if let Some(val) = args.next() {
+                    opts.auto_scope = Some(val);
+                }
+            }
+            _ => {}
+        }
+    }
+    opts
+}
+
 fn main() -> eframe::Result<()> {
     install_crash_logger();
-    append_log_line("INFO", "Launching qml-desktop native application.");
+    append_log_line(
+        "INFO",
+        "Launching qml-desktop v0.3.0-alpha.1 (PROJECT PRISM — WGPU 3D Renderer).",
+    );
+    let launch = parse_launch_options();
 
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
-            .with_title("Quantum Morph Laboratory — Neural Representation Research Workbench")
-            .with_inner_size(Vec2::new(1440.0, 900.0))
-            .with_min_inner_size(Vec2::new(1024.0, 680.0)),
+            .with_title("Quantum Morph Laboratory — PROJECT PRISM")
+            .with_inner_size(launch.window_size)
+            .with_min_inner_size(Vec2::new(1024.0, 680.0))
+            .with_icon(Arc::new(theme::generate_app_icon_data())),
         ..Default::default()
     };
 
+    let tab = launch.initial_tab;
+    let cap = launch.capture_png;
+    let auto_gen = launch.auto_genesis;
+    let auto_sc = launch.auto_scope;
     eframe::run_native(
         "Quantum Morph Laboratory",
         options,
-        Box::new(|cc| Ok(Box::new(QmlDesktopApp::new(cc)))),
+        Box::new(move |cc| {
+            Ok(Box::new(QmlDesktopApp::new(
+                cc, tab, cap, auto_gen, auto_sc,
+            )))
+        }),
     )
 }

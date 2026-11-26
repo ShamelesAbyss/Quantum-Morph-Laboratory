@@ -1204,6 +1204,17 @@ impl QmfArchiveV1 {
         source_path: Option<&std::path::Path>,
         budget: &QmfBudget,
     ) -> Result<(usize, String), QmfError> {
+        self.write_to_file_atomic_with_overwrite(output_path, source_path, budget, false)
+    }
+
+    /// Replace an existing artifact only when `overwrite` is explicitly authorized.
+    pub fn write_to_file_atomic_with_overwrite(
+        &self,
+        output_path: &std::path::Path,
+        source_path: Option<&std::path::Path>,
+        budget: &QmfBudget,
+        overwrite: bool,
+    ) -> Result<(usize, String), QmfError> {
         // 1. Protect source model files from accidental overwrite / path aliasing.
         if let Some(src) = source_path
             && paths_alias(src, output_path)
@@ -1235,19 +1246,10 @@ impl QmfArchiveV1 {
             std::fs::create_dir_all(parent)?;
         }
 
-        let tmp_name = format!(
-            "{}.qml-tmp-{}",
-            output_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("artifact"),
-            std::process::id()
-        );
-        let tmp_path = output_path.with_file_name(tmp_name);
-
+        qml_core::publication::validate_destination(output_path, source_path)?;
+        let mut temp = qml_core::publication::stage(output_path)?;
         let write_result = (|| -> Result<String, QmfError> {
-            let file = std::fs::File::create(&tmp_path)?;
-            let mut writer = std::io::BufWriter::new(file);
+            let mut writer = std::io::BufWriter::new(temp.as_file_mut());
 
             let mut header = [0_u8; QMF_V1_HEADER_BYTES];
             header[0..4].copy_from_slice(&QMF_MAGIC);
@@ -1281,23 +1283,9 @@ impl QmfArchiveV1 {
             Ok(sha.finalize_hex())
         })();
 
-        match write_result {
-            Ok(sha_hex) => {
-                // On Windows, `rename` may fail if destination already exists; remove after temp is fully synced.
-                if output_path.exists() {
-                    let _ = std::fs::remove_file(output_path);
-                }
-                if let Err(err) = std::fs::rename(&tmp_path, output_path) {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(QmfError::Io(err));
-                }
-                Ok((total, sha_hex))
-            }
-            Err(err) => {
-                let _ = std::fs::remove_file(&tmp_path);
-                Err(err)
-            }
-        }
+        let sha_hex = write_result?;
+        qml_core::publication::publish(temp, output_path, source_path, overwrite)?;
+        Ok((total, sha_hex))
     }
 
     /// Bounded read and full integrity verification of a QMF v1 stream using [`QmfBudget::default`].
@@ -2888,6 +2876,27 @@ mod tests {
             .write_to_file_atomic(&out_path, Some(&src_path), &QmfBudget::default())
             .unwrap();
         assert!(published_bytes > 0);
+        let original = std::fs::read(&out_path).unwrap();
+        assert!(
+            archive
+                .write_to_file_atomic(&out_path, Some(&src_path), &QmfBudget::default())
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&out_path).unwrap(), original);
+        assert!(
+            archive
+                .write_to_file_atomic_with_overwrite(
+                    &out_path,
+                    Some(&src_path),
+                    &QmfBudget {
+                        max_manifest_bytes: 0,
+                        max_file_bytes: 0
+                    },
+                    true
+                )
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&out_path).unwrap(), original);
 
         // File-backed reader loads operators and verifies CRC-32 + SHA-256 in streaming mode.
         let f = std::fs::File::open(&out_path).unwrap();

@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.6.0%20EVENT%20HORIZON%20III-A855F7?style=for-the-badge" alt="Latest Public Release v0.6.0"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.6.1%20PROJECT%20AEGIS-A855F7?style=for-the-badge" alt="Latest Public Release v0.6.1"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ShamelesAbyss/Quantum-Morph-Laboratory/ci.yml?branch=main&style=for-the-badge&label=Rust%20CI" alt="CI Status"/></a>
   <img src="https://img.shields.io/badge/Rust-1.100%2B%20(Safe%20Only)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge" alt="MIT License"/></a>
@@ -19,16 +19,16 @@
 
 ---
 
-## Download Quantum Morph Laboratory (`v0.6.0` — PROJECT EVENT HORIZON Wave III)
+## Download Quantum Morph Laboratory (`v0.6.1` — PROJECT AEGIS)
 
 Launch the native desktop scientific observatory directly on your computer — **no Rust toolchain, no Python, no terminal, and no cloud account required**.
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.6.0%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.6.1%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.6.0%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.6.1%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
   &nbsp;
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/View%20Latest%20Release-GitHub%20Releases-10B981?style=for-the-badge" alt="View Latest Release"/></a>
   &nbsp;
@@ -37,12 +37,18 @@ Launch the native desktop scientific observatory directly on your computer — *
 
 | Download Option | Contents | Direct Link |
 |---|---|---|
-| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe) |
-| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip) |
-| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz) |
+| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe) |
+| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip) |
+| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz) |
 | **Latest Public Release & Checksums** | Full release notes, `SHA256SUMS.txt`, and all release assets | [View Latest Release (`releases/latest`)](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest) |
 
 ---
+
+## PROJECT AEGIS — v0.6.1
+
+Safe artifact publication, strict required output projections, and provenance-checked calibration/reference caches. Existing QCAL1/QREF1 caches are unverified: keep them and regenerate using a new `--out-dir`. New cache envelopes are bounded to 512 MiB on disk and never overwrite an existing cache.
+
+The composite numerical fidelity score combines perplexity ratio and top-1 token agreement. It does not measure retained intelligence or benchmark capability. Historical measurements below are preserved.
 
 ## PROJECT PRISM — Native WGPU 3D Scientific Observatory
 
@@ -119,7 +125,7 @@ Launch the native desktop scientific observatory directly on your computer — *
 
 Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, **8 GB NVIDIA GeForce RTX 4070 Laptop GPU**) on **4-shard `Qwen/Qwen2.5-7B-Instruct` (`7.62B` params, `14.19 GiB` BF16 — nearly `2×` larger than the GPU's entire VRAM!)** using automatic **Layer-by-Layer Streaming BF16 Calibration (`444.5 MiB` peak VRAM, `196.8s`)**, **single-submission `GpuFull`** (`197/197` GPU ops, `0` CPU ops), and **GPU-resident INT8 KV-cache (`3.88×` smaller KV VRAM)** (see [`experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml`](experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml)):
 
-| `Qwen2.5-7B-Instruct` Profile | Exact Complete BPP | Disk MiB (vs `14,525 MiB` BF16) | VRAM MiB | `GpuFull` Tok/s | PPLx vs BF16 | Mean KL | Held-out Top-1 | Ret% | Status |
+| `Qwen2.5-7B-Instruct` Profile | Exact Complete BPP | Disk MiB (vs `14,525 MiB` BF16) | VRAM MiB | `GpuFull` Tok/s | PPLx vs BF16 | Mean KL | Held-out Top-1 | Numerical fidelity % | Status |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | **`INT4_Q4_0_GPTQ`** | 4.501 | 4,086.5 *(3.55×)* | 3,795.1 | 6.8 | **0.98×** | **0.077** | **90.9%** | **95.4%** | **OK** |
 | **`INT3_HADAMARD_GPTQ`** | **3.251** | **2,951.8** *(4.92×)* | **2,741.5** | 6.8 | **1.07×** | **0.164** | **86.3%** | **89.7%** | **OK** |

@@ -181,120 +181,111 @@ impl ModelCalibrationProfile {
             .sum()
     }
 
-    /// Persist this calibration profile to a compact little-endian binary file (`QCAL1\0`),
-    /// storing Hessian blocks in `f32` for fast `< 0.5s` save/load even on 7B–32B models.
-    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        use std::io::{BufWriter, Write};
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut w = BufWriter::new(std::fs::File::create(path)?);
-        w.write_all(b"QCAL1\0")?;
-        let id_bytes = self.model_id.as_bytes();
-        w.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
-        w.write_all(id_bytes)?;
-        w.write_all(&(self.calibration_tokens as u64).to_le_bytes())?;
-        w.write_all(&(self.block_size as u32).to_le_bytes())?;
-        w.write_all(&(self.layers.len() as u32).to_le_bytes())?;
-        for (name, stats) in &self.layers {
-            let nb = name.as_bytes();
-            w.write_all(&(nb.len() as u32).to_le_bytes())?;
-            w.write_all(nb)?;
-            w.write_all(&(stats.cols as u32).to_le_bytes())?;
-            w.write_all(&(stats.block_size as u32).to_le_bytes())?;
-            w.write_all(&(stats.samples as u64).to_le_bytes())?;
-            w.write_all(&(stats.input_rms.len() as u32).to_le_bytes())?;
-            for &v in &stats.input_rms {
-                w.write_all(&(v as f32).to_le_bytes())?;
-            }
-            w.write_all(&(stats.hessian_blocks.len() as u32).to_le_bytes())?;
-            for blk in &stats.hessian_blocks {
-                w.write_all(&(blk.len() as u32).to_le_bytes())?;
-                for &v in blk {
-                    w.write_all(&(v as f32).to_le_bytes())?;
+    /// Legacy caches lack provenance and must be regenerated without overwriting them.
+    pub fn save_to_file(&self, _path: &std::path::Path) -> std::io::Result<()> {
+        Err(qml_core::cache::invalid(
+            "cache provenance required; use save_verified",
+        ))
+    }
+    pub fn load_from_file(_path: &std::path::Path) -> std::io::Result<Self> {
+        Err(qml_core::cache::invalid(
+            "unverified QCAL1 cache; regenerate in a new directory",
+        ))
+    }
+    pub fn save_verified(&self, path: &std::path::Path, identity: &str) -> std::io::Result<()> {
+        use qml_core::cache::{invalid, length, string, values};
+        use std::io::Write;
+        self.validate_cache()?;
+        qml_core::cache::write(path, identity, |w| {
+            w.write_all(b"QCAL2\0")?;
+            string(w, &self.model_id)?;
+            w.write_all(&(self.calibration_tokens as u64).to_le_bytes())?;
+            length(w, self.block_size)?;
+            length(w, self.layers.len())?;
+            for (name, s) in &self.layers {
+                if name != &s.tensor_name {
+                    return Err(invalid("tensor name mismatch"));
+                }
+                string(w, name)?;
+                length(w, s.cols)?;
+                length(w, s.block_size)?;
+                w.write_all(&(s.samples as u64).to_le_bytes())?;
+                values(w, &s.input_rms)?;
+                length(w, s.hessian_blocks.len())?;
+                for b in &s.hessian_blocks {
+                    values(w, b)?;
                 }
             }
-        }
-        w.flush()
+            Ok(())
+        })
     }
-
-    /// Load a previously saved calibration profile (`QCAL1\0`) from disk.
-    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        use std::io::{BufReader, Read};
-        let mut r = BufReader::new(std::fs::File::open(path)?);
-        let mut magic = [0u8; 6];
-        r.read_exact(&mut magic)?;
-        if &magic != b"QCAL1\0" {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid QCAL1 calibration cache magic",
-            ));
+    pub fn load_verified(path: &std::path::Path, identity: &str) -> std::io::Result<Self> {
+        use qml_core::cache::invalid;
+        let mut r = qml_core::cache::read(path, identity)?;
+        if r.bytes(6)? != b"QCAL2\0" {
+            return Err(invalid("invalid calibration cache"));
         }
-        let read_u32 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u32> {
-            let mut b = [0u8; 4];
-            r.read_exact(&mut b)?;
-            Ok(u32::from_le_bytes(b))
-        };
-        let read_u64 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u64> {
-            let mut b = [0u8; 8];
-            r.read_exact(&mut b)?;
-            Ok(u64::from_le_bytes(b))
-        };
-        let read_f32_vec =
-            |r: &mut BufReader<std::fs::File>, n: usize| -> std::io::Result<Vec<f64>> {
-                let mut raw = vec![0u8; n * 4];
-                r.read_exact(&mut raw)?;
-                Ok(raw
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|&c| f64::from(f32::from_le_bytes(c)))
-                    .collect())
-            };
-        let id_len = read_u32(&mut r)? as usize;
-        let mut id_buf = vec![0u8; id_len];
-        r.read_exact(&mut id_buf)?;
-        let model_id = String::from_utf8(id_buf)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let calibration_tokens = read_u64(&mut r)? as usize;
-        let block_size = read_u32(&mut r)? as usize;
-        let num_layers = read_u32(&mut r)? as usize;
+        let model_id = r.string()?;
+        let calibration_tokens = r.count()?;
+        let block_size = r.len(4096)?;
+        let count = r.len(100_000)?;
         let mut layers = BTreeMap::new();
-        for _ in 0..num_layers {
-            let nlen = read_u32(&mut r)? as usize;
-            let mut nbuf = vec![0u8; nlen];
-            r.read_exact(&mut nbuf)?;
-            let name = String::from_utf8(nbuf)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let cols = read_u32(&mut r)? as usize;
-            let bs = read_u32(&mut r)? as usize;
-            let samples = read_u64(&mut r)? as usize;
-            let rms_len = read_u32(&mut r)? as usize;
-            let input_rms = read_f32_vec(&mut r, rms_len)?;
-            let n_blks = read_u32(&mut r)? as usize;
-            let mut hessian_blocks = Vec::with_capacity(n_blks);
-            for _ in 0..n_blks {
-                let blen = read_u32(&mut r)? as usize;
-                hessian_blocks.push(read_f32_vec(&mut r, blen)?);
+        for _ in 0..count {
+            let name = r.string()?;
+            let cols = r.len(1_048_576)?;
+            let bs = r.len(4096)?;
+            let samples = r.count()?;
+            let input_rms = r.values()?;
+            let count = r.len(1_048_576)?;
+            let mut hessian_blocks = Vec::new();
+            for _ in 0..count {
+                hessian_blocks.push(r.values()?);
             }
-            layers.insert(
-                name.clone(),
-                LayerCalibrationStats {
-                    tensor_name: name,
-                    cols,
-                    block_size: bs,
-                    samples,
-                    input_rms,
-                    hessian_blocks,
-                },
-            );
+            let s = LayerCalibrationStats {
+                tensor_name: name.clone(),
+                cols,
+                block_size: bs,
+                samples,
+                input_rms,
+                hessian_blocks,
+            };
+            if layers.insert(name, s).is_some() {
+                return Err(invalid("duplicate calibration tensor"));
+            }
         }
-        Ok(Self {
+        r.finish()?;
+        let result = Self {
             model_id,
             calibration_tokens,
             block_size,
             layers,
-        })
+        };
+        result.validate_cache()?;
+        Ok(result)
+    }
+    fn validate_cache(&self) -> std::io::Result<()> {
+        use qml_core::cache::invalid;
+        if self.block_size == 0 || self.block_size > 4096 {
+            return Err(invalid("invalid block size"));
+        }
+        for s in self.layers.values() {
+            if s.cols == 0
+                || s.block_size != self.block_size
+                || s.samples == 0
+                || s.input_rms.len() != s.cols
+                || s.hessian_blocks.len() != s.cols.div_ceil(s.block_size)
+                || s.input_rms.iter().any(|x| !x.is_finite() || *x < 0.0)
+            {
+                return Err(invalid("invalid calibration dimensions or values"));
+            }
+            for (i, b) in s.hessian_blocks.iter().enumerate() {
+                let n = (s.cols - i * s.block_size).min(s.block_size);
+                if n.checked_mul(n) != Some(b.len()) || b.iter().any(|x| !x.is_finite()) {
+                    return Err(invalid("invalid Hessian block"));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1666,5 +1657,37 @@ mod tests {
             err_e_cal < err_e_wo,
             "Calibrated ECHO ({err_e_cal:.5}) should beat unweighted ECHO ({err_e_wo:.5})"
         );
+    }
+}
+
+#[cfg(test)]
+mod aegis_calibration_tests {
+    use super::*;
+    #[test]
+    fn verified_calibration_roundtrip_and_invalid_dimensions() {
+        let temp = qml_core::publication::stage(std::path::Path::new("test-cache")).unwrap();
+        let path = temp.path().to_owned();
+        drop(temp);
+        let stats = LayerCalibrationStats::from_samples("w", &[vec![1.0, 2.0, 3.0]], 2).unwrap();
+        let mut p = ModelCalibrationProfile {
+            model_id: "synthetic".into(),
+            calibration_tokens: 1,
+            block_size: 2,
+            layers: BTreeMap::from([("w".into(), stats)]),
+        };
+        let id = qml_core::sha256_hex(b"identity");
+        p.save_verified(&path, &id).unwrap();
+        assert_eq!(
+            p,
+            ModelCalibrationProfile::load_verified(&path, &id).unwrap()
+        );
+        assert!(ModelCalibrationProfile::load_from_file(&path).is_err());
+        assert!(
+            ModelCalibrationProfile::load_verified(&path, &qml_core::sha256_hex(b"changed data"))
+                .is_err()
+        );
+        p.layers.get_mut("w").unwrap().hessian_blocks[0].pop();
+        assert!(p.validate_cache().is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }

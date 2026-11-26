@@ -818,10 +818,9 @@ impl QCoreModel {
         let lm_head = if config.tie_word_embeddings {
             Arc::clone(&embed_op)
         } else {
-            match reader.load_operator_cached("lm_head.weight", &mut latent_cache) {
-                Ok(op) => Arc::new(wrap_op(op)),
-                Err(_) => Arc::clone(&embed_op),
-            }
+            Arc::new(wrap_op(
+                reader.load_operator_cached("lm_head.weight", &mut latent_cache)?,
+            ))
         };
 
         let gpu_full = if backend == QCoreBackend::GpuFull {
@@ -968,10 +967,7 @@ impl QCoreModel {
         let lm_head = if config.tie_word_embeddings {
             Arc::clone(&embed_op)
         } else {
-            match load_op("lm_head.weight", &mut latent_cache) {
-                Ok(op) => Arc::new(wrap_op(op)),
-                Err(_) => Arc::clone(&embed_op),
-            }
+            Arc::new(wrap_op(load_op("lm_head.weight", &mut latent_cache)?))
         };
 
         let gpu_full = if backend == QCoreBackend::GpuFull {
@@ -2093,5 +2089,140 @@ mod tests {
             max_stream_diff < 5e-2,
             "Streaming BF16 evaluator diverged from full BF16 QCoreModel: max_diff={max_stream_diff:.6}"
         );
+    }
+}
+
+#[cfg(test)]
+mod aegis_projection_tests {
+    use super::*;
+    use std::io::Cursor;
+    #[test]
+    fn untied_missing_projection_errors_in_memory_reader_and_streaming() {
+        let cfg = TransformerConfig {
+            vocab_size: 8,
+            hidden_size: 8,
+            intermediate_size: 16,
+            num_layers: 1,
+            num_heads: 2,
+            num_kv_heads: 2,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10000.0,
+            max_seq_len: 8,
+            tie_word_embeddings: false,
+        };
+        let mut bytes = generate_synthetic_llama_safetensors(&cfg, 2, 7).unwrap();
+        let pos = bytes
+            .windows(b"lm_head.weight".len())
+            .position(|b| b == b"lm_head.weight")
+            .unwrap();
+        bytes[pos..pos + 14].copy_from_slice(b"no_head.weight");
+        let (archive, _) = qml_forge::forge_safetensors_to_qmf(
+            Cursor::new(&bytes),
+            "test",
+            "synthetic",
+            "llama",
+            &qml_forge::TransformStrategy::Bf16,
+            &qml_model::PayloadBudget::default(),
+            42,
+        )
+        .unwrap();
+        assert!(QCoreModel::from_qmf(&archive, cfg.clone()).is_err());
+        let mut encoded = Vec::new();
+        archive.write_to(&mut encoded).unwrap();
+        let mut reader =
+            QmfFileReader::open(Cursor::new(encoded), &qml_format::v1::QmfBudget::default())
+                .unwrap();
+        assert!(QCoreModel::from_qmf_reader(&mut reader, cfg.clone()).is_err());
+        // Corrupt just the head blob; lazy loading must propagate its CRC error.
+        let valid_bytes = generate_synthetic_llama_safetensors(&cfg, 2, 7).unwrap();
+        let (valid, _) = qml_forge::forge_safetensors_to_qmf(
+            Cursor::new(&valid_bytes),
+            "test",
+            "synthetic",
+            "llama",
+            &qml_forge::TransformStrategy::Bf16,
+            &qml_model::PayloadBudget::default(),
+            42,
+        )
+        .unwrap();
+        let mut encoded = Vec::new();
+        valid.write_to(&mut encoded).unwrap();
+        let manifest_len = u64::from_le_bytes(encoded[8..16].try_into().unwrap()) as usize;
+        let head = valid
+            .manifest()
+            .tensors
+            .iter()
+            .find(|t| t.name == "lm_head.weight")
+            .unwrap();
+        if let qml_format::v1::QmfRepresentation::DenseBf16 { data } = &head.representation {
+            encoded[32 + manifest_len + data.offset as usize] ^= 1;
+        } else {
+            panic!("expected BF16 head");
+        }
+        let mut bad_reader =
+            QmfFileReader::open(Cursor::new(encoded), &qml_format::v1::QmfBudget::default())
+                .unwrap();
+        assert!(QCoreModel::from_qmf_reader(&mut bad_reader, cfg.clone()).is_err());
+        let mut tied = cfg.clone();
+        tied.tie_word_embeddings = true;
+        assert!(QCoreModel::from_qmf(&archive, tied).is_ok());
+        let temp = qml_core::publication::stage(std::path::Path::new("test-model")).unwrap();
+        std::fs::write(temp.path(), bytes).unwrap();
+        let err = stream_calibrate_and_reference(
+            temp.path(),
+            "test",
+            &cfg,
+            &[],
+            &[vec![0, 1]],
+            2,
+            false,
+            &qml_model::PayloadBudget::default(),
+            |_, _, _| {},
+        )
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("lm_head.weight"));
+    }
+
+    #[test]
+    fn streaming_rejects_nonfinite_output_projection() {
+        let cfg = TransformerConfig {
+            vocab_size: 8,
+            hidden_size: 8,
+            intermediate_size: 16,
+            num_layers: 1,
+            num_heads: 2,
+            num_kv_heads: 2,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10000.0,
+            max_seq_len: 8,
+            tie_word_embeddings: false,
+        };
+        let mut bytes = generate_synthetic_llama_safetensors(&cfg, 2, 7).unwrap();
+        let header_len = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        let header: serde_json::Value = serde_json::from_slice(&bytes[8..8 + header_len]).unwrap();
+        assert_eq!(header["lm_head.weight"]["dtype"], "F32");
+        let offset = header["lm_head.weight"]["data_offsets"][0]
+            .as_u64()
+            .unwrap() as usize;
+        let start = 8 + header_len + offset;
+        bytes[start..start + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let temp =
+            qml_core::publication::stage(std::path::Path::new("test-nonfinite-model")).unwrap();
+        std::fs::write(temp.path(), bytes).unwrap();
+        let error = stream_calibrate_and_reference(
+            temp.path(),
+            "test",
+            &cfg,
+            &[],
+            &[vec![0, 1]],
+            2,
+            false,
+            &qml_model::PayloadBudget::default(),
+            |_, _, _| {},
+        )
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("non-finite"));
     }
 }

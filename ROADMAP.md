@@ -15,6 +15,10 @@ Status key: **Done** means implemented, tested, and verified on `main`; **Experi
   - **10th Persistent GPU WGSL Kernel (`MATVEC_VQ_WGSL`) & `fit_vq_calibrated`:** Direct GPU execution for all 10 compressed formats (`< 1e-4` CPU/GPU parity) + honest uncompensated RVQ negative control (`exp-006`).
   - **Stage D `Qwen2.5-7B-Instruct` (`7.62B`, `14.19 GiB` BF16) Live 8 GB GPU Breakthrough (`exp-006`):** `INT4` (`PPLx 0.98×`, `90.9%` Top-1, `3.71 GiB`), `INT3` (`PPLx 1.07×`, `86.3%` Top-1, `2.68 GiB`), **`INT2` (`2.251 bpp`, `PPLx 1.43×`, `65.7%` Top-1, `1.85 GiB` VRAM, `9.7 tok/s`)**, and **`QMR-200_GPTQ` (`2.000` exact complete bpp, `PPLx 2.13×`, `52.6%` Top-1, `1.63 GiB` VRAM — `8.00×` smaller than BF16, `9.1 tok/s`, breaking the 2.000 bpp barrier!)**.
 
+## PROJECT AEGIS (v0.6.1)
+
+Scoped artifact publication, required output projection correctness, bounded provenance-checked caches and accurate numerical fidelity terminology. Later milestones require separate authorization; no Wave IV work is included.
+
 ## Next Milestones (PROJECT EVENT HORIZON Wave IV & Beyond)
 
 - **Next — Stage E (`14B`) & Stage F (`27B–32B`) on 8 GB Consumer GPUs:** Add sampled-row fast `MAP-B` Pass 1 screening (10× faster on `7B–32B`), resumable layer-checkpointed disk streaming in Q-Forge, and benchmark `14B` (`~3.4–4.2 GiB` at `2.00–2.25 bpp`) and `27B–32B` (`~6.8–7.6 GiB` at `1.75–2.00 bpp`) live on an 8 GB RTX 4070!

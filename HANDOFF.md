@@ -1,5 +1,31 @@
 # Handoff
 
+## PROJECT AEGIS — v0.6.1 (local validation complete; CI/release pending)
+
+- Scope: artifact publication, required untied output projections, calibration/reference cache safety, terminology and release only. Do not start Wave IV or any subsequent milestone without authorization.
+- Work performed on `main` in the Codex workspace; no downloaded models or new live-model experiments. The original v0.6.0 checkout was clean.
+- `qml-core::publication` uses `tempfile` exclusive randomized sibling staging, `same-file` filesystem identities, destination symbolic-link rejection, and explicit overwrite authorization. Default publication is no-clobber. Authorized persistence never deletes the destination first; failures preserve prior bytes. Q-Forge checks every backing shard against the destination.
+- `qml-format` exposes `write_to_file_atomic_with_overwrite`; its existing API defaults to refusing replacement. File-size and manifest validation remain in force. Original weights remain read-only.
+- `qml-runtime` propagates required `lm_head.weight` loading errors in memory and lazy file-backed loading. Streaming uses embedding weights only for explicitly tied models and checks projection dimensions and finite BF16 values.
+- `qml-core::cache` supplies versioned SHA-256 envelopes and bounded binary access. QCAL2/QREF2 validate dimensions, counts, checked byte lengths, finite f32/f64 values, duplicate calibration tensors, exact reference sequence/vocabulary dimensions and trailing bytes. Disk cache size is limited to 512 MiB.
+- CLI cache identity hashes all backing weights, config, tokenizer, optional reference QMF, calibration/evaluation tokens, backend and reference/calibration modes. QREF2 additionally binds labels/categories/tokens. Existing QCAL1/QREF1 caches are unverified and rejected without modification: regenerate with a new output directory. New cache publication refuses overwrite and reports errors.
+- Composite score renamed to `composite_numerical_fidelity_pct`; historical JSON's old field name remains a deserialization alias. Formula and measurements are preserved. README/CLI/release notes explain that it does not establish retained intelligence or benchmark capability.
+- Updated workspace version, lockfile, README download links, release notes, architecture, roadmap and changelog. MIT license, history, Prism renderer and permanent memorial dedication are preserved.
+- Added regression tests for failed/no-clobber publication, hard links, distinct staging names, authorized replacement, Unix symbolic/dangling links, required projection failures in all three execution paths, corrupted lazy output tensors, non-finite streaming projections, cache round trips, provenance/dataset mismatches, oversized lengths, non-finite values and malformed dimensions. Existing tests were retained.
+
+### Validation state
+
+- Rust 1.100.0 selected with a directory-local rustup override; cargo-deny 0.21.0.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed on final v0.6.1 source.
+- `cargo test --workspace`: all 95 tests passed on Windows, zero failed/ignored; all doc-tests passed. This includes the final projection/cache/publication regressions and existing desktop/GPU parity tests. Unix-only symbolic-link coverage will run in Linux CI.
+- `cargo deny check`: passed on v0.6.1 (`advisories ok, bans ok, licenses ok, sources ok`); existing duplicate-version warnings remain allowed by the unchanged policy.
+- `cargo build --workspace --release`: passed (optimized workspace build, 5m 05s). Release CLI smoke check pending below. All five requested commands passed locally. Windows/Linux CI, tag and public release verification remain pending.
+
+### Limits and remaining work
+
+Cache checksums detect corruption rather than authenticate a malicious producer. Hashing source provenance reads every backing weight byte once. Decoded f64 values and collection overhead require additional bounded RAM beyond the 512 MiB file ceiling. Path-based publication assumes output ancestors are user-controlled, not concurrently replaced by a hostile process. No claim of new live-model benchmark validation is made. Baseline commit: `1631b824ce9daa8f256d46c45497f1e804442dd8`. Next: push this validated milestone, verify Windows/Linux CI, publish all four mandatory assets as a latest public non-prerelease, verify download hashes, update this handoff and stop.
+
 ## Current state
 
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>

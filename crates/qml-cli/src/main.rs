@@ -2052,7 +2052,7 @@ struct ResonanceLadderRow {
     mean_logit_kl: f64,
     top1_agreement: f64,
     final_layer_cosine: f64,
-    composite_retention_pct: f64,
+    composite_numerical_fidelity_pct: f64,
     catastrophic_failure: bool,
     sample_output: String,
 }
@@ -2351,7 +2351,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                 mean_logit_kl: suite.overall_mean_kl,
                 top1_agreement: suite.overall_top1_agreement,
                 final_layer_cosine: suite.overall_final_cosine,
-                composite_retention_pct: suite.composite_retention_pct,
+                composite_numerical_fidelity_pct: suite.composite_numerical_fidelity_pct,
                 catastrophic_failure: suite.catastrophic_failure,
                 sample_output: String::new(),
             });
@@ -2457,6 +2457,42 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
     let use_streaming_ref =
         streaming_ref || (ref_qmf_path.is_none() && source_bytes > 6_500_000_000);
 
+    // Bind every weight byte, configuration, tokenizer, datasets and execution mode.
+    let cache_identity = (|| -> std::io::Result<String> {
+        let source =
+            qml_model::SafetensorsSource::open(&model_p, &budget).map_err(std::io::Error::other)?;
+        let mut sha = qml_core::Sha256::new();
+        sha.update(b"AEGIS-cache-v2-f32-hessian64");
+        let mut files = source.source_paths();
+        files.push(cfg_p.clone());
+        files.push(tok_p.clone());
+        if let Some(path) = &ref_qmf_path {
+            files.push(path.clone());
+        }
+        for path in files {
+            let digest = qml_core::sha256_reader(File::open(path)?)?;
+            sha.update(digest.as_bytes());
+        }
+        sha.update(format!("{backend:?}:{use_streaming_ref}:{calibrate}").as_bytes());
+        for seqs in [&cal_seqs, &eval_seqs] {
+            sha.update(&(seqs.len() as u64).to_le_bytes());
+            for seq in seqs {
+                sha.update(&(seq.len() as u64).to_le_bytes());
+                for &t in seq {
+                    sha.update(&(t as u64).to_le_bytes());
+                }
+            }
+        }
+        Ok(sha.finalize_hex())
+    })();
+    let cache_identity = match cache_identity {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("cache identity failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let ref_cache_file = work_dir.join("_ref_logits.qref");
     let cal_cache_file = work_dir.join("_cal_profile.qcal");
 
@@ -2475,9 +2511,10 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                 }
             );
         }
-        let rcache = match qml_behavior::ReferenceSuiteCache::load_from_file(
+        let rcache = match qml_behavior::ReferenceSuiteCache::load_verified(
             &ref_cache_file,
             examples.clone(),
+            &cache_identity,
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -2486,7 +2523,10 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             }
         };
         let cal = if calibrate {
-            match qml_quant::ModelCalibrationProfile::load_from_file(&cal_cache_file) {
+            match qml_quant::ModelCalibrationProfile::load_verified(
+                &cal_cache_file,
+                &cache_identity,
+            ) {
                 Ok(p) => Some(p),
                 Err(e) => {
                     eprintln!("failed loading cached calibration profile: {e}");
@@ -2545,9 +2585,15 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             streamed.eval_logits,
         );
         if out_dir.is_some() {
-            let _ = rcache.save_to_file(&ref_cache_file);
-            if calibrate {
-                let _ = streamed.calibration.save_to_file(&cal_cache_file);
+            if let Err(e) = rcache.save_verified(&ref_cache_file, &cache_identity) {
+                eprintln!("reference cache not published: {e}");
+            }
+            if calibrate
+                && let Err(e) = streamed
+                    .calibration
+                    .save_verified(&cal_cache_file, &cache_identity)
+            {
+                eprintln!("calibration cache not published: {e}");
             }
         }
         (
@@ -2636,8 +2682,10 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                             t_cal.elapsed().as_secs_f64()
                         );
                     }
-                    if out_dir.is_some() {
-                        let _ = p.save_to_file(&cal_cache_file);
+                    if out_dir.is_some()
+                        && let Err(e) = p.save_verified(&cal_cache_file, &cache_identity)
+                    {
+                        eprintln!("calibration cache not published: {e}");
                     }
                     Some(p)
                 }
@@ -2649,8 +2697,10 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         } else {
             None
         };
-        if out_dir.is_some() {
-            let _ = rcache.save_to_file(&ref_cache_file);
+        if out_dir.is_some()
+            && let Err(e) = rcache.save_verified(&ref_cache_file, &cache_identity)
+        {
+            eprintln!("reference cache not published: {e}");
         }
         // `ref_model` drops right here, freeing 100% of VRAM before candidate runs!
         (rcache, cal)
@@ -2742,7 +2792,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             mean_logit_kl: suite.overall_mean_kl,
             top1_agreement: suite.overall_top1_agreement,
             final_layer_cosine: suite.overall_final_cosine,
-            composite_retention_pct: suite.composite_retention_pct,
+            composite_numerical_fidelity_pct: suite.composite_numerical_fidelity_pct,
             catastrophic_failure: suite.catastrophic_failure,
             sample_output: sample_text,
         };
@@ -2751,14 +2801,14 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         }
         if !json {
             eprintln!(
-                "  [done] {:<20} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Ret={:>5.1}% | {:>5.1} tok/s | {:?}",
+                "  [done] {:<20} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Fidelity={:>5.1}% | {:>5.1} tok/s | {:?}",
                 row.label,
                 row.complete_qmf_bpp,
                 row.vram_weight_mib,
                 row.mean_logit_kl,
                 row.perplexity_ratio,
                 row.top1_agreement * 100.0,
-                row.composite_retention_pct,
+                row.composite_numerical_fidelity_pct,
                 row.eval_tok_per_sec,
                 row.sample_output
             );
@@ -2786,7 +2836,7 @@ fn print_resonance_ladder_table(rows: &[ResonanceLadderRow]) {
         "MeanKL",
         "Top-1",
         "Cos",
-        "Ret%",
+        "Fid%",
         "Status"
     );
     for r in rows {
@@ -2800,7 +2850,7 @@ fn print_resonance_ladder_table(rows: &[ResonanceLadderRow]) {
             r.mean_logit_kl,
             r.top1_agreement * 100.0,
             r.final_layer_cosine,
-            r.composite_retention_pct,
+            r.composite_numerical_fidelity_pct,
             if r.catastrophic_failure {
                 "CLIFF"
             } else {

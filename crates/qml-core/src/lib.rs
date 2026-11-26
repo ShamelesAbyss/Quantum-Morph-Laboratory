@@ -4,6 +4,8 @@
 //! rank-one pivot approximation here is a simple baseline, not an optimal
 //! truncated-SVD approximation.
 
+pub mod cache;
+pub mod publication;
 pub mod rng;
 pub mod sha256;
 pub mod svd;

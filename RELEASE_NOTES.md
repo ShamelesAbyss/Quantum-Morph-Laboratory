@@ -1,3 +1,31 @@
+# v0.6.1 | PROJECT AEGIS
+
+PROJECT AEGIS is a scoped correctness and artifact-safety release. QML remains experimental research software. Project Prism's graphical renderer, mathematical algorithms, supported Llama/Qwen2 architectures and CPU/GpuHybrid/GpuFull backends are preserved.
+
+## Corrections
+
+- Artifact publication exclusively creates randomized sibling staging files. Existing destinations require explicit overwrite authorization through `write_to_file_atomic_with_overwrite`; default Q-Forge refuses replacement. Authorized replacement uses platform atomic persistence without first deleting the old destination. Filesystem identity checks reject source hard-link aliases; destination symbolic links are rejected. Failed publication preserves existing artifacts.
+- Untied `lm_head.weight` is mandatory in memory, lazy QMF loading and streaming BF16 execution. Loading errors propagate instead of substituting embedding weights. Streaming output projections validate dimensions and finite BF16 values. Explicitly tied models still reuse embeddings.
+- QCAL2/QREF2 payloads use a versioned SHA-256 cache envelope with a 512 MiB file ceiling, checked lengths, bounded strings/counts/vectors, exact dimensions, finite values, duplicate-name rejection and trailing-data rejection.
+- CLI provenance hashes all backing weight files, configuration, tokenizer, optional reference QMF, calibration/evaluation tokens, backend and reference/calibration modes. Reference caches also bind example labels and categories. Publication uses no-clobber staging and reports failures.
+- Existing QCAL1/QREF1 files are preserved, marked unverified and rejected. Regenerate into a new output directory. Provenance-free legacy cache loading and saving APIs return explicit errors.
+- The score is now `composite_numerical_fidelity_pct`: `100 × (0.5 × min(reference perplexity / candidate perplexity, 1) + 0.5 × top-1 agreement)`. It measures numerical fidelity, not retained intelligence or benchmark capability. Historical numerical results remain unchanged.
+
+## Downloads
+
+- [Standalone Windows EXE](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe)
+- [Windows portable ZIP](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip)
+- [Linux x64 archive](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz)
+- [SHA256SUMS.txt](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/SHA256SUMS.txt)
+
+## Validation and limitations
+
+Regression coverage includes failed/no-clobber publication, authorized replacement, hard-link aliases, distinct staging files, Unix symbolic links, missing untied projections in all three paths, corrupted lazy head payloads, cache round trips, provenance/dataset mismatches, malformed lengths, non-finite values and invalid dimensions. HANDOFF.md records actual checks and release verification.
+
+Checksums detect corruption; they do not authenticate a malicious producer. Cache identity verification reads every backing weight byte once. Maximum cache decoding requires additional bounded memory for f64 values and collection overhead. Path-based publication assumes a user-controlled output directory; hostile concurrent replacement of ancestor directories is outside its guarantees. No additional models were downloaded, no new live-model measurements were performed and no subsequent milestone was started. MIT licensing and the permanent memorial dedication are preserved.
+
+## Historical release notes (measurements preserved)
+
 # Quantum Morph Laboratory v0.6.0 | PROJECT EVENT HORIZON Wave III
 
 > *Don't just compress intelligence. Transform its representation.*
@@ -76,7 +104,7 @@
 ### 4. Verified Stage D `Qwen2.5-7B-Instruct` Results (`exp-006` on 8 GB RTX 4070 — Breaking `2.000 bpp`!)
 Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, 8 GB NVIDIA GeForce RTX 4070 Laptop GPU, 4-shard `14.19 GiB` BF16 `Qwen/Qwen2.5-7B-Instruct`, `197/197` GPU ops, `0` CPU ops, GPU INT8 KV-cache; archived in [`experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/blob/v0.6.0/experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml)):
 
-| Profile | Exact BPP | Disk MiB (vs `14,525 MiB` BF16) | VRAM MiB | `GpuFull` Tok/s | PPLx | Mean KL | Top-1 | Ret% | Status |
+| Profile | Exact BPP | Disk MiB (vs `14,525 MiB` BF16) | VRAM MiB | `GpuFull` Tok/s | PPLx | Mean KL | Top-1 | Numerical fidelity % | Status |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | **`INT4_Q4_0_GPTQ`** | `4.501` | `4,086.5` (`3.55×`) | `3,795.1` | `6.8` | **`0.98×`** | **`0.077`** | **`90.9%`** | **`95.4%`** | **`OK`** |
 | **`INT3_HADAMARD_GPTQ`** | **`3.251`** | **`2,951.8` (`4.92×`)** | **`2,741.5`** | `6.8` | **`1.07×`** | **`0.164`** | **`86.3%`** | **`89.7%`** | **`OK`** |

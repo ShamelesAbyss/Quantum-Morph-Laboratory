@@ -409,13 +409,7 @@ where
         })
         .collect();
 
-    let lm_name = if config.tie_word_embeddings
-        || source
-            .metadata()
-            .tensors
-            .binary_search_by(|t| t.name.as_str().cmp("lm_head.weight"))
-            .is_err()
-    {
+    let lm_name = if config.tie_word_embeddings {
         "model.embed_tokens.weight"
     } else {
         "lm_head.weight"
@@ -424,6 +418,14 @@ where
     let (lm_rows, lm_cols, lm_bits) = source
         .read_tensor_bf16_bits(lm_name, budget)
         .map_err(|e| RuntimeError::InvalidConfig(format!("failed reading {lm_name}: {e}")))?;
+    if lm_rows != config.vocab_size
+        || lm_cols != config.hidden_size
+        || lm_bits.iter().any(|bits| bits & 0x7f80 == 0x7f80)
+    {
+        return Err(RuntimeError::InvalidConfig(format!(
+            "invalid dimensions or non-finite values in {lm_name}"
+        )));
+    }
 
     let mut eval_logits: Vec<Vec<Vec<f64>>> = eval_normed
         .iter()

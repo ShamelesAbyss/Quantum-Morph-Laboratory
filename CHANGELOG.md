@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.1 — PROJECT AEGIS
+
+Safe no-clobber/authorized artifact publication; strict untied output projections; bounded, checksummed and provenance-verified caches; composite numerical fidelity terminology. Legacy caches are preserved and require regeneration. See RELEASE_NOTES.md and HANDOFF.md.
+
+
+
 ## `v0.6.0` — PROJECT EVENT HORIZON Wave III (2026-11-26)
 
 - **Layer-by-Layer Streaming BF16 Calibration & Exact Reference Evaluator (`qml-runtime::streaming`, `qml-model::payload`):**

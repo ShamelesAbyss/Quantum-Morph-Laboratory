@@ -6,6 +6,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+same-file = "1"
+tempfile = "3"
 
 [lints]
 workspace = true

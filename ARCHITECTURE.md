@@ -31,6 +31,10 @@ Every crate enforces `#![forbid(unsafe_code)]` via workspace lints. Zero Python 
 6. **Mechanistic Interpretability & Capability Retention (`qml-behavior`):** Captures layerwise cosine/L2/RSA traces, executes reversible causal interventions, and evaluates compressed models against disk-cached `ReferenceSuiteCache` (`QREF1`) logits with zero reference VRAM contention.
 7. **Evolutionary Discovery & PROJECT PRISM 3D Observatory (`qml-genesis` + `qml-desktop`):** Multi-objective NSGA-II representation discovery paired with the multi-pass WGPU 3D observatory (`Rgba16Float` HDR selective bloom, 3D ray picking, Consumer VRAM Fit Matrix).
 
+## PROJECT AEGIS cache and publication contracts
+
+QMF publication defaults to no replacement. Explicit authorized replacement uses safe sibling staging without destination deletion. Filesystem identities protect source aliases. QCAL2/QREF2 inside QMLCACHE2 envelopes bind CLI source/config/tokenizer/dataset identities and SHA-256 integrity. Legacy QCAL1/QREF1 files are unverified and require regeneration into a new output directory. The cache file budget is 512 MiB; decoded f64 payloads and collection overhead require additional bounded memory. Composite numerical fidelity is a perplexity/agreement score, not intelligence or benchmark capability.
+
 ## Safety and Resource Constraints
 
 - `unsafe` is forbidden at workspace level (`Cargo.toml`).

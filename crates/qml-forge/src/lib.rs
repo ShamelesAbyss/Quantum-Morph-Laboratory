@@ -493,6 +493,10 @@ pub fn forge_path_to_file_atomic(
     control: &ForgeControl,
 ) -> Result<ForgeReport, ForgeError> {
     let mut source = SafetensorsSource::open(source_path, budget)?;
+    for path in source.source_paths() {
+        qml_core::publication::validate_destination(output_path, Some(&path))
+            .map_err(|e| ForgeError::Message(e.to_string()))?;
+    }
     let (archive, mut report) = forge_source_internal(
         &mut source,
         model_id,

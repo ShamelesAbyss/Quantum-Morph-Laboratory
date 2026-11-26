@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+qml-core = { version = "0.6.0", path = "../qml-core" }
 qml-runtime = { path = "../qml-runtime" }
 serde = { version = "1", features = ["derive"] }
 

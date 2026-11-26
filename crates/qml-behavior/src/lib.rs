@@ -198,9 +198,10 @@ pub struct CapabilitySuiteReport {
     pub overall_mean_kl: f64,
     pub overall_top1_agreement: f64,
     pub overall_final_cosine: f64,
-    /// Relative capability retention percentage: `100 * (ref_ppl / cand_ppl).min(1.0) * 0.5 + 100 * top1 * 0.5`,
+    /// Composite numerical fidelity percentage (not intelligence or benchmark capability): `100 * (ref_ppl / cand_ppl).min(1.0) * 0.5 + 100 * top1 * 0.5`,
     /// bounded strictly to `[0, 100]` and accompanied by raw perplexity/KL/Top-1 so catastrophic failures are never hidden.
-    pub composite_retention_pct: f64,
+    #[serde(alias = "composite_retention_pct")]
+    pub composite_numerical_fidelity_pct: f64,
     pub catastrophic_failure: bool,
 }
 
@@ -317,7 +318,7 @@ pub fn evaluate_capability_suite(
     let overall_top1 = total_top1 as f64 / n;
     let overall_cos = total_cos / n;
     let ppl_ret = (overall_ref_ppl / overall_cand_ppl.max(1e-9)).clamp(0.0, 1.0);
-    let composite_retention_pct = (0.5 * ppl_ret + 0.5 * overall_top1) * 100.0;
+    let composite_numerical_fidelity_pct = (0.5 * ppl_ret + 0.5 * overall_top1) * 100.0;
     // Flag catastrophic collapse transparently: perplexity inflation > 5x OR KL > 5.0 OR Top-1 < 25%
     let catastrophic_failure =
         overall_ppl_ratio > 5.0 || overall_mean_kl > 5.0 || overall_top1 < 0.25;
@@ -330,7 +331,7 @@ pub fn evaluate_capability_suite(
         overall_mean_kl,
         overall_top1_agreement: overall_top1,
         overall_final_cosine: overall_cos,
-        composite_retention_pct,
+        composite_numerical_fidelity_pct,
         catastrophic_failure,
     })
 }
@@ -384,70 +385,107 @@ impl ReferenceSuiteCache {
         }
     }
 
-    /// Save precomputed reference logits to a compact binary file (`QREF1\0`, f32 logits).
-    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        use std::io::{BufWriter, Write};
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut w = BufWriter::new(std::fs::File::create(path)?);
-        w.write_all(b"QREF1\0")?;
-        w.write_all(&(self.ref_logits.len() as u32).to_le_bytes())?;
-        for seq in &self.ref_logits {
-            w.write_all(&(seq.len() as u32).to_le_bytes())?;
-            for logits in seq {
-                w.write_all(&(logits.len() as u32).to_le_bytes())?;
-                for &v in logits {
-                    w.write_all(&(v as f32).to_le_bytes())?;
-                }
+    /// Legacy caches lack provenance; preserve them and regenerate.
+    pub fn save_to_file(&self, _path: &std::path::Path) -> std::io::Result<()> {
+        Err(qml_core::cache::invalid(
+            "cache provenance required; use save_verified",
+        ))
+    }
+    pub fn load_from_file(
+        _path: &std::path::Path,
+        _examples: Vec<CapabilityExample>,
+    ) -> std::io::Result<Self> {
+        Err(qml_core::cache::invalid(
+            "unverified QREF1 cache; regenerate in a new directory",
+        ))
+    }
+    fn example_identity(examples: &[CapabilityExample]) -> String {
+        let mut sha = qml_core::Sha256::new();
+        for ex in examples {
+            sha.update(format!("{:?}", ex.category).as_bytes());
+            sha.update(&(ex.label.len() as u64).to_le_bytes());
+            sha.update(ex.label.as_bytes());
+            sha.update(&(ex.tokens.len() as u64).to_le_bytes());
+            for &t in &ex.tokens {
+                sha.update(&(t as u64).to_le_bytes());
             }
         }
-        w.flush()
+        sha.finalize_hex()
     }
-
-    /// Load previously cached reference logits (`QREF1\0`) paired with the same `examples`.
-    pub fn load_from_file(
+    fn validate_cache(&self) -> std::io::Result<()> {
+        use qml_core::cache::invalid;
+        if self.examples.len() != self.ref_logits.len() {
+            return Err(invalid("reference example count mismatch"));
+        }
+        let mut vocab = None;
+        for (ex, seq) in self.examples.iter().zip(&self.ref_logits) {
+            if ex.tokens.len() < 2 || seq.len() != ex.tokens.len() - 1 {
+                return Err(invalid("reference sequence length mismatch"));
+            }
+            for logits in seq {
+                if logits.is_empty()
+                    || vocab.is_some_and(|n| n != logits.len())
+                    || logits.iter().any(|x| !x.is_finite())
+                    || ex.tokens.iter().any(|&t| t >= logits.len())
+                {
+                    return Err(invalid("invalid reference vocabulary or values"));
+                }
+                vocab = Some(logits.len());
+            }
+        }
+        Ok(())
+    }
+    pub fn save_verified(&self, path: &std::path::Path, identity: &str) -> std::io::Result<()> {
+        use qml_core::cache::{length, values};
+        use std::io::Write;
+        self.validate_cache()?;
+        qml_core::cache::write(path, identity, |w| {
+            w.write_all(b"QREF2\0")?;
+            w.write_all(Self::example_identity(&self.examples).as_bytes())?;
+            length(w, self.ref_logits.len())?;
+            for seq in &self.ref_logits {
+                length(w, seq.len())?;
+                for v in seq {
+                    values(w, v)?;
+                }
+            }
+            Ok(())
+        })
+    }
+    pub fn load_verified(
         path: &std::path::Path,
         examples: Vec<CapabilityExample>,
+        identity: &str,
     ) -> std::io::Result<Self> {
-        use std::io::{BufReader, Read};
-        let mut r = BufReader::new(std::fs::File::open(path)?);
-        let mut magic = [0u8; 6];
-        r.read_exact(&mut magic)?;
-        if &magic != b"QREF1\0" {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid QREF1 reference logit cache magic",
-            ));
+        use qml_core::cache::invalid;
+        let mut r = qml_core::cache::read(path, identity)?;
+        if r.bytes(6)? != b"QREF2\0" || r.bytes(64)? != Self::example_identity(&examples).as_bytes()
+        {
+            return Err(invalid("reference dataset identity mismatch"));
         }
-        let read_u32 = |r: &mut BufReader<std::fs::File>| -> std::io::Result<u32> {
-            let mut b = [0u8; 4];
-            r.read_exact(&mut b)?;
-            Ok(u32::from_le_bytes(b))
-        };
-        let n_ex = read_u32(&mut r)? as usize;
-        let mut ref_logits = Vec::with_capacity(n_ex);
-        for _ in 0..n_ex {
-            let steps = read_u32(&mut r)? as usize;
-            let mut seq = Vec::with_capacity(steps);
+        let count = r.len(100_000)?;
+        if count != examples.len() {
+            return Err(invalid("reference example count mismatch"));
+        }
+        let mut ref_logits = Vec::new();
+        for ex in &examples {
+            let steps = r.len(1_048_576)?;
+            if ex.tokens.len().checked_sub(1) != Some(steps) {
+                return Err(invalid("reference step count mismatch"));
+            }
+            let mut seq = Vec::new();
             for _ in 0..steps {
-                let vocab = read_u32(&mut r)? as usize;
-                let mut raw = vec![0u8; vocab * 4];
-                r.read_exact(&mut raw)?;
-                let logits: Vec<f64> = raw
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|&c| f64::from(f32::from_le_bytes(c)))
-                    .collect();
-                seq.push(logits);
+                seq.push(r.values()?);
             }
             ref_logits.push(seq);
         }
-        Ok(Self {
+        r.finish()?;
+        let result = Self {
             examples,
             ref_logits,
-        })
+        };
+        result.validate_cache()?;
+        Ok(result)
     }
 }
 
@@ -525,7 +563,7 @@ pub fn evaluate_capability_suite_with_cache(
     let overall_top1 = total_top1 as f64 / n;
     let overall_cos = total_cos / n;
     let ppl_ret = (overall_ref_ppl / overall_cand_ppl.max(1e-9)).clamp(0.0, 1.0);
-    let composite_retention_pct = (0.5 * ppl_ret + 0.5 * overall_top1) * 100.0;
+    let composite_numerical_fidelity_pct = (0.5 * ppl_ret + 0.5 * overall_top1) * 100.0;
     let catastrophic_failure =
         overall_ppl_ratio > 5.0 || overall_mean_kl > 5.0 || overall_top1 < 0.25;
 
@@ -537,7 +575,7 @@ pub fn evaluate_capability_suite_with_cache(
         overall_mean_kl,
         overall_top1_agreement: overall_top1,
         overall_final_cosine: overall_cos,
-        composite_retention_pct,
+        composite_numerical_fidelity_pct,
         catastrophic_failure,
     })
 }
@@ -752,5 +790,34 @@ mod tests {
         assert!(int_rep.layers[0].mean_rel_l2_divergence < 1e-12);
         assert!(int_rep.layers[1].mean_rel_l2_divergence > 0.0);
         assert!(int_rep.mean_logit_kl_divergence > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod aegis_reference_tests {
+    use super::*;
+    #[test]
+    fn reference_rejects_dataset_mismatch_and_invalid_values() {
+        let temp = qml_core::publication::stage(std::path::Path::new("test-cache")).unwrap();
+        let path = temp.path().to_owned();
+        drop(temp);
+        let examples = vec![CapabilityExample {
+            category: CapabilityCategory::Reasoning,
+            label: "test".into(),
+            tokens: vec![0, 1],
+        }];
+        let mut cache =
+            ReferenceSuiteCache::from_precomputed(examples.clone(), vec![vec![vec![0.5, 1.0]]]);
+        let id = qml_core::sha256_hex(b"identity");
+        cache.save_verified(&path, &id).unwrap();
+        assert!(ReferenceSuiteCache::load_verified(&path, examples.clone(), &id).is_ok());
+        let mut changed = examples;
+        changed[0].tokens[1] = 0;
+        assert!(ReferenceSuiteCache::load_verified(&path, changed, &id).is_err());
+        cache.ref_logits[0][0][0] = f64::NAN;
+        assert!(cache.validate_cache().is_err());
+        cache.ref_logits.clear();
+        assert!(cache.validate_cache().is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }

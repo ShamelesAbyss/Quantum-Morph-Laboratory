@@ -705,6 +705,19 @@ impl SafetensorsSource {
         &self.metadata
     }
 
+    /// All backing weight paths for provenance and source protection.
+    pub fn source_paths(&self) -> Vec<std::path::PathBuf> {
+        if let Some(path) = &self.single_file {
+            return vec![path.clone()];
+        }
+        self.tensor_to_shard
+            .values()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|name| self.base_dir.join(name))
+            .collect()
+    }
+
     pub fn is_sharded(&self) -> bool {
         self.single_file.is_none()
     }

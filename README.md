@@ -50,7 +50,7 @@ Q-Forge constructs QMF v1 payloads in owned temporary disk storage instead of re
 
 Artifact, builder memory, temporary disk, individual tensor and manifest limits are independent. The morph command accepts --scratch-dir, --max-artifact-bytes, --max-builder-memory-bytes, --max-temp-bytes, --max-tensor-bytes, --max-manifest-bytes and explicit --overwrite. Defaults are 8 GiB artifact, 256 MiB builder accounting, 16 GiB temporary disk, 8 GiB individual tensor allocation and 16 MiB manifest. Default publication refuses replacement.
 
-Synthetic instrumentation grew encoded payload from 1 MiB to 32 MiB with zero resident payload buffer, a 64 KiB encoding buffer and about 152 KiB conservative manifest/buffer accounting. These counters are not process RSS. Dense tensor/cluster quantization, calibration and other working memory remain separate bottlenecks. Temporary disk preflight is advisory; peak scratch includes both payload and final stage.
+Synthetic instrumentation grew encoded payload from 1 MiB to 32 MiB with zero resident payload buffer, a 64 KiB encoding buffer and 151,280–151,728 bytes of conservative manifest/buffer accounting. These counters are not process RSS. Dense tensor/cluster quantization, calibration and other working memory remain separate bottlenecks. Temporary disk preflight is advisory; peak scratch includes both payload and final stage.
 
 **No additional models were downloaded and no large-model experiments were performed. ATLAS does not scientifically validate 14B/27B/32B support.** See [release notes](RELEASE_NOTES.md) for configuration, limits and synthetic validation.
 

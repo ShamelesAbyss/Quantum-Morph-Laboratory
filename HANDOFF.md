@@ -1,6 +1,6 @@
 # Handoff
 
-## PROJECT ATLAS — v0.6.2 (local validation complete; CI/release pending)
+## PROJECT ATLAS — v0.6.2 STABLE IMPLEMENTATION; PUBLIC RELEASE VERIFICATION BLOCKED
 
 Starting checkpoint: 1c80f69477c483750dd1162f8ba68698aa918e5e. Work is exclusively on main. This owner-authorized assignment supersedes the prior AEGIS stop only for bounded-memory artifact construction, associated Q-Forge/CLI configuration, synthetic validation and v0.6.2 publication.
 
@@ -26,7 +26,7 @@ Starting checkpoint: 1c80f69477c483750dd1162f8ba68698aa918e5e. Work is exclusive
 - These counters measure builder-owned payload/buffers and conservative metadata accounting, not process RSS. Borrowed fixture arrays, input tensors, quantizer workspace, OS page cache and other application allocations are excluded. Fixtures write only modest synthetic data; no pretrained model was downloaded or transformed.
 - cargo fmt --all -- --check: passed.
 - cargo clippy --workspace --all-targets -- -D warnings: passed.
-- cargo test --workspace: all 107 Windows tests passed, zero failures/ignored; doc-tests passed. Linux-specific coverage will be verified in CI.
+- cargo test --workspace: all 107 Windows tests passed, zero failures/ignored; doc-tests passed. Linux CI passed all 108 tests, including Unix-only link protection.
 - cargo build --workspace --release: passed (45.52 seconds with the existing local dependency cache).
 - cargo deny check: advisories/bans/licenses/sources passed under the unchanged policy; existing duplicate-version warnings remain allowed.
 - Initial strict Clippy identified a cloned-reference test slice; corrected before final successful validation. Existing tests were not weakened or removed.
@@ -44,9 +44,19 @@ No 14B, 27B or 32B support has been scientifically validated. No sampled MAP-B o
 ### Exact files changed from the ATLAS checkpoint
 
 ARCHITECTURE.md; CHANGELOG.md; Cargo.lock; Cargo.toml; HANDOFF.md; README.md; RELEASE_NOTES.md; ROADMAP.md; crates/qml-cli/Cargo.toml; crates/qml-cli/src/main.rs; crates/qml-cli/tests/atlas_cli.rs; crates/qml-forge/Cargo.toml; crates/qml-forge/src/lib.rs; crates/qml-format/Cargo.toml; crates/qml-format/src/lib.rs; crates/qml-format/src/v1.rs; crates/qml-format/src/v1/disk.rs.
-### Pending release steps
+### Commit and CI status
 
-Push the validated milestone, verify Windows/Linux and dependency-policy CI, publish v0.6.2 | PROJECT ATLAS as a latest public non-prerelease with all four mandatory assets, download and verify assets/checksums, update this handoff, then STOP and await further instructions.
+Implementation commit: d426d91f6df53a2906612f65467346f0e4fb393a. Main-branch Windows/Linux/dependency-policy CI passed: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812230204. Annotated tag v0.6.2 points to this validated commit. Release workflow is running: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812861029.
+
+### GitHub access failure after validated milestone push
+
+The implementation commit and annotated v0.6.2 tag were successfully pushed before access failed. Main-branch CI was confirmed green on both platforms. The release workflow was last observed with Windows build/packaging complete and Linux optimized compilation still running. During the next verification attempt, the GitHub connector returned reauthentication required; Git returned invalid username/token; the unauthenticated repository homepage, repository API and release/workflow endpoints returned HTTP 404. Therefore public release completion, latest status, downloadable assets and public SHA-256 verification are NOT confirmed. No historical release/tag was altered or removed.
+
+The owner then requested a stable milestone, push of all work, attached release notes and test results, followed by a stop. The remaining changes are documentation only: recorded CI/access status and corrected the new README memory approximation to exact byte measurements (151,280–151,728 bytes). A final local handoff commit and attempted push preserve the stable point. Release notes, validation evidence and a repository bundle are provided as local outputs if remote access remains unavailable.
+
+### Required action to finish remote distribution
+
+Restore the GitHub connection and Git credentials, or provide the moved repository URL. Then push the final documentation commit without rewriting history, inspect release workflow 45812861029, and verify all four public v0.6.2 assets, latest status and SHA-256 checksums. Do not claim this public release is verified until those checks succeed. STOP at this stable ATLAS point; do not begin another assignment.
 
 
 

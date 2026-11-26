@@ -14,9 +14,10 @@ use qml_core::{DenseMatrix, DeterministicRng, MatrixError};
 use qml_format::{QmfArchiveV1, QmfV1Builder};
 use qml_model::{PayloadBudget, SafetensorsFile, SafetensorsMetadata};
 use qml_quant::{
-    Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
+    Bf16Matrix, EchoBaseOperator, EchoCorrectedMatrix, FactorPrecision, Fp16Matrix, HadamardSpec,
+    Int2AsymGroupMatrix, Int3AsymGroupMatrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
     Int8SymMatrix, LowRankSvdMatrix, RmqResidualKind, RmqSharedBasisCluster, RmqSharedBasisConfig,
-    deterministic_probe_vectors, evaluate_operator,
+    TernaryPackedMatrix, deterministic_probe_vectors, evaluate_operator,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,23 @@ pub enum LayerGene {
     Int4Asym {
         group_size: usize,
     },
+    /// Sub-3-bit: 3-bit asymmetric + Hadamard incoherence (~3.25-3.50 bpp).
+    Int3Hadamard {
+        group_size: usize,
+    },
+    /// Sub-3-bit: 2-bit clipped asymmetric + Hadamard incoherence (~2.25-2.50 bpp).
+    Int2Hadamard {
+        group_size: usize,
+    },
+    /// Sub-3-bit: Packed base-3 ternary (5 trits/byte) + Hadamard (~1.725-1.85 bpp).
+    TernaryHadamard {
+        group_size: usize,
+    },
+    /// PROJECT ECHO: 2-bit Hadamard base + compact INT8 low-rank recovery adapter.
+    Int2Echo {
+        group_size: usize,
+        echo_rank: usize,
+    },
     LowRankSvd {
         rank: usize,
     },
@@ -56,7 +74,7 @@ impl LayerGene {
             6.min(max_rank).max(1),
             8.min(max_rank).max(1),
         ];
-        match rng.next_usize(7) {
+        match rng.next_usize(11) {
             0 => Self::Fp16,
             1 => Self::Bf16,
             2 => Self::Int8Sym {
@@ -72,7 +90,20 @@ impl LayerGene {
             4 => Self::Int4Asym {
                 group_size: if rng.next_usize(2) == 0 { 32 } else { 64 },
             },
-            5 => Self::LowRankSvd {
+            5 => Self::Int3Hadamard {
+                group_size: if rng.next_usize(2) == 0 { 64 } else { 128 },
+            },
+            6 => Self::Int2Hadamard {
+                group_size: if rng.next_usize(2) == 0 { 64 } else { 128 },
+            },
+            7 => Self::TernaryHadamard {
+                group_size: if rng.next_usize(2) == 0 { 64 } else { 128 },
+            },
+            8 => Self::Int2Echo {
+                group_size: 128,
+                echo_rank: r_choices[rng.next_usize(r_choices.len())],
+            },
+            9 => Self::LowRankSvd {
                 rank: r_choices[rng.next_usize(r_choices.len())],
             },
             _ => Self::RmqSharedBasis {
@@ -413,6 +444,49 @@ pub fn export_genome_to_qmf_v1<R: Read + Seek>(
                     .add_int4_asym(name, &op)
                     .map_err(|e| e.to_string())?;
             }
+            LayerGene::Int3Hadamard { group_size } => {
+                let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                let op = Int3AsymGroupMatrix::quantize(&mat, group_size, had)
+                    .map_err(|e| e.to_string())?;
+                builder
+                    .add_int3_asym(name, &op)
+                    .map_err(|e| e.to_string())?;
+            }
+            LayerGene::Int2Hadamard { group_size } => {
+                let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                let op = Int2AsymGroupMatrix::quantize(&mat, group_size, had)
+                    .map_err(|e| e.to_string())?;
+                builder
+                    .add_int2_asym(name, &op)
+                    .map_err(|e| e.to_string())?;
+            }
+            LayerGene::TernaryHadamard { group_size } => {
+                let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                let op = TernaryPackedMatrix::quantize(&mat, group_size, had)
+                    .map_err(|e| e.to_string())?;
+                builder
+                    .add_ternary_packed(name, &op)
+                    .map_err(|e| e.to_string())?;
+            }
+            LayerGene::Int2Echo {
+                group_size,
+                echo_rank,
+            } => {
+                let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                let base = Int2AsymGroupMatrix::quantize(&mat, group_size, had)
+                    .map_err(|e| e.to_string())?;
+                let op = EchoCorrectedMatrix::fit(
+                    &mat,
+                    EchoBaseOperator::Int2Asym(base),
+                    echo_rank.min(mat.rows().min(mat.cols())),
+                    0.0,
+                    seed + idx as u64,
+                )
+                .map_err(|e| e.to_string())?;
+                builder
+                    .add_echo_corrected(name, &op)
+                    .map_err(|e| e.to_string())?;
+            }
             LayerGene::LowRankSvd { rank } => {
                 let r = rank.max(1).min(mat.rows().min(mat.cols()));
                 let op = LowRankSvdMatrix::from_matrix(
@@ -508,11 +582,13 @@ pub fn run_genesis(
 
     let pop_size = config.population_size.max(4);
 
-    // Generation 0: seed with interpretable uniform baselines + diverse random genomes.
+    // Generation 0: seed with interpretable uniform baselines (including sub-3-bit Resonance tiers) + random genomes.
     let mut initial_genomes: Vec<Vec<LayerGene>> = vec![
-        vec![LayerGene::Fp16; n_layers],
         vec![LayerGene::Int8Sym { group_size: 64 }; n_layers],
         vec![LayerGene::Int4Sym { group_size: 32 }; n_layers],
+        vec![LayerGene::Int3Hadamard { group_size: 128 }; n_layers],
+        vec![LayerGene::Int2Hadamard { group_size: 128 }; n_layers],
+        vec![LayerGene::TernaryHadamard { group_size: 128 }; n_layers],
         vec![
             LayerGene::RmqSharedBasis {
                 rank: 4.min(max_rank),
@@ -747,6 +823,36 @@ fn eval_single_layer(
             let op = Int4AsymGroupMatrix::quantize(mat, group_size)?;
             let ev = evaluate_operator(mat, &op, probes, 0)?;
             Ok((ev.total_bytes, ev.mean_matvec_rel_error, dense_flops))
+        }
+        LayerGene::Int3Hadamard { group_size } => {
+            let had = HadamardSpec::new(64, seed);
+            let op = Int3AsymGroupMatrix::quantize(mat, group_size, had)?;
+            let ev = evaluate_operator(mat, &op, probes, 0)?;
+            Ok((ev.total_bytes, ev.mean_matvec_rel_error, dense_flops))
+        }
+        LayerGene::Int2Hadamard { group_size } => {
+            let had = HadamardSpec::new(64, seed);
+            let op = Int2AsymGroupMatrix::quantize(mat, group_size, had)?;
+            let ev = evaluate_operator(mat, &op, probes, 0)?;
+            Ok((ev.total_bytes, ev.mean_matvec_rel_error, dense_flops))
+        }
+        LayerGene::TernaryHadamard { group_size } => {
+            let had = HadamardSpec::new(64, seed);
+            let op = TernaryPackedMatrix::quantize(mat, group_size, had)?;
+            let ev = evaluate_operator(mat, &op, probes, 0)?;
+            Ok((ev.total_bytes, ev.mean_matvec_rel_error, dense_flops))
+        }
+        LayerGene::Int2Echo {
+            group_size,
+            echo_rank,
+        } => {
+            let had = HadamardSpec::new(64, seed);
+            let base = Int2AsymGroupMatrix::quantize(mat, group_size, had)?;
+            let r = echo_rank.max(1).min(mat.rows().min(mat.cols()));
+            let op = EchoCorrectedMatrix::fit(mat, EchoBaseOperator::Int2Asym(base), r, 0.0, seed)?;
+            let ev = evaluate_operator(mat, &op, probes, 0)?;
+            let flops = dense_flops + 2 * (r * (mat.rows() + mat.cols())) as u64;
+            Ok((ev.total_bytes, ev.mean_matvec_rel_error, flops))
         }
         LayerGene::LowRankSvd { rank } => {
             let r = rank.max(1).min(mat.rows().min(mat.cols()));

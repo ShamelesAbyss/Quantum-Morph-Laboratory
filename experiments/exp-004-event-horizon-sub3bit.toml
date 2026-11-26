@@ -1,0 +1,281 @@
+# Experiment Record: exp-004 — PROJECT RESONANCE & EVENT HORIZON Wave I
+# Complete-Artifact Sub-3-Bit Compression Research Ladder (3.00 -> 1.50 bpp),
+# Matched-Byte Hadamard Incoherence Ablation, and Layer-31 Selective Protection Study.
+# All numbers below were measured directly from `qml.exe --release` on Windows 11 x86_64.
+# Pretrained model weights are stored strictly outside Git (Apache-2.0 source checkpoints).
+
+[experiment]
+id = "exp-004-event-horizon-sub3bit"
+title = "Sub-3-Bit Compression Research Ladder, Matched-Byte Hadamard Incoherence Control & Layer-31 Selective Protection on SmolLM2-135M and SmolLM2-360M"
+date = "2026-11-26"
+milestone = "v0.4.0 — PROJECT RESONANCE & EVENT HORIZON Wave I"
+host_os = "Windows 11 Home (26H2) x86_64"
+host_cpu = "Intel Core i9-14900HX (32 logical cores, SSE4.2/AVX/AVX2/FMA/F16C)"
+host_gpu = "NVIDIA GeForce RTX 4070 Laptop GPU (8 GB VRAM, WGPU Vulkan/DX12)"
+host_ram_gb = 32
+rust_toolchain = "rustc 1.100.0 (x86_64-pc-windows-msvc)"
+evaluation_suite = "Held-out 4-category Capability Retention Suite (Reasoning, Coding, Knowledge, InstructionFollowing; 176 next-token positions across 4 multi-domain prompts)"
+bpp_accounting = "Complete on-disk QMF v1 artifact size * 8 / total_parameters (including scales, mins, codebooks, recovery adapters, JSON manifest, alignment, and CRC-32)"
+
+[source_models.smollm2_135m]
+repo = "HuggingFaceTB/SmolLM2-135M-Instruct"
+license = "Apache-2.0"
+safetensors_bytes = 269060552
+safetensors_sha256 = "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c"
+parameters = 134515008
+layers = 30
+hidden_size = 576
+vocab_size = 49152
+embed_tokens_param_fraction = 0.2104
+
+[source_models.smollm2_360m]
+repo = "HuggingFaceTB/SmolLM2-360M-Instruct"
+license = "Apache-2.0"
+safetensors_bytes = 723674912
+safetensors_sha256 = "e6bffe7435d7ddc10fd3b9a9efd429dafbacb1cb17015fb5562664e7532bf86e"
+parameters = 361821120
+layers = 32
+hidden_size = 960
+intermediate_size = 2560
+vocab_size = 49152
+embed_tokens_param_fraction = 0.1304
+
+# ==============================================================================
+# 1. SmolLM2-135M-Instruct — Full Sub-3-Bit Ladder & Matched-Byte Controls (GPU)
+# ==============================================================================
+
+[[ladder_135m]]
+variant = "INT4_Q4_0 (Baseline)"
+complete_qmf_bpp = 4.511
+vram_weight_mib = 72.1
+mean_kl_vs_bf16 = 0.466
+ppl_inflation = 1.45
+top1_agreement = 0.653
+retention_score = 0.671
+catastrophic_cliff = false
+generation_quality = "Coherent English"
+
+[[ladder_135m]]
+variant = "INT3_HADAMARD (LS-Refit g64)"
+complete_qmf_bpp = 3.285
+vram_weight_mib = 52.5
+mean_kl_vs_bf16 = 2.666
+ppl_inflation = 10.09
+top1_agreement = 0.233
+retention_score = 0.166
+catastrophic_cliff = false
+cpu_gpu_parity_verified = true
+generation_quality = "Coherent English ('Binary search is a fundamental algorithm in programming...')"
+notes = "Exact CPU/GPU parity verified to 3 decimal places (KL=2.666, PPLx=10.09, Top-1=23.3%). Closed-form least-squares affine refit + Gaussian sigma-clipping reduced PPLx from 23.84 -> 10.09."
+
+[[ladder_135m]]
+variant = "QMR-300 (MAP-B Adaptive)"
+target_bpp = 3.00
+complete_qmf_bpp = 3.000
+vram_weight_mib = 47.9
+mean_kl_vs_bf16 = 3.278
+ppl_inflation = 17.27
+top1_agreement = 0.205
+retention_score = 0.131
+catastrophic_cliff = false
+notes = "Variance-additive scale-invariant MAP-B objective reduced QMR-300 PPLx by 6.16x (106.33 -> 17.27) while hitting exact 3.000 complete on-disk bpp."
+
+[[ladder_135m]]
+variant = "QMR-275 (MAP-B Adaptive)"
+target_bpp = 2.75
+complete_qmf_bpp = 2.750
+vram_weight_mib = 43.9
+mean_kl_vs_bf16 = 5.204
+ppl_inflation = 115.07
+top1_agreement = 0.091
+retention_score = 0.050
+catastrophic_cliff = true
+notes = "Honest cliff boundary on tiny 135M parameter model (embed_tokens consumes 21.0% of total parameters)."
+
+[[ladder_135m]]
+variant = "QMR-250 (MAP-B Adaptive)"
+target_bpp = 2.50
+complete_qmf_bpp = 2.500
+vram_weight_mib = 39.9
+mean_kl_vs_bf16 = 8.255
+ppl_inflation = 2375.22
+top1_agreement = 0.017
+catastrophic_cliff = true
+
+[[ladder_135m]]
+variant = "QMR-225 (MAP-B Adaptive)"
+target_bpp = 2.25
+complete_qmf_bpp = 2.250
+vram_weight_mib = 35.9
+mean_kl_vs_bf16 = 8.814
+ppl_inflation = 5139.26
+top1_agreement = 0.028
+catastrophic_cliff = true
+notes = "Still achieves 101x lower perplexity inflation than 2.285 bpp INT2_PLAIN despite lower storage."
+
+[[ladder_135m]]
+variant = "QMR-200 (MAP-B Adaptive)"
+target_bpp = 2.00
+complete_qmf_bpp = 2.000
+vram_weight_mib = 31.9
+mean_kl_vs_bf16 = 9.778
+ppl_inflation = 11604.76
+top1_agreement = 0.017
+catastrophic_cliff = true
+
+[[ladder_135m]]
+variant = "QMR-175 (MAP-B Adaptive)"
+target_bpp = 1.75
+complete_qmf_bpp = 1.750
+vram_weight_mib = 26.9
+mean_kl_vs_bf16 = 12.115
+ppl_inflation = 85777.08
+top1_agreement = 0.006
+catastrophic_cliff = true
+
+[[ladder_135m]]
+variant = "INT2_PLAIN (Matched-Byte Control, No Hadamard)"
+complete_qmf_bpp = 2.285
+vram_weight_mib = 36.4
+mean_kl_vs_bf16 = 14.025
+ppl_inflation = 520461.57
+top1_agreement = 0.000
+logit_cosine = 0.210
+catastrophic_cliff = true
+
+[[ladder_135m]]
+variant = "INT2_HADAMARD (Matched-Byte, Zero Extra Bytes)"
+complete_qmf_bpp = 2.285
+vram_weight_mib = 36.4
+mean_kl_vs_bf16 = 8.714
+ppl_inflation = 3784.01
+top1_agreement = 0.028
+logit_cosine = 0.241
+catastrophic_cliff = true
+notes = "Exact matched-byte ablation vs INT2_PLAIN: -37.9% Mean KL and 137.5x lower perplexity inflation with zero extra storage bytes."
+
+[[ladder_135m]]
+variant = "TERNARY_HADAMARD (5 trits/byte base-3, Lloyd-Max)"
+complete_qmf_bpp = 1.758
+vram_weight_mib = 28.0
+mean_kl_vs_bf16 = 12.045
+ppl_inflation = 94137.89
+top1_agreement = 0.006
+catastrophic_cliff = true
+notes = "5.5x lower perplexity inflation than 2.285 bpp INT2_PLAIN while using 0.527 bpp less total storage."
+
+# ==============================================================================
+# 2. SmolLM2-360M-Instruct — Scaling Confirmation & Matched-Byte Controls (GPU)
+# ==============================================================================
+
+[[ladder_360m]]
+variant = "INT3_HADAMARD (LS-Refit g64)"
+complete_qmf_bpp = 3.270
+vram_weight_mib = 140.7
+compression_vs_bf16 = 4.90
+mean_kl_vs_bf16 = 1.910
+ppl_inflation = 5.63
+top1_agreement = 0.415
+logit_cosine = 0.824
+catastrophic_cliff = false
+generation_quality = "Coherent English ('A binary search algorithm is a quick and accurate solution...')"
+notes = "Scaling 135M -> 360M cut INT3_HADAMARD KL by -28.4% (2.666 -> 1.910) and increased Top-1 agreement by +78% relative (23.3% -> 41.5%)."
+
+[[ladder_360m]]
+variant = "QMR-300 (MAP-B Adaptive)"
+target_bpp = 3.00
+complete_qmf_bpp = 3.000
+vram_weight_mib = 129.1
+mean_kl_vs_bf16 = 2.803
+ppl_inflation = 13.35
+top1_agreement = 0.318
+logit_cosine = 0.769
+gpu_tok_per_s = 4.0
+catastrophic_cliff = false
+notes = "Scaling 135M -> 360M boosted QMR-300 Top-1 agreement by +55% relative (20.5% -> 31.8%) at exact 3.000 complete bpp."
+
+[[ladder_360m]]
+variant = "QMR-250 (MAP-B Adaptive)"
+target_bpp = 2.50
+complete_qmf_bpp = 2.500
+vram_weight_mib = 107.5
+mean_kl_vs_bf16 = 6.566
+ppl_inflation = 393.75
+top1_agreement = 0.051
+logit_cosine = 0.511
+gpu_tok_per_s = 4.2
+catastrophic_cliff = true
+notes = "6.0x lower perplexity inflation than 135M QMR-250 (2375.22 -> 393.75), confirming strong positive scaling law for sub-3-bit PTQ."
+
+[[ladder_360m]]
+variant = "INT2_PLAIN (Matched-Byte Control, No Hadamard)"
+complete_qmf_bpp = 2.270
+vram_weight_mib = 97.6
+mean_kl_vs_bf16 = 13.616
+ppl_inflation = 555652.90
+top1_agreement = 0.000
+logit_cosine = 0.205
+catastrophic_cliff = true
+
+[[ladder_360m]]
+variant = "INT2_HADAMARD (Matched-Byte, Zero Extra Bytes)"
+complete_qmf_bpp = 2.270
+vram_weight_mib = 97.6
+mean_kl_vs_bf16 = 8.242
+ppl_inflation = 2653.66
+logit_cosine = 0.436
+gpu_tok_per_s = 4.2
+catastrophic_cliff = true
+notes = "Replicated matched-byte Hadamard ablation on 360M: -39.5% Mean KL and 209.4x lower perplexity inflation with zero extra storage bytes."
+
+[[ladder_360m]]
+variant = "TERNARY_HADAMARD (5 trits/byte base-3, Lloyd-Max)"
+complete_qmf_bpp = 1.738
+vram_weight_mib = 74.7
+mean_kl_vs_bf16 = 9.208
+ppl_inflation = 5797.78
+logit_cosine = 0.443
+gpu_tok_per_s = 3.9
+catastrophic_cliff = true
+notes = "16.2x lower perplexity inflation than 135M TERNARY_HADAMARD (94137.89 -> 5797.78)."
+
+# ==============================================================================
+# 3. SmolLM2-360M-Instruct — Layer-31 Selective Precision Protection Study (GPU)
+# ==============================================================================
+
+[layer31_protection_study]
+model = "HuggingFaceTB/SmolLM2-360M-Instruct"
+prompt = "Explain singular value decomposition in two sentences."
+tokens_evaluated = 8
+layers = 32
+hypothesis = "Promoting Layer 31 (identified as the sharp Rel L2=0.6002 / RSA=0.5697 cliff in exp-003) from Q4_0 to INT8_SYM will eliminate Layer-31 activation drift and reduce output KL divergence."
+
+[layer31_protection_study.uniform_q4_0]
+qmf_bytes = 203805958
+complete_qmf_bpp = 4.506
+l30_cos = 0.9764
+l30_rel_l2 = 0.2038
+l30_rsa = 0.9813
+l31_cos = 0.9064
+l31_min_cos = 0.5741
+l31_rel_l2 = 0.6002
+l31_rsa = 0.5697
+mean_kl_vs_bf16 = 1.28366
+top1_agreement = 0.250
+
+[layer31_protection_study.layer31_protected_int8]
+method = "behavior_protected (--method q4-protect --protect-layers 31)"
+qmf_bytes = 208413968
+complete_qmf_bpp = 4.608
+bpp_overhead = 0.102
+mean_matvec_rel_error = 0.09848
+l30_cos = 0.9764
+l30_rel_l2 = 0.2038
+l30_rsa = 0.9813
+l31_cos = 0.9114
+l31_min_cos = 0.5853
+l31_rel_l2 = 0.4560
+l31_rsa = 0.4549
+mean_kl_vs_bf16 = 1.49900
+top1_agreement = 0.250
+finding = "NUANCED/PARTIAL NEGATIVE CONTROL: Promoting Layer 31 to INT8_SYM (+0.102 bpp) reduced Layer-31 relative L2 drift by -24.0% (0.6002 -> 0.4560) and raised Layer-31 cosine (0.9064 -> 0.9114), confirming Layer 31's own weights account for ~24% of the L31 spike. However, L31 RSA fell (0.5697 -> 0.4549) and output Mean KL increased slightly (1.28366 -> 1.49900). This falsifies the naive single-layer-fix hypothesis and proves the Layer-31 cliff is predominantly upstream-amplified (accumulated L00-L30 residual drift entering Layer 31's high-gain final projection plus tied embed_tokens/lm_head quantization), motivating activation-aware Hessian/GPTQ compensation in Wave II."

@@ -13,7 +13,7 @@ use qml_core::{DeterministicRng, MatrixError};
 use qml_format::{QmfArchiveV1, QmfError, QmfFileReader, QmfLatentCache, QmfOperator};
 use qml_hardware::{PersistentGpuMatrix, WgpuMatvecEngine};
 use qml_model::{DType, encode_safetensors};
-use qml_quant::{LinearOperator, QuantizedFactor, SparseResidual};
+use qml_quant::{EchoBaseOperator, LinearOperator, QuantizedFactor, SparseResidual};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -218,6 +218,11 @@ enum GpuOperator {
         right: PersistentGpuMatrix,
         sparse_residual: Option<SparseResidual>,
     },
+    EchoCorrected {
+        base: PersistentGpuMatrix,
+        low_rank: Option<(PersistentGpuMatrix, PersistentGpuMatrix)>,
+        sparse_residual: Option<SparseResidual>,
+    },
 }
 
 impl GpuOperator {
@@ -252,6 +257,24 @@ impl GpuOperator {
                 let t1 = right.matvec(x).map_err(map_err)?;
                 let t2 = shared_core.matvec(&t1).map_err(map_err)?;
                 let mut y = left.matvec(&t2).map_err(map_err)?;
+                if let Some(sp) = sparse_residual {
+                    sp.add_matvec_into(x, &mut y)?;
+                }
+                Ok(y)
+            }
+            Self::EchoCorrected {
+                base,
+                low_rank,
+                sparse_residual,
+            } => {
+                let mut y = base.matvec(x).map_err(map_err)?;
+                if let Some((left, right)) = low_rank {
+                    let t = right.matvec(x).map_err(map_err)?;
+                    let dy = left.matvec(&t).map_err(map_err)?;
+                    for (a, &b) in y.iter_mut().zip(&dy) {
+                        *a += b;
+                    }
+                }
                 if let Some(sp) = sparse_residual {
                     sp.add_matvec_into(x, &mut y)?;
                 }
@@ -398,6 +421,54 @@ impl GpuUploadContext {
                         })
                     }
                     _ => None,
+                }
+            }
+            QmfOperator::Int3Asym(m) => self.engine.upload_int3_asym(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::Int2Asym(m) => self.engine.upload_int2_asym(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::TernaryPacked(m) => self.engine.upload_ternary_packed(m).ok().map(|p| {
+                self.vram_weight_bytes += p.vram_bytes();
+                GpuOperator::Single(p)
+            }),
+            QmfOperator::VectorQuant(_) => {
+                // LUT-accelerated CPU path executes zero-multiply codebook matvec directly.
+                None
+            }
+            QmfOperator::EchoCorrected(echo) => {
+                let base_gpu = match echo.base() {
+                    EchoBaseOperator::Int3Asym(m) => self.engine.upload_int3_asym(m).ok(),
+                    EchoBaseOperator::Int2Asym(m) => self.engine.upload_int2_asym(m).ok(),
+                    EchoBaseOperator::Ternary(m) => self.engine.upload_ternary_packed(m).ok(),
+                    EchoBaseOperator::VectorQuant(_) => None,
+                };
+                if let Some(base) = base_gpu {
+                    self.vram_weight_bytes += base.vram_bytes();
+                    let low_rank = if let Some(lr) = echo.low_rank_adapter() {
+                        match (
+                            self.engine.upload_quantized_factor(lr.left()).ok(),
+                            self.engine.upload_quantized_factor(lr.right()).ok(),
+                        ) {
+                            (Some(l), Some(r)) => {
+                                self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
+                                Some((l, r))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    Some(GpuOperator::EchoCorrected {
+                        base,
+                        low_rank,
+                        sparse_residual: echo.sparse_residual().cloned(),
+                    })
+                } else {
+                    None
                 }
             }
         };

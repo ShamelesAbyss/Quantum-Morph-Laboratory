@@ -9,10 +9,13 @@ use qml_core::{DenseMatrix, sha256_hex, truncated_svd};
 use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfV1Builder};
 use qml_model::{PayloadBudget, PayloadError, SafetensorsFile};
 use qml_quant::{
-    Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
-    Int8SymMatrix, LinearOperator, LowRankSvdMatrix, MapConfig, RmqResidualKind,
-    RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, allocate_from_profiles,
-    deterministic_probe_vectors, evaluate_operator, profile_layer_for_map,
+    BehaviorImportanceMap, Bf16Matrix, EchoBaseOperator, EchoCorrectedMatrix, FactorPrecision,
+    Fp16Matrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix, Int4AsymGroupMatrix,
+    Int4SymGroupMatrix, Int8SymMatrix, LinearOperator, LowRankSvdMatrix, MapConfig,
+    ResonanceCandidateKind, ResonanceProfile, RmqResidualKind, RmqSharedBasisCluster,
+    RmqSharedBasisConfig, RmqSharedCoreCluster, TernaryPackedMatrix, VectorQuantMatrix,
+    allocate_from_profiles, allocate_resonance_map_b, deterministic_probe_vectors,
+    evaluate_operator, profile_layer_for_map, profile_tensor_for_resonance,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
 use serde::{Deserialize, Serialize};
@@ -74,6 +77,50 @@ pub enum TransformStrategy {
         affinity_threshold: f64,
         sparse_fraction: f64,
         fallback_group_size: usize,
+    },
+    /// PROJECT RESONANCE: 3-bit asymmetric groupwise quantization + Hadamard incoherence (~3.25-3.50 bpp).
+    Int3Hadamard {
+        group_size: usize,
+        hadamard_block: usize,
+    },
+    /// PROJECT RESONANCE: 2-bit asymmetric groupwise quantization + Hadamard incoherence (~2.25-2.50 bpp).
+    Int2Hadamard {
+        group_size: usize,
+        hadamard_block: usize,
+    },
+    /// PROJECT RESONANCE: Packed base-3 ternary (5 trits/byte, ~1.725-1.85 bpp) + Hadamard incoherence.
+    TernaryHadamard {
+        group_size: usize,
+        hadamard_block: usize,
+    },
+    /// PROJECT RESONANCE: Learned 1- or 2-stage Residual Vector Quantization + Hadamard (~1.25-2.25 bpp).
+    VectorQuant {
+        subvec_dim: usize,
+        codebook_size: usize,
+        num_stages: usize,
+        group_size: usize,
+        hadamard_block: usize,
+    },
+    /// PROJECT ECHO: 2-bit Hadamard base + compact INT8 low-rank SVD recovery adapter (+ optional sparse).
+    Int2Echo {
+        group_size: usize,
+        hadamard_block: usize,
+        echo_rank: usize,
+        sparse_fraction: f64,
+    },
+    /// PROJECT RESONANCE Flagship (`QMR-300` → `QMR-150`): Two-pass streaming behavior-aware
+    /// `MAP-B` sub-3-bit allocation strictly enforcing the complete serialized artifact BPP budget.
+    ResonanceMapB {
+        profile: ResonanceProfile,
+        include_vq: bool,
+        include_echo: bool,
+        behavior_weights: BehaviorImportanceMap,
+    },
+    /// PROJECT EVENT HORIZON: Behavior-guided selective layer protection — quantizes base layers
+    /// in `INT4_SYM (Q4_0)` while protecting high-drift layers (e.g., Layer 31) in `INT8_SYM`.
+    BehaviorProtected {
+        base_group_size: usize,
+        protected_layers: Vec<usize>,
     },
 }
 
@@ -139,6 +186,48 @@ impl TransformStrategy {
                 assumptions: "Grassmannian subspace affinity gating: RMQ on correlated clusters, Q4_0/INT8 fallback on uncorrelated layers",
                 deterministic: true,
                 maturity: "experimental-proposal",
+            },
+            Self::Int3Hadamard { .. } => TransformDescriptor {
+                name: "int3_hadamard",
+                assumptions: "3-bit asymmetric groupwise quantization with deterministic blockwise Walsh-Hadamard incoherence",
+                deterministic: true,
+                maturity: "sub-3bit-baseline",
+            },
+            Self::Int2Hadamard { .. } => TransformDescriptor {
+                name: "int2_hadamard",
+                assumptions: "2-bit clipped asymmetric groupwise quantization with deterministic Walsh-Hadamard incoherence",
+                deterministic: true,
+                maturity: "sub-3bit-baseline",
+            },
+            Self::TernaryHadamard { .. } => TransformDescriptor {
+                name: "ternary_hadamard",
+                assumptions: "5-trit/byte base-3 Lloyd-Max ternary quantization (~1.725 bpp) with Walsh-Hadamard incoherence",
+                deterministic: true,
+                maturity: "experimental-sub-3bit",
+            },
+            Self::VectorQuant { .. } => TransformDescriptor {
+                name: "vector_quant",
+                assumptions: "Deterministic k-means++ 1/2-stage Residual Vector Quantization with FP16 codebooks & Hadamard",
+                deterministic: true,
+                maturity: "experimental-sub-3bit",
+            },
+            Self::Int2Echo { .. } => TransformDescriptor {
+                name: "int2_echo",
+                assumptions: "PROJECT ECHO: 2-bit Hadamard base + compact INT8 low-rank SVD recovery adapter",
+                deterministic: true,
+                maturity: "experimental-sub-3bit",
+            },
+            Self::ResonanceMapB { profile, .. } => TransformDescriptor {
+                name: profile.code(),
+                assumptions: "PROJECT RESONANCE MAP-B: behavior-aware heterogeneous sub-3-bit allocation enforcing complete artifact BPP",
+                deterministic: true,
+                maturity: "experimental-resonance",
+            },
+            Self::BehaviorProtected { .. } => TransformDescriptor {
+                name: "behavior_protected",
+                assumptions: "Q-Behavior selective layer protection: INT8_SYM on high-drift layers, Q4_0 on remaining layers",
+                deterministic: true,
+                maturity: "experimental-event-horizon",
             },
         }
     }
@@ -375,7 +464,13 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
         | TransformStrategy::Int8Sym { .. }
         | TransformStrategy::Int4Sym { .. }
         | TransformStrategy::Int4Asym { .. }
-        | TransformStrategy::LowRankSvd { .. } => {
+        | TransformStrategy::LowRankSvd { .. }
+        | TransformStrategy::Int3Hadamard { .. }
+        | TransformStrategy::Int2Hadamard { .. }
+        | TransformStrategy::TernaryHadamard { .. }
+        | TransformStrategy::VectorQuant { .. }
+        | TransformStrategy::Int2Echo { .. }
+        | TransformStrategy::BehaviorProtected { .. } => {
             for (idx, info) in matrix_infos.iter().enumerate() {
                 control.check_cancelled()?;
                 let mat = file.read_tensor_matrix(&info.name, budget)?;
@@ -446,6 +541,116 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             ev.relative_frobenius_error,
                             ev.mean_matvec_rel_error,
                         )
+                    }
+                    TransformStrategy::Int3Hadamard {
+                        group_size,
+                        hadamard_block,
+                    } => {
+                        let had = HadamardSpec::new(
+                            *hadamard_block,
+                            seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
+                        );
+                        let op = Int3AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
+                        builder.add_int3_asym(info.name.clone(), &op)?;
+                        (op.method_name().to_owned(), mv, mv)
+                    }
+                    TransformStrategy::Int2Hadamard {
+                        group_size,
+                        hadamard_block,
+                    } => {
+                        let had = HadamardSpec::new(
+                            *hadamard_block,
+                            seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
+                        );
+                        let op = Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
+                        builder.add_int2_asym(info.name.clone(), &op)?;
+                        (op.method_name().to_owned(), mv, mv)
+                    }
+                    TransformStrategy::TernaryHadamard {
+                        group_size,
+                        hadamard_block,
+                    } => {
+                        let had = HadamardSpec::new(
+                            *hadamard_block,
+                            seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
+                        );
+                        let op = TernaryPackedMatrix::quantize(&mat, *group_size, had)?;
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
+                        builder.add_ternary_packed(info.name.clone(), &op)?;
+                        (op.method_name().to_owned(), mv, mv)
+                    }
+                    TransformStrategy::VectorQuant {
+                        subvec_dim,
+                        codebook_size,
+                        num_stages,
+                        group_size,
+                        hadamard_block,
+                    } => {
+                        let had = HadamardSpec::new(
+                            *hadamard_block,
+                            seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
+                        );
+                        let op = VectorQuantMatrix::fit(
+                            &mat,
+                            *subvec_dim,
+                            *codebook_size,
+                            *num_stages,
+                            *group_size,
+                            had,
+                            seed.wrapping_add(idx as u64),
+                        )?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_vector_quant(info.name.clone(), &op)?;
+                        (
+                            op.method_name().to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::Int2Echo {
+                        group_size,
+                        hadamard_block,
+                        echo_rank,
+                        sparse_fraction,
+                    } => {
+                        let had = HadamardSpec::new(
+                            *hadamard_block,
+                            seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
+                        );
+                        let base = Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                        let op = EchoCorrectedMatrix::fit(
+                            &mat,
+                            EchoBaseOperator::Int2Asym(base),
+                            *echo_rank,
+                            *sparse_fraction,
+                            seed.wrapping_add(idx as u64),
+                        )?;
+                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        builder.add_echo_corrected(info.name.clone(), &op)?;
+                        (
+                            op.method_name().to_owned(),
+                            ev.relative_frobenius_error,
+                            ev.mean_matvec_rel_error,
+                        )
+                    }
+                    TransformStrategy::BehaviorProtected {
+                        base_group_size,
+                        protected_layers,
+                    } => {
+                        let (layer_opt, _) = classify_tensor_name(&info.name);
+                        if layer_opt.is_some_and(|l| protected_layers.contains(&l)) {
+                            let op = Int8SymMatrix::quantize(&mat, 64)?;
+                            let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
+                            builder.add_int8_sym(info.name.clone(), &op)?;
+                            ("QMF_INT8_SYM_PROTECTED".to_owned(), mv, mv)
+                        } else {
+                            let op = Int4SymGroupMatrix::quantize(&mat, *base_group_size)?;
+                            let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
+                            builder.add_int4_sym(info.name.clone(), &op)?;
+                            ("QMF_INT4_SYM".to_owned(), mv, mv)
+                        }
                     }
                     _ => unreachable!(),
                 };
@@ -900,6 +1105,177 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
             builder.insert_metadata("fallback_clusters", fallback_clusters.to_string());
             builder.insert_metadata("affinity_threshold", format!("{affinity_threshold:.4}"));
         }
+        TransformStrategy::ResonanceMapB {
+            profile,
+            include_vq,
+            include_echo,
+            behavior_weights,
+        } => {
+            if !matrix_infos.is_empty() {
+                let max_layer = matrix_infos
+                    .iter()
+                    .filter_map(|i| classify_tensor_name(&i.name).0)
+                    .max()
+                    .map_or(1, |m| m + 1);
+
+                // Estimate fixed overhead: 1D vector payloads + QMF header/manifest/CRC reserve
+                let vec_bytes: usize = vector_infos
+                    .iter()
+                    .map(|v| (v.shape.iter().copied().product::<u64>() as usize).saturating_mul(4))
+                    .sum();
+                let manifest_reserve = matrix_infos.len() * 320 + vector_infos.len() * 140 + 4096;
+                let fixed_overhead = vec_bytes.saturating_add(manifest_reserve);
+
+                // Pass 1 (constant-memory streaming): profile each 2D matrix across sub-3-bit menu
+                let mut profiles = Vec::with_capacity(matrix_infos.len());
+                for (idx, info) in matrix_infos.iter().enumerate() {
+                    control.check_cancelled()?;
+                    control.report(
+                        processed_tensors,
+                        total_tensors,
+                        &format!("{} MAP-B pass 1/2: {}", profile.code(), info.name),
+                    );
+                    let mat = file.read_tensor_matrix(&info.name, budget)?;
+                    let (layer_idx, _) = classify_tensor_name(&info.name);
+                    let bw = behavior_weights.weight_for_tensor(&info.name, layer_idx, max_layer);
+                    profiles.push(profile_tensor_for_resonance(
+                        &info.name,
+                        idx,
+                        &mat,
+                        bw,
+                        *include_vq,
+                        *include_echo,
+                        seed,
+                    )?);
+                }
+
+                let plan = allocate_resonance_map_b(
+                    &profiles,
+                    *profile,
+                    fixed_overhead,
+                    total_params as usize,
+                )?;
+                builder.insert_metadata("resonance_profile", profile.code());
+                builder.insert_metadata(
+                    "resonance_target_bpp",
+                    format!("{:.3}", plan.target_complete_bpp),
+                );
+                builder.insert_metadata(
+                    "resonance_projected_bpp",
+                    format!("{:.3}", plan.projected_complete_bpp),
+                );
+                builder.insert_metadata(
+                    "resonance_budget_satisfied",
+                    plan.budget_satisfied.to_string(),
+                );
+
+                // Pass 2 (constant-memory streaming): encode each tensor ONLY with its MAP-B winner
+                for (idx, alloc) in plan.allocations.iter().enumerate() {
+                    control.check_cancelled()?;
+                    let name = &matrix_infos[idx].name;
+                    let mat = file.read_tensor_matrix(name, budget)?;
+                    let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                    let rep_name = match alloc.selected.kind {
+                        ResonanceCandidateKind::VqD8Hadamard => {
+                            let cb_k = if mat.rows() > 8192 || mat.cols() > 8192 {
+                                64
+                            } else {
+                                256
+                            };
+                            let op = VectorQuantMatrix::fit(
+                                &mat,
+                                8,
+                                cb_k,
+                                1,
+                                64,
+                                had,
+                                seed + idx as u64,
+                            )?;
+                            builder.add_vector_quant(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::TernaryHadamardG128 => {
+                            let op = TernaryPackedMatrix::quantize(&mat, 128, had)?;
+                            builder.add_ternary_packed(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::TernaryHadamardG64 => {
+                            let op = TernaryPackedMatrix::quantize(&mat, 64, had)?;
+                            builder.add_ternary_packed(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::TernaryEchoR8 => {
+                            let base = TernaryPackedMatrix::quantize(&mat, 128, had)?;
+                            let op = EchoCorrectedMatrix::fit(
+                                &mat,
+                                EchoBaseOperator::Ternary(base),
+                                8,
+                                0.0,
+                                seed + idx as u64,
+                            )?;
+                            builder.add_echo_corrected(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int2HadamardG128 => {
+                            let op = Int2AsymGroupMatrix::quantize(&mat, 128, had)?;
+                            builder.add_int2_asym(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int2HadamardG64 => {
+                            let op = Int2AsymGroupMatrix::quantize(&mat, 64, had)?;
+                            builder.add_int2_asym(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int2EchoR8 => {
+                            let base = Int2AsymGroupMatrix::quantize(&mat, 128, had)?;
+                            let op = EchoCorrectedMatrix::fit(
+                                &mat,
+                                EchoBaseOperator::Int2Asym(base),
+                                8,
+                                0.0,
+                                seed + idx as u64,
+                            )?;
+                            builder.add_echo_corrected(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int3HadamardG128 => {
+                            let op = Int3AsymGroupMatrix::quantize(&mat, 128, had)?;
+                            builder.add_int3_asym(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int3HadamardG64 => {
+                            let op = Int3AsymGroupMatrix::quantize(&mat, 64, had)?;
+                            builder.add_int3_asym(name.clone(), &op)?;
+                            op.method_name().to_owned()
+                        }
+                        ResonanceCandidateKind::Int4SymG32 => {
+                            let op = Int4SymGroupMatrix::quantize(&mat, 32)?;
+                            builder.add_int4_sym(name.clone(), &op)?;
+                            "QMF_INT4_SYM".to_owned()
+                        }
+                        ResonanceCandidateKind::Int8SymG64 => {
+                            let op = Int8SymMatrix::quantize(&mat, 64)?;
+                            builder.add_int8_sym(name.clone(), &op)?;
+                            "QMF_INT8_SYM".to_owned()
+                        }
+                    };
+                    let rel_frob = alloc.selected.rel_frob_error;
+                    let mv_err = alloc.selected.matvec_rel_error;
+                    sum_frob += rel_frob;
+                    sum_mv += mv_err;
+                    mat_count += 1;
+                    processed_tensors += 1;
+                    control.report(processed_tensors, total_tensors, name);
+                    tensor_summaries.push(TransformedTensorSummary {
+                        name: name.clone(),
+                        shape: vec![mat.rows(), mat.cols()],
+                        representation: rep_name,
+                        relative_frobenius_error: Some(rel_frob),
+                        mean_matvec_rel_error: Some(mv_err),
+                    });
+                }
+            }
+        }
     }
 
     let archive = builder.build()?;
@@ -940,6 +1316,31 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
         tensors: tensor_summaries,
     };
     Ok((verified, report))
+}
+
+fn fast_matvec_rel_error<O: LinearOperator>(
+    original: &DenseMatrix,
+    op: &O,
+    probes: &[Vec<f64>],
+) -> Result<f64, qml_core::MatrixError> {
+    let mut sum = 0.0_f64;
+    for p in probes {
+        let expected = original.matvec(p)?;
+        let actual = op.matvec(p)?;
+        let err_norm = expected
+            .iter()
+            .zip(&actual)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f64>()
+            .sqrt();
+        let ref_norm = expected.iter().map(|a| a * a).sum::<f64>().sqrt();
+        sum += if ref_norm > 1e-15 {
+            err_norm / ref_norm
+        } else {
+            err_norm
+        };
+    }
+    Ok(sum / probes.len().max(1) as f64)
 }
 
 /// Independently compare an original Safetensors file against a QMF v1 artifact.

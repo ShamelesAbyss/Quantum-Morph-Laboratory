@@ -101,6 +101,42 @@ fn representation_summary(rep: &QmfRepresentation) -> (&'static str, u64) {
                 latent_encoding_bytes(left) + latent_encoding_bytes(right) + sp,
             )
         }
+        QmfRepresentation::Int3AsymGroup {
+            scales,
+            mins,
+            packed,
+            ..
+        } => ("INT3_HADAMARD", scales.len + mins.len + packed.len),
+        QmfRepresentation::Int2AsymGroup {
+            scales,
+            mins,
+            packed,
+            ..
+        } => ("INT2_HADAMARD", scales.len + mins.len + packed.len),
+        QmfRepresentation::TernaryPacked { scales, packed, .. } => {
+            ("TERNARY_PACKED", scales.len + packed.len)
+        }
+        QmfRepresentation::VectorQuant {
+            codebooks_f16,
+            scales,
+            codes,
+            ..
+        } => ("VECTOR_QUANT", codebooks_f16.len + scales.len + codes.len),
+        QmfRepresentation::EchoCorrected {
+            base,
+            low_rank_left,
+            low_rank_right,
+            sparse_residual,
+            ..
+        } => {
+            let (_, base_b) = representation_summary(base);
+            let lr_b = low_rank_left.as_ref().map_or(0, latent_encoding_bytes)
+                + low_rank_right.as_ref().map_or(0, latent_encoding_bytes);
+            let sp_b = sparse_residual
+                .as_ref()
+                .map_or(0, |s| s.indices.len + s.values_f16.len);
+            ("ECHO_CORRECTED", base_b + lr_b + sp_b)
+        }
     }
 }
 
@@ -2448,6 +2484,64 @@ pub fn show_system_observatory(app: &mut QmlDesktopApp, ui: &mut egui::Ui, ctx: 
             .color(TEXT_MUTED)
             .size(12.0),
         );
+    });
+
+    ui.add_space(10.0);
+
+    glass_card().show(ui, |ui| {
+        ui.label(
+            RichText::new("PROJECT RESONANCE — CONSUMER VRAM FIT MATRIX (4096 CTX, INT8 KV-CACHE)")
+                .color(AMETHYST)
+                .size(12.0)
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Total runtime VRAM estimate = Persistent compressed weights + INT8 KV-cache (4096 ctx) + 0.55 GiB scratch/overhead:")
+                .color(TEXT_MUTED)
+                .size(11.0),
+        );
+        ui.add_space(6.0);
+        egui::Grid::new("resonance_vram_fit_grid")
+            .striped(true)
+            .spacing([14.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(RichText::new("Model Scale").strong().color(CYAN));
+                for p in qml_quant::ResonanceProfile::ALL {
+                    ui.label(RichText::new(p.code()).strong().color(AMETHYST));
+                }
+                ui.end_row();
+                let specs = [
+                    ("1.7B (28L, 8 KV)", 1.7, 28usize, 8usize, 128usize),
+                    ("7B (32L, 8 KV)", 7.0, 32, 8, 128),
+                    ("14B (48L, 8 KV)", 14.0, 48, 8, 128),
+                    ("27B (46L, 8 KV)", 27.0, 46, 8, 128),
+                    ("32B (64L, 8 KV)", 32.0, 64, 8, 128),
+                ];
+                for (label, params_b, layers, kv_h, hd) in specs {
+                    ui.label(RichText::new(label).monospace().color(TEXT_PRIMARY));
+                    for p in qml_quant::ResonanceProfile::ALL {
+                        let fit = qml_quant::estimate_consumer_hardware_fit(
+                            params_b, p, layers, kv_h, hd, 4096, true,
+                        );
+                        let col = if fit.fits_6gb_vram {
+                            EMERALD
+                        } else if fit.fits_8gb_vram {
+                            CYAN
+                        } else if fit.fits_12gb_vram {
+                            AMETHYST
+                        } else {
+                            AMBER
+                        };
+                        ui.label(
+                            RichText::new(format!("{:.2} GiB", fit.total_vram_gib))
+                                .monospace()
+                                .color(col),
+                        );
+                    }
+                    ui.end_row();
+                }
+            });
     });
 
     ui.add_space(10.0);

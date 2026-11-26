@@ -7,6 +7,7 @@
 
 pub mod baselines;
 pub mod map;
+pub mod resonance;
 pub mod rmq;
 
 pub use baselines::{
@@ -16,6 +17,14 @@ pub use baselines::{
 pub use map::{
     LayerAllocation, LayerCandidate, MapAllocationReport, MapConfig, MapLayerProfile,
     allocate_adaptive_precision, allocate_from_profiles, profile_layer_for_map,
+};
+pub use resonance::{
+    BehaviorImportanceMap, ConsumerHardwareFit, EchoBaseOperator, EchoCorrectedMatrix,
+    HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix, ResonanceAllocationPlan,
+    ResonanceCandidateEval, ResonanceCandidateKind, ResonanceProfile, ResonanceTensorAllocation,
+    ResonanceTensorProfile, TernaryPackedMatrix, VectorQuantMatrix, allocate_resonance_map_b,
+    apply_hadamard_forward, apply_hadamard_inverse, estimate_consumer_hardware_fit, fwht_in_place,
+    hadamard_signs, profile_tensor_for_resonance,
 };
 pub use rmq::{
     RmqAblationReport, RmqComparisonRow, RmqResidualKind, RmqSharedBasisCluster,

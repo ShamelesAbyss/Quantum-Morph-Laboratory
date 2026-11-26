@@ -7,8 +7,9 @@
 
 use qml_core::{DenseMatrix, MatrixError};
 use qml_quant::{
-    Bf16Matrix, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix, Int8SymMatrix, LinearOperator,
-    QuantizedFactor,
+    Bf16Matrix, Fp16Matrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix,
+    Int4AsymGroupMatrix, Int4SymGroupMatrix, Int8SymMatrix, LinearOperator, QuantizedFactor,
+    TernaryPackedMatrix, apply_hadamard_forward,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -478,9 +479,160 @@ fn pack_u16_u32(vals: &[u16]) -> Vec<u32> {
     out
 }
 
+/// Direct compressed 2-bit asymmetric (`INT2_ASYM`) WGSL compute shader (4 codes/byte + interleaved f16 scale/min).
+const MATVEC_INT2_ASYM_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> packed_codes: array<u32>;
+@group(0) @binding(2) var<storage, read> scale_mins: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    let cols = dims.cols;
+    let gsize = dims.group_size;
+    let gpr = (cols + gsize - 1u) / gsize;
+    let prb = (cols + 3u) / 4u;
+    let row_byte_base = row * prb;
+    var sum: f32 = 0.0;
+    for (var g: u32 = 0u; g < gpr; g = g + 1u) {
+        let sm = unpack2x16float(scale_mins[row * gpr + g]);
+        let start = g * gsize;
+        let end = min(start + gsize, cols);
+        var qx: f32 = 0.0;
+        var xsum: f32 = 0.0;
+        for (var c: u32 = start; c < end; c = c + 1u) {
+            let b_idx = row_byte_base + (c >> 2u);
+            let word = packed_codes[b_idx >> 2u];
+            let bval = (word >> ((b_idx & 3u) * 8u)) & 0xFFu;
+            let q = f32((bval >> ((c & 3u) * 2u)) & 3u);
+            let xv = vector[c];
+            qx = qx + q * xv;
+            xsum = xsum + xv;
+        }
+        sum = sum + sm.x * qx + sm.y * xsum;
+    }
+    output[row] = sum;
+}
+"#;
+
+/// Direct compressed 3-bit asymmetric (`INT3_ASYM`) WGSL compute shader (8 codes/3 bytes + interleaved f16 scale/min).
+const MATVEC_INT3_ASYM_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> packed_codes: array<u32>;
+@group(0) @binding(2) var<storage, read> scale_mins: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+fn read_packed_byte(b_idx: u32) -> u32 {
+    let word = packed_codes[b_idx >> 2u];
+    return (word >> ((b_idx & 3u) * 8u)) & 0xFFu;
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    let cols = dims.cols;
+    let gsize = dims.group_size;
+    let gpr = (cols + gsize - 1u) / gsize;
+    let prb = ((cols + 7u) / 8u) * 3u;
+    let row_byte_base = row * prb;
+    var sum: f32 = 0.0;
+    for (var g: u32 = 0u; g < gpr; g = g + 1u) {
+        let sm = unpack2x16float(scale_mins[row * gpr + g]);
+        let start = g * gsize;
+        let end = min(start + gsize, cols);
+        var qx: f32 = 0.0;
+        var xsum: f32 = 0.0;
+        for (var c: u32 = start; c < end; c = c + 1u) {
+            let blk = c >> 3u;
+            let idx = c & 7u;
+            let b0 = row_byte_base + blk * 3u;
+            let bits = read_packed_byte(b0) | (read_packed_byte(b0 + 1u) << 8u) | (read_packed_byte(b0 + 2u) << 16u);
+            let q = f32((bits >> (idx * 3u)) & 7u);
+            let xv = vector[c];
+            qx = qx + q * xv;
+            xsum = xsum + xv;
+        }
+        sum = sum + sm.x * qx + sm.y * xsum;
+    }
+    output[row] = sum;
+}
+"#;
+
+/// Direct compressed packed base-3 ternary (`TERNARY_PACKED`, 5 trits/byte) WGSL compute shader.
+const MATVEC_TERNARY_WGSL: &str = r#"
+struct Dims {
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> dims: Dims;
+@group(0) @binding(1) var<storage, read> packed_trits: array<u32>;
+@group(0) @binding(2) var<storage, read> scales: array<u32>;
+@group(0) @binding(3) var<storage, read> vector: array<f32>;
+@group(0) @binding(4) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= dims.rows) {
+        return;
+    }
+    let cols = dims.cols;
+    let gsize = dims.group_size;
+    let gpr = (cols + gsize - 1u) / gsize;
+    let prb = (cols + 4u) / 5u;
+    let row_byte_base = row * prb;
+    var pow3 = array<u32, 5>(1u, 3u, 9u, 27u, 81u);
+    var sum: f32 = 0.0;
+    for (var g: u32 = 0u; g < gpr; g = g + 1u) {
+        let s_idx = row * gpr + g;
+        let s_pair = unpack2x16float(scales[s_idx >> 1u]);
+        let scale = select(s_pair.x, s_pair.y, (s_idx & 1u) == 1u);
+        let start = g * gsize;
+        let end = min(start + gsize, cols);
+        var acc: f32 = 0.0;
+        for (var c: u32 = start; c < end; c = c + 1u) {
+            let b_idx = row_byte_base + (c / 5u);
+            let word = packed_trits[b_idx >> 2u];
+            let bval = (word >> ((b_idx & 3u) * 8u)) & 0xFFu;
+            let d = (bval / pow3[c % 5u]) % 3u;
+            let w = f32(i32(d) - 1);
+            acc = acc + w * vector[c];
+        }
+        sum = sum + scale * acc;
+    }
+    output[row] = sum;
+}
+"#;
+
 /// Experimental WGPU compute shader engine for dense `f32` and direct compressed
-/// `FP16` / `BF16` / `INT8_SYM` / `Q4_0 (INT4_SYM)` / `Q4_1 (INT4_ASYM)` matrix-vector
-/// multiplication (zero dense weight reconstruction in VRAM) with preallocated
+/// `FP16` / `BF16` / `INT8_SYM` / `Q4_0` / `Q4_1` / `INT3_ASYM` / `INT2_ASYM` / `TERNARY_PACKED`
+/// matrix-vector multiplication (zero dense weight reconstruction in VRAM) with preallocated
 /// reusable scratch buffers for zero-allocation per-token inference.
 pub struct WgpuMatvecEngine {
     adapter_name: String,
@@ -494,6 +646,9 @@ pub struct WgpuMatvecEngine {
     pipeline_int8: wgpu::ComputePipeline,
     pipeline_q4_0: wgpu::ComputePipeline,
     pipeline_q4_1: wgpu::ComputePipeline,
+    pipeline_int3: wgpu::ComputePipeline,
+    pipeline_int2: wgpu::ComputePipeline,
+    pipeline_ternary: wgpu::ComputePipeline,
     bgl_quant: wgpu::BindGroupLayout,
     scratch_vec_buf: wgpu::Buffer,
     scratch_out_buf: wgpu::Buffer,
@@ -510,19 +665,23 @@ pub enum GpuMatrixKind {
     Int8Sym,
     Int4Sym,
     Int4Asym,
+    Int3Asym,
+    Int2Asym,
+    TernaryPacked,
 }
 
 /// Persistent compressed weight matrix stored once in GPU VRAM with a pre-bound
 /// compute `BindGroup` targeting the engine's reusable scratch buffers.
 ///
-/// Executing [`Self::matvec`] uploads only the small input vector (`cols * 4` bytes)
-/// and performs zero weight transfers, zero GPU buffer allocations, and zero bind-group
-/// allocations per token.
+/// Executing [`Self::matvec`] applies any Hadamard input pre-rotation in `O(cols log b)`,
+/// uploads only the small input vector (`cols * 4` bytes), and performs zero weight
+/// transfers, zero GPU buffer allocations, and zero bind-group allocations per token.
 pub struct PersistentGpuMatrix {
     engine: Arc<WgpuMatvecEngine>,
     kind: GpuMatrixKind,
     rows: usize,
     cols: usize,
+    hadamard: HadamardSpec,
     vram_bytes: u64,
     bind_group: wgpu::BindGroup,
     _weight_buffers: Vec<wgpu::Buffer>,
@@ -561,13 +720,27 @@ impl PersistentGpuMatrix {
             GpuMatrixKind::Int8Sym => &self.engine.pipeline_int8,
             GpuMatrixKind::Int4Sym => &self.engine.pipeline_q4_0,
             GpuMatrixKind::Int4Asym => &self.engine.pipeline_q4_1,
+            GpuMatrixKind::Int3Asym => &self.engine.pipeline_int3,
+            GpuMatrixKind::Int2Asym => &self.engine.pipeline_int2,
+            GpuMatrixKind::TernaryPacked => &self.engine.pipeline_ternary,
+        };
+        let rotated_vec;
+        let active_vec = if self.hadamard.is_enabled() {
+            rotated_vec = {
+                let mut v = vector.to_vec();
+                apply_hadamard_forward(&mut v, self.hadamard.block_size, self.hadamard.seed);
+                v
+            };
+            &rotated_vec[..]
+        } else {
+            vector
         };
         let _guard = self
             .engine
             .exec_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let vec_f32: Vec<f32> = vector.iter().map(|&v| v as f32).collect();
+        let vec_f32: Vec<f32> = active_vec.iter().map(|&v| v as f32).collect();
         self.engine.queue.write_buffer(
             &self.engine.scratch_vec_buf,
             0,
@@ -632,6 +805,18 @@ impl WgpuMatvecEngine {
         let shader_q4_1 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("qml-matvec-q4-1-wgsl"),
             source: wgpu::ShaderSource::Wgsl(MATVEC_Q4_1_WGSL.into()),
+        });
+        let shader_int3 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-int3-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_INT3_ASYM_WGSL.into()),
+        });
+        let shader_int2 = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-int2-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_INT2_ASYM_WGSL.into()),
+        });
+        let shader_ternary = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("qml-matvec-ternary-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(MATVEC_TERNARY_WGSL.into()),
         });
 
         let ro_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -739,6 +924,30 @@ impl WgpuMatvecEngine {
             compilation_options: Default::default(),
             cache: None,
         });
+        let pipeline_int3 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-int3-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_int3,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let pipeline_int2 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-int2-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_int2,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let pipeline_ternary = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("qml-matvec-ternary-pipeline"),
+            layout: Some(&pl_quant),
+            module: &shader_ternary,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         let scratch_bytes = (GPU_SCRATCH_MAX_ELEMS * std::mem::size_of::<f32>()) as u64;
         let scratch_vec_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -772,6 +981,9 @@ impl WgpuMatvecEngine {
             pipeline_int8,
             pipeline_q4_0,
             pipeline_q4_1,
+            pipeline_int3,
+            pipeline_int2,
+            pipeline_ternary,
             bgl_quant,
             scratch_vec_buf,
             scratch_out_buf,
@@ -1106,6 +1318,7 @@ impl WgpuMatvecEngine {
             kind: GpuMatrixKind::Fp32,
             rows: matrix.rows(),
             cols: matrix.cols(),
+            hadamard: HadamardSpec::NONE,
             vram_bytes: bytes.len() as u64 + std::mem::size_of::<MatvecUniforms>() as u64,
             bind_group,
             _weight_buffers: vec![uniform_buf, mat_buf],
@@ -1196,6 +1409,7 @@ impl WgpuMatvecEngine {
             kind,
             rows,
             cols,
+            hadamard: HadamardSpec::NONE,
             vram_bytes: bytes.len() as u64 + std::mem::size_of::<MatvecUniforms>() as u64,
             bind_group,
             _weight_buffers: vec![uniform_buf, mat_buf],
@@ -1309,6 +1523,7 @@ impl WgpuMatvecEngine {
             kind,
             rows,
             cols,
+            hadamard: HadamardSpec::NONE,
             vram_bytes: w_bytes.len() as u64
                 + s_bytes.len() as u64
                 + std::mem::size_of::<MatvecUniforms>() as u64,
@@ -1339,6 +1554,76 @@ impl WgpuMatvecEngine {
             &packed_nibbles,
             &packed_scale_min,
         )
+    }
+
+    /// Upload a compressed `INT3_ASYM` (+ optional Hadamard) matrix persistently to GPU VRAM (~0.41-0.44 bytes/weight).
+    pub fn upload_int3_asym(
+        self: &Arc<Self>,
+        matrix: &Int3AsymGroupMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let packed = pack_bytes_u32(matrix.packed());
+        let packed_scale_min: Vec<u32> = matrix
+            .scales_f16()
+            .iter()
+            .zip(matrix.mins_f16())
+            .map(|(&s, &m)| u32::from(s) | (u32::from(m) << 16))
+            .collect();
+        let mut p = self.upload_quantized_2buf(
+            GpuMatrixKind::Int3Asym,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed,
+            &packed_scale_min,
+        )?;
+        p.hadamard = matrix.hadamard();
+        Ok(p)
+    }
+
+    /// Upload a compressed `INT2_ASYM` (+ optional Hadamard) matrix persistently to GPU VRAM (~0.28-0.31 bytes/weight).
+    pub fn upload_int2_asym(
+        self: &Arc<Self>,
+        matrix: &Int2AsymGroupMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let packed = pack_bytes_u32(matrix.packed());
+        let packed_scale_min: Vec<u32> = matrix
+            .scales_f16()
+            .iter()
+            .zip(matrix.mins_f16())
+            .map(|(&s, &m)| u32::from(s) | (u32::from(m) << 16))
+            .collect();
+        let mut p = self.upload_quantized_2buf(
+            GpuMatrixKind::Int2Asym,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed,
+            &packed_scale_min,
+        )?;
+        p.hadamard = matrix.hadamard();
+        Ok(p)
+    }
+
+    /// Upload a packed base-3 `TERNARY_PACKED` (+ optional Hadamard) matrix persistently to GPU VRAM (~0.21-0.23 bytes/weight).
+    pub fn upload_ternary_packed(
+        self: &Arc<Self>,
+        matrix: &TernaryPackedMatrix,
+    ) -> Result<PersistentGpuMatrix, GpuComputeError> {
+        Self::check_scratch_dims(matrix.rows(), matrix.cols())?;
+        let packed = pack_bytes_u32(matrix.packed());
+        let packed_scales = pack_u16_u32(matrix.scales_f16());
+        let mut p = self.upload_quantized_2buf(
+            GpuMatrixKind::TernaryPacked,
+            matrix.rows(),
+            matrix.cols(),
+            matrix.group_size(),
+            &packed,
+            &packed_scales,
+        )?;
+        p.hadamard = matrix.hadamard();
+        Ok(p)
     }
 
     /// Upload a [`QuantizedFactor`] (used by SVD and RMQ Shared-Basis/Core latents) persistently to VRAM.
@@ -1495,12 +1780,17 @@ mod tests {
             "WGPU Q4_0 (INT4_SYM) matvec diverged from CPU: max_err={err4}"
         );
 
-        // 4. Persistent GPU-resident compressed operators (FP32, FP16, BF16, INT8, Q4_0, Q4_1)
+        // 4. Persistent GPU-resident compressed operators (FP32, FP16, BF16, INT8, Q4_0, Q4_1,
+        //    plus PROJECT RESONANCE INT3+Hadamard, INT2+Hadamard, and Ternary+Hadamard)
         //    reused across multiple input vectors with zero per-call weight uploads.
         let engine = Arc::new(engine);
         let fp16 = Fp16Matrix::quantize(&mat);
         let bf16 = Bf16Matrix::quantize(&mat);
         let q4_1 = Int4AsymGroupMatrix::quantize(&mat, 32).unwrap();
+        let had = HadamardSpec::new(64, 0xCAFE);
+        let q3_had = Int3AsymGroupMatrix::quantize(&mat, 64, had).unwrap();
+        let q2_had = Int2AsymGroupMatrix::quantize(&mat, 64, had).unwrap();
+        let tern_had = TernaryPackedMatrix::quantize(&mat, 64, had).unwrap();
 
         let p_f32 = engine.upload_f32(&mat).unwrap();
         let p_fp16 = engine.upload_fp16(&fp16).unwrap();
@@ -1508,14 +1798,19 @@ mod tests {
         let p_q8 = engine.upload_int8_sym(&q8).unwrap();
         let p_q4_0 = engine.upload_int4_sym(&q4).unwrap();
         let p_q4_1 = engine.upload_int4_asym(&q4_1).unwrap();
+        let p_q3 = engine.upload_int3_asym(&q3_had).unwrap();
+        let p_q2 = engine.upload_int2_asym(&q2_had).unwrap();
+        let p_tern = engine.upload_ternary_packed(&tern_had).unwrap();
 
         assert!(p_q4_0.vram_bytes() < p_f32.vram_bytes() / 5);
+        assert!(p_q2.vram_bytes() < p_q4_0.vram_bytes());
+        assert!(p_tern.vram_bytes() < p_q2.vram_bytes());
         assert!(p_q8.vram_bytes() < p_f32.vram_bytes() / 3);
         assert!(p_bf16.vram_bytes() <= p_f32.vram_bytes() / 2 + 64);
 
         let x2: Vec<f64> = (0..cols).map(|_| rng.next_normal()).collect();
         for probe in [&x, &x2] {
-            let checks: [(&str, Vec<f64>, Vec<f64>); 6] = [
+            let checks: [(&str, Vec<f64>, Vec<f64>); 9] = [
                 (
                     "FP32",
                     mat.matvec(probe).unwrap(),
@@ -1545,6 +1840,21 @@ mod tests {
                     "Q4_1",
                     q4_1.matvec(probe).unwrap(),
                     p_q4_1.matvec(probe).unwrap(),
+                ),
+                (
+                    "INT3_HADAMARD",
+                    q3_had.matvec(probe).unwrap(),
+                    p_q3.matvec(probe).unwrap(),
+                ),
+                (
+                    "INT2_HADAMARD",
+                    q2_had.matvec(probe).unwrap(),
+                    p_q2.matvec(probe).unwrap(),
+                ),
+                (
+                    "TERNARY_HADAMARD",
+                    tern_had.matvec(probe).unwrap(),
+                    p_tern.matvec(probe).unwrap(),
                 ),
             ];
             for (name, cpu_y, gpu_y) in checks {

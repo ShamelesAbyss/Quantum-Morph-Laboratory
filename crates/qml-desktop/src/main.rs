@@ -106,6 +106,18 @@ pub enum ForgeMethodChoice {
     Int8Sym,
     Int4Sym,
     Int4Asym,
+    Int3Hadamard,
+    Int2Hadamard,
+    TernaryHadamard,
+    VectorQuant,
+    Int2Echo,
+    Qmr300,
+    Qmr275,
+    Qmr250,
+    Qmr225,
+    Qmr200,
+    Qmr175,
+    Qmr150,
     MapAdaptive,
     RmqAffinityGated,
     RmqSharedBasis,
@@ -114,12 +126,24 @@ pub enum ForgeMethodChoice {
 }
 
 impl ForgeMethodChoice {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 22] = [
         Self::Bf16,
         Self::Fp16,
         Self::Int8Sym,
         Self::Int4Sym,
         Self::Int4Asym,
+        Self::Qmr300,
+        Self::Qmr275,
+        Self::Qmr250,
+        Self::Qmr225,
+        Self::Qmr200,
+        Self::Qmr175,
+        Self::Qmr150,
+        Self::Int3Hadamard,
+        Self::Int2Hadamard,
+        Self::Int2Echo,
+        Self::TernaryHadamard,
+        Self::VectorQuant,
         Self::MapAdaptive,
         Self::RmqAffinityGated,
         Self::RmqSharedBasis,
@@ -134,6 +158,18 @@ impl ForgeMethodChoice {
             Self::Int8Sym => "INT8 Symmetric (g64)",
             Self::Int4Sym => "INT4 Symmetric (Q4_0 g32)",
             Self::Int4Asym => "INT4 Asymmetric (Q4_1 g32)",
+            Self::Qmr300 => "QMR-300 (Resonance MAP-B <= 3.00 bpp)",
+            Self::Qmr275 => "QMR-275 (Resonance MAP-B <= 2.75 bpp)",
+            Self::Qmr250 => "QMR-250 (Resonance MAP-B <= 2.50 bpp)",
+            Self::Qmr225 => "QMR-225 (Resonance MAP-B <= 2.25 bpp)",
+            Self::Qmr200 => "QMR-200 (Resonance MAP-B <= 2.00 bpp)",
+            Self::Qmr175 => "QMR-175 (Resonance MAP-B <= 1.75 bpp)",
+            Self::Qmr150 => "QMR-150 (Resonance MAP-B <= 1.50 bpp)",
+            Self::Int3Hadamard => "INT3 + Hadamard Incoherence (~3.25 bpp)",
+            Self::Int2Hadamard => "INT2 + Hadamard Incoherence (~2.25 bpp)",
+            Self::Int2Echo => "INT2 + Hadamard + Project Echo (r=8)",
+            Self::TernaryHadamard => "Ternary Base-3 + Hadamard (~1.725 bpp)",
+            Self::VectorQuant => "Vector Quantization d=8 K=256 (~1.25 bpp)",
             Self::MapAdaptive => "MAP Adaptive Precision (Experimental)",
             Self::RmqAffinityGated => "RMQ Affinity-Gated Hybrid (Experimental)",
             Self::RmqSharedBasis => "RMQ Shared-Basis + Sparse (Experimental)",
@@ -303,7 +339,7 @@ impl QmlDesktopApp {
                 "Laboratory online — PRISM WGPU 3D Observatory ready (models opened strictly read-only)."
                     .to_owned(),
             activity_log: vec![
-                "Quantum Morph Laboratory v0.3.0 (PROJECT PRISM) initialized."
+                "Quantum Morph Laboratory v0.4.0 (PROJECT RESONANCE / EVENT HORIZON) initialized."
                     .to_owned(),
             ],
             busy_label: None,
@@ -511,6 +547,62 @@ impl QmlDesktopApp {
             ForgeMethodChoice::Int8Sym => TransformStrategy::Int8Sym { group_size: 64 },
             ForgeMethodChoice::Int4Sym => TransformStrategy::Int4Sym { group_size: 32 },
             ForgeMethodChoice::Int4Asym => TransformStrategy::Int4Asym { group_size: 32 },
+            ForgeMethodChoice::Int3Hadamard => TransformStrategy::Int3Hadamard {
+                group_size: 128,
+                hadamard_block: 64,
+            },
+            ForgeMethodChoice::Int2Hadamard => TransformStrategy::Int2Hadamard {
+                group_size: 128,
+                hadamard_block: 64,
+            },
+            ForgeMethodChoice::TernaryHadamard => TransformStrategy::TernaryHadamard {
+                group_size: 128,
+                hadamard_block: 64,
+            },
+            ForgeMethodChoice::VectorQuant => TransformStrategy::VectorQuant {
+                subvec_dim: 8,
+                codebook_size: 256,
+                num_stages: 1,
+                group_size: 64,
+                hadamard_block: 64,
+            },
+            ForgeMethodChoice::Int2Echo => TransformStrategy::Int2Echo {
+                group_size: 128,
+                hadamard_block: 64,
+                echo_rank: 8,
+                sparse_fraction: 0.0,
+            },
+            ForgeMethodChoice::Qmr300
+            | ForgeMethodChoice::Qmr275
+            | ForgeMethodChoice::Qmr250
+            | ForgeMethodChoice::Qmr225
+            | ForgeMethodChoice::Qmr200
+            | ForgeMethodChoice::Qmr175
+            | ForgeMethodChoice::Qmr150 => {
+                let profile = match self.forge_method {
+                    ForgeMethodChoice::Qmr300 => qml_quant::ResonanceProfile::Qmr300,
+                    ForgeMethodChoice::Qmr275 => qml_quant::ResonanceProfile::Qmr275,
+                    ForgeMethodChoice::Qmr250 => qml_quant::ResonanceProfile::Qmr250,
+                    ForgeMethodChoice::Qmr225 => qml_quant::ResonanceProfile::Qmr225,
+                    ForgeMethodChoice::Qmr200 => qml_quant::ResonanceProfile::Qmr200,
+                    ForgeMethodChoice::Qmr175 => qml_quant::ResonanceProfile::Qmr175,
+                    _ => qml_quant::ResonanceProfile::Qmr150,
+                };
+                let mut behavior_weights = qml_quant::BehaviorImportanceMap::default_priors();
+                if let Some(ref b_rep) = self.behavior_report {
+                    behavior_weights.layer_multipliers =
+                        qml_behavior::derive_layer_importance_multipliers(b_rep);
+                }
+                TransformStrategy::ResonanceMapB {
+                    profile,
+                    include_vq: matches!(
+                        profile,
+                        qml_quant::ResonanceProfile::Qmr175 | qml_quant::ResonanceProfile::Qmr150
+                    ),
+                    include_echo: true,
+                    behavior_weights,
+                }
+            }
             ForgeMethodChoice::MapAdaptive => TransformStrategy::MapAdaptive {
                 target_avg_bpp: self.forge_target_bpp,
                 propagation_weight: 0.35,
@@ -1528,7 +1620,7 @@ impl eframe::App for QmlDesktopApp {
                                 .size(13.5)
                                 .strong(),
                         );
-                        theme::pill_badge(ui, "v0.3.0 PRISM", theme::ULTRAVIOLET);
+                        theme::pill_badge(ui, "v0.4.0 RESONANCE", theme::ULTRAVIOLET);
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let gpu_label = self
@@ -1792,7 +1884,7 @@ fn main() -> eframe::Result<()> {
     install_crash_logger();
     append_log_line(
         "INFO",
-        "Launching qml-desktop v0.3.0 (PROJECT PRISM — WGPU 3D Renderer).",
+        "Launching qml-desktop v0.4.0 (PROJECT RESONANCE / EVENT HORIZON — WGPU 3D Renderer).",
     );
     let launch = parse_launch_options();
 

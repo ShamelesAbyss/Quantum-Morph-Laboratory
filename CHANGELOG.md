@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## `v0.4.0` — PROJECT RESONANCE & EVENT HORIZON Wave I (2026-11-26)
+
+- **Sub-3-Bit Neural Representation Engine (`qml-quant::resonance`):**
+  - Added deterministic blockwise Randomized Fast Walsh–Hadamard Transform (`fwht_in_place`, `apply_hadamard_forward`, `apply_hadamard_inverse`, `HadamardSpec`) with zero-overhead SplitMix64 sign vectors for incoherence processing.
+  - Added closed-form least-squares alternating affine refit + Gaussian sigma-clipping (`fit_affine_uniform_group`) and Rayon row parallelism for `Int3AsymGroupMatrix` (8 codes / 3 bytes), `Int2AsymGroupMatrix` (4 codes / byte), and `TernaryPackedMatrix` (5 trits / byte base-3 packing, `1.60 bpp` raw, Lloyd–Max threshold).
+  - Added `VectorQuantMatrix` (1/2-stage k-means++ Residual Vector Quantization with FP16 codebooks and zero-multiply LUT-accelerated `matvec`) and **PROJECT ECHO (`EchoCorrectedMatrix`)** pairing compact INT8 low-rank SVD adapters + optional sparse FP16 residuals with complete byte accounting.
+  - Added the complete-artifact Sub-3-Bit Research Ladder (`ResonanceProfile`: `QMR-300` through `QMR-150`), `BehaviorImportanceMap`, variance-additive scale-invariant `allocate_resonance_map_b` allocator, fast probe-only matvec scoring, and `estimate_consumer_hardware_fit` (`1.7B–32B` VRAM planner).
+- **Backward-Compatible QMF v1 Extension (`qml-format`):**
+  - Extended `QmfRepresentation`, `QmfV1Builder`, `QmfOperator` (with `decode_row`), and out-of-core `QmfFileReader` to serialize, CRC-32 verify, and execute `Int3AsymGroup`, `Int2AsymGroup`, `TernaryPacked`, `VectorQuant`, and `EchoCorrected`.
+- **9 Persistent GPU-Resident WGSL Compute Kernels (`qml-hardware` + `qml-runtime`):**
+  - Added 3 direct-compressed sub-3-bit WGSL shaders (`MATVEC_INT3_ASYM_WGSL`, `MATVEC_INT2_ASYM_WGSL`, `MATVEC_TERNARY_WGSL`) with fast input Walsh–Hadamard pre-rotation inside `PersistentGpuMatrix::matvec`, verified to `< 1e-4` against CPU reference on NVIDIA RTX 4070 and exact 3-decimal full-model parity on `SmolLM2-135M`.
+- **Q-Forge, Q-Behavior, Q-Genesis Extreme, CLI & Desktop (`qml-forge`, `qml-behavior`, `qml-genesis`, `qml-cli`, `qml-desktop`):**
+  - Added sub-3-bit strategies (`Int3Hadamard`, `Int2Hadamard`, `TernaryHadamard`, `VectorQuant`, `Int2Echo`, `ResonanceMapB`, `BehaviorProtected`) to Q-Forge, `qml morph`, and Q-Forge Studio.
+  - Added held-out 4-category **Capability Retention Suite** (`Reasoning`, `Coding`, `Knowledge`, `InstructionFollowing` + `catastrophic_failure` flag) and `derive_layer_importance_multipliers` to `qml-behavior`.
+  - Added sub-3-bit genes (`Int3Hadamard`, `Int2Hadamard`, `TernaryHadamard`, `Int2Echo`) to `qml-genesis`, `qml resonance-ladder` to `qml-cli`, and the **Consumer VRAM Fit Matrix** to `qml-desktop` System Observatory.
+- **Reproducible Real-Model Research (`exp-004`) & Evidence Audit:**
+  - Archived full `SmolLM2-135M-Instruct` and `SmolLM2-360M-Instruct` sub-3-bit ladder measurements, matched-byte Hadamard controls (`−37.9%` / `−39.5%` Mean KL and `137.5×` / `209.4×` lower perplexity inflation with zero extra bytes), positive scaling confirmation (`135M -> 360M`), and the Layer-31 selective protection study (`experiments/exp-004-event-horizon-sub3bit.toml`).
+  - Reconciled `README.md` `exp-003` metrics verbatim with `experiments/exp-003-smollm2-360m-gpu.toml` and fixed `.github/workflows/release.yml` so `workflow_dispatch` explicitly checks out `inputs.tag`.
+
+## Earlier History (`v0.1.0-alpha.1` → `v0.3.0`)
 
 - Initialized the Rust workspace with `qml-core`, `qml-format`, and `qml-cli`.
 - Added safe dense-matrix primitives and unit tests.

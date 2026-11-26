@@ -6,7 +6,10 @@ use qml_model::{
     PayloadBudget, SafetensorsFile, inspect_gguf as parse_gguf_metadata,
     inspect_safetensors as parse_safetensors_metadata,
 };
-use qml_quant::{FactorPrecision, benchmark_conventional_baselines, compare_rmq_vs_baselines};
+use qml_quant::{
+    BehaviorImportanceMap, FactorPrecision, ResonanceProfile, benchmark_conventional_baselines,
+    compare_rmq_vs_baselines,
+};
 use qml_runtime::{
     QCoreModel, TransformerConfig, evaluate_inference_fidelity,
     generate_synthetic_llama_safetensors,
@@ -40,12 +43,15 @@ COMMANDS:
     generate QMF --config C --tokenizer T --prompt P [OPTS]
                                          Run real text generation with Q-Core + BPE tokenizer
     genesis [--json] [--synthetic|PATH]  Run Q-Genesis multi-objective evolutionary representation search
+    resonance-ladder [OPTIONS]           Run Project Resonance sub-3-bit ladder (3.00 -> 1.50 bpp) & capability suite
     demo-rank1 [--output PATH]           Run the original synthetic rank-one QMF v0 demo
     help                                 Show this help text
     version                              Show the CLI version
 
 MORPH METHODS (--method):
-    fp16 | bf16 | int8 | int4 | int4-asym | svd | rmq | rmq-core | rmq-gated | map
+    fp16 | bf16 | int8 | int4 | int4-asym | int3 | int2 | int2-echo | ternary | vq |
+    qmr-300 | qmr-275 | qmr-250 | qmr-225 | qmr-200 | qmr-175 | qmr-150 |
+    svd | rmq | rmq-core | rmq-gated | map
 
 Imported model files are always opened read-only and never modified. QMF v0/v1,
 RMQ, MAP, Q-Core, and Q-Genesis are active experimental research prototypes."#;
@@ -67,6 +73,7 @@ fn main() -> ExitCode {
         Some("generate") => run_generate(args.collect()),
         Some("behavior") => run_behavior_cmd(args.collect()),
         Some("genesis") => run_genesis_cmd(args.collect()),
+        Some("resonance-ladder") => run_resonance_ladder_cmd(args.collect()),
         Some("help" | "--help" | "-h") if args.next().is_none() => {
             println!("{HELP}");
             ExitCode::SUCCESS
@@ -890,6 +897,7 @@ fn run_morph(args: Vec<String>) -> ExitCode {
     let mut rank = 8_usize;
     let mut target_bpp = 5.5_f64;
     let mut sparse_pct = 1.0_f64;
+    let mut protect_layers: Vec<usize> = Vec::new();
     let mut seed = 42_u64;
     let mut json = false;
 
@@ -929,6 +937,17 @@ fn run_morph(args: Vec<String>) -> ExitCode {
                     return ExitCode::from(2);
                 };
                 sparse_pct = v;
+                i += 2;
+            }
+            "--protect-layers" => {
+                let Some(v) = args.get(i + 1) else {
+                    return ExitCode::from(2);
+                };
+                for part in v.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    if let Ok(l) = part.parse::<usize>() {
+                        protect_layers.push(l);
+                    }
+                }
                 i += 2;
             }
             "--seed" => {
@@ -992,6 +1011,48 @@ fn run_morph(args: Vec<String>) -> ExitCode {
             propagation_weight: 0.35,
             include_svd_rank: None,
         },
+        "int3" => TransformStrategy::Int3Hadamard {
+            group_size: 128,
+            hadamard_block: 64,
+        },
+        "int2" => TransformStrategy::Int2Hadamard {
+            group_size: 128,
+            hadamard_block: 64,
+        },
+        "ternary" => TransformStrategy::TernaryHadamard {
+            group_size: 128,
+            hadamard_block: 64,
+        },
+        "vq" => TransformStrategy::VectorQuant {
+            subvec_dim: 8,
+            codebook_size: 256,
+            num_stages: 1,
+            group_size: 64,
+            hadamard_block: 64,
+        },
+        "int2-echo" => TransformStrategy::Int2Echo {
+            group_size: 128,
+            hadamard_block: 64,
+            echo_rank: rank.max(4),
+            sparse_fraction: (sparse_pct / 100.0).clamp(0.0, 0.05),
+        },
+        "q4-protect" => TransformStrategy::BehaviorProtected {
+            base_group_size: 32,
+            protected_layers: protect_layers.clone(),
+        },
+        other if ResonanceProfile::from_code(other).is_some() => {
+            let profile = ResonanceProfile::from_code(other).unwrap();
+            let mut bw = BehaviorImportanceMap::default_priors();
+            for &l in &protect_layers {
+                bw.layer_multipliers.insert(l, 8.0);
+            }
+            TransformStrategy::ResonanceMapB {
+                profile,
+                include_vq: matches!(profile, ResonanceProfile::Qmr175 | ResonanceProfile::Qmr150),
+                include_echo: true,
+                behavior_weights: bw,
+            }
+        }
         other => {
             eprintln!("unknown morph method {other:?}");
             return ExitCode::from(2);
@@ -1960,5 +2021,529 @@ fn run_behavior_cmd(args: Vec<String>) -> ExitCode {
             eprintln!("Q-Behavior comparison failed: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[derive(Serialize)]
+struct ResonanceLadderRow {
+    label: String,
+    target_bpp: Option<f64>,
+    complete_qmf_bytes: usize,
+    complete_qmf_bpp: f64,
+    vram_weight_mib: f64,
+    gpu_resident_ops: usize,
+    cpu_fallback_ops: usize,
+    eval_tok_per_sec: f64,
+    ref_perplexity: f64,
+    cand_perplexity: f64,
+    perplexity_ratio: f64,
+    mean_logit_kl: f64,
+    top1_agreement: f64,
+    final_layer_cosine: f64,
+    composite_retention_pct: f64,
+    catastrophic_failure: bool,
+    sample_output: String,
+}
+
+fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
+    let mut synthetic = false;
+    let mut model_path: Option<PathBuf> = None;
+    let mut cfg_path: Option<PathBuf> = None;
+    let mut tok_path: Option<PathBuf> = None;
+    let mut ref_qmf_path: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut backend = qml_runtime::QCoreBackend::GpuHybrid;
+    let mut profiles_arg: Option<String> = None;
+    let mut include_vq = false;
+    let mut include_echo = true;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--synthetic" => synthetic = true,
+            "--json" => json = true,
+            "--with-vq" => include_vq = true,
+            "--no-echo" => include_echo = false,
+            "--model" => {
+                i += 1;
+                model_path = args.get(i).map(PathBuf::from);
+            }
+            "--config" => {
+                i += 1;
+                cfg_path = args.get(i).map(PathBuf::from);
+            }
+            "--tokenizer" => {
+                i += 1;
+                tok_path = args.get(i).map(PathBuf::from);
+            }
+            "--ref-qmf" => {
+                i += 1;
+                ref_qmf_path = args.get(i).map(PathBuf::from);
+            }
+            "--out-dir" => {
+                i += 1;
+                out_dir = args.get(i).map(PathBuf::from);
+            }
+            "--profiles" => {
+                i += 1;
+                profiles_arg = args.get(i).cloned();
+            }
+            "--backend" => {
+                i += 1;
+                if let Some("cpu") = args.get(i).map(String::as_str) {
+                    backend = qml_runtime::QCoreBackend::Cpu;
+                } else {
+                    backend = qml_runtime::QCoreBackend::GpuHybrid;
+                }
+            }
+            other => {
+                eprintln!("unknown resonance-ladder option: {other}");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+
+    let ladder_specs: Vec<(String, Option<f64>, TransformStrategy)> = if let Some(list) =
+        profiles_arg
+    {
+        let mut v = Vec::new();
+        for item in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let (lbl, tbpp, strat) = match item.to_lowercase().as_str() {
+                "int4" | "q4_0" => (
+                    "INT4_Q4_0".to_owned(),
+                    Some(4.51),
+                    TransformStrategy::Int4Sym { group_size: 32 },
+                ),
+                "int3" => (
+                    "INT3_HADAMARD".to_owned(),
+                    Some(3.25),
+                    TransformStrategy::Int3Hadamard {
+                        group_size: 128,
+                        hadamard_block: 64,
+                    },
+                ),
+                "int2" => (
+                    "INT2_HADAMARD".to_owned(),
+                    Some(2.25),
+                    TransformStrategy::Int2Hadamard {
+                        group_size: 128,
+                        hadamard_block: 64,
+                    },
+                ),
+                "int2-plain" => (
+                    "INT2_PLAIN".to_owned(),
+                    Some(2.25),
+                    TransformStrategy::Int2Hadamard {
+                        group_size: 128,
+                        hadamard_block: 0,
+                    },
+                ),
+                "int2-echo" => (
+                    "INT2_ECHO_R8".to_owned(),
+                    Some(2.60),
+                    TransformStrategy::Int2Echo {
+                        group_size: 128,
+                        hadamard_block: 64,
+                        echo_rank: 8,
+                        sparse_fraction: 0.0,
+                    },
+                ),
+                "ternary" => (
+                    "TERNARY_HADAMARD".to_owned(),
+                    Some(1.73),
+                    TransformStrategy::TernaryHadamard {
+                        group_size: 128,
+                        hadamard_block: 64,
+                    },
+                ),
+                "vq" => (
+                    "VQ_D8_HADAMARD".to_owned(),
+                    Some(1.25),
+                    TransformStrategy::VectorQuant {
+                        subvec_dim: 8,
+                        codebook_size: 256,
+                        num_stages: 1,
+                        group_size: 64,
+                        hadamard_block: 64,
+                    },
+                ),
+                code if ResonanceProfile::from_code(code).is_some() => {
+                    let p = ResonanceProfile::from_code(code).unwrap();
+                    (
+                        p.code().to_owned(),
+                        Some(p.target_bpp()),
+                        TransformStrategy::ResonanceMapB {
+                            profile: p,
+                            include_vq: include_vq
+                                || matches!(p, ResonanceProfile::Qmr175 | ResonanceProfile::Qmr150),
+                            include_echo,
+                            behavior_weights: BehaviorImportanceMap::default_priors(),
+                        },
+                    )
+                }
+                other => {
+                    eprintln!("unknown ladder item: {other}");
+                    return ExitCode::from(2);
+                }
+            };
+            v.push((lbl, tbpp, strat));
+        }
+        v
+    } else {
+        let mut v = vec![
+            (
+                "INT4_Q4_0".to_owned(),
+                Some(4.51),
+                TransformStrategy::Int4Sym { group_size: 32 },
+            ),
+            (
+                "INT3_HADAMARD".to_owned(),
+                Some(3.25),
+                TransformStrategy::Int3Hadamard {
+                    group_size: 128,
+                    hadamard_block: 64,
+                },
+            ),
+        ];
+        for p in ResonanceProfile::ALL {
+            v.push((
+                p.code().to_owned(),
+                Some(p.target_bpp()),
+                TransformStrategy::ResonanceMapB {
+                    profile: p,
+                    include_vq: include_vq
+                        || matches!(p, ResonanceProfile::Qmr175 | ResonanceProfile::Qmr150),
+                    include_echo,
+                    behavior_weights: BehaviorImportanceMap::default_priors(),
+                },
+            ));
+        }
+        v
+    };
+
+    if synthetic || model_path.is_none() {
+        let cfg = TransformerConfig {
+            vocab_size: 64,
+            hidden_size: 64,
+            intermediate_size: 128,
+            num_layers: 4,
+            num_heads: 4,
+            num_kv_heads: 2,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            max_seq_len: 64,
+            tie_word_embeddings: false,
+        };
+        let bytes = generate_synthetic_llama_safetensors(&cfg, 6, 2026).unwrap();
+        let budget = PayloadBudget::default();
+        let (ref_qmf, _) = forge_safetensors_to_qmf(
+            Cursor::new(&bytes),
+            "synth",
+            "MIT",
+            "llama",
+            &TransformStrategy::Fp16,
+            &budget,
+            42,
+        )
+        .unwrap();
+        let ref_model = QCoreModel::from_qmf(&ref_qmf, cfg.clone()).unwrap();
+        let examples = vec![
+            qml_behavior::CapabilityExample {
+                category: qml_behavior::CapabilityCategory::Reasoning,
+                label: "synth-reasoning".to_owned(),
+                tokens: vec![1, 5, 11, 19, 27, 33, 41, 49, 55, 61],
+            },
+            qml_behavior::CapabilityExample {
+                category: qml_behavior::CapabilityCategory::Coding,
+                label: "synth-coding".to_owned(),
+                tokens: vec![2, 8, 14, 22, 30, 38, 46, 54, 60, 4],
+            },
+        ];
+        let mut rows = Vec::new();
+        for (label, target_bpp, strat) in ladder_specs {
+            let (cand_qmf, rep) = forge_safetensors_to_qmf(
+                Cursor::new(&bytes),
+                "synth",
+                "MIT",
+                "llama",
+                &strat,
+                &budget,
+                42,
+            )
+            .unwrap();
+            let cand_model = QCoreModel::from_qmf(&cand_qmf, cfg.clone()).unwrap();
+            let t0 = std::time::Instant::now();
+            let suite = qml_behavior::evaluate_capability_suite(&ref_model, &cand_model, &examples)
+                .unwrap();
+            let dt = t0.elapsed().as_secs_f64().max(1e-6);
+            let n_tok: usize = suite.categories.iter().map(|c| c.token_count).sum();
+            rows.push(ResonanceLadderRow {
+                label,
+                target_bpp,
+                complete_qmf_bytes: rep.qmf_serialized_bytes,
+                complete_qmf_bpp: rep.effective_qmf_bpp,
+                vram_weight_mib: cand_model.backend_stats().vram_weight_bytes as f64 / 1_048_576.0,
+                gpu_resident_ops: cand_model.backend_stats().gpu_resident_operators,
+                cpu_fallback_ops: cand_model.backend_stats().cpu_fallback_operators,
+                eval_tok_per_sec: n_tok as f64 / dt,
+                ref_perplexity: suite.overall_ref_perplexity,
+                cand_perplexity: suite.overall_cand_perplexity,
+                perplexity_ratio: suite.overall_perplexity_ratio,
+                mean_logit_kl: suite.overall_mean_kl,
+                top1_agreement: suite.overall_top1_agreement,
+                final_layer_cosine: suite.overall_final_cosine,
+                composite_retention_pct: suite.composite_retention_pct,
+                catastrophic_failure: suite.catastrophic_failure,
+                sample_output: String::new(),
+            });
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&rows).unwrap());
+        } else {
+            print_resonance_ladder_table(&rows);
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let (Some(model_p), Some(cfg_p), Some(tok_p)) = (model_path, cfg_path, tok_path) else {
+        eprintln!(
+            "usage: qml resonance-ladder --model M.safetensors --config config.json --tokenizer tokenizer.json [--ref-qmf REF.qmf] [--out-dir DIR] [--profiles ...] [--backend gpu|cpu] [--json]"
+        );
+        return ExitCode::from(2);
+    };
+    let cfg = match fs::read(&cfg_p)
+        .map_err(|e| e.to_string())
+        .and_then(|b| TransformerConfig::from_hf_config_bytes(&b).map_err(|e| e.to_string()))
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("config error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tok = match BpeTokenizer::from_file(&tok_p) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("tokenizer error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Held-out 4-category capability evaluation prompts (identical across every representation)
+    let raw_prompts = [
+        (
+            qml_behavior::CapabilityCategory::Reasoning,
+            "reasoning",
+            "If a train travels 180 kilometers in 3 hours and then 120 kilometers in 2 hours, what is its average speed for the whole trip? Step by step: total distance is 300 km and total time is 5 hours, so average speed is 60 km/h.",
+        ),
+        (
+            qml_behavior::CapabilityCategory::Coding,
+            "coding",
+            "fn fibonacci(n: u64) -> u64 { let (mut a, mut b) = (0, 1); for _ in 0..n { let next = a + b; a = b; b = next; } a }",
+        ),
+        (
+            qml_behavior::CapabilityCategory::Knowledge,
+            "knowledge",
+            "Singular value decomposition factors any real matrix into orthogonal basis matrices and non-negative singular values ordered by descending magnitude.",
+        ),
+        (
+            qml_behavior::CapabilityCategory::InstructionFollowing,
+            "instruction",
+            "List three benefits of running local neural models in Rust: 1. Complete data privacy. 2. Memory safety without garbage collection pauses. 3. Direct hardware efficiency.",
+        ),
+    ];
+    let examples: Vec<qml_behavior::CapabilityExample> = raw_prompts
+        .iter()
+        .map(|(cat, lbl, text)| qml_behavior::CapabilityExample {
+            category: *cat,
+            label: (*lbl).to_owned(),
+            tokens: tok.encode(text).into_iter().map(|id| id as usize).collect(),
+        })
+        .collect();
+    let sample_prompt = tok.format_chat_prompt(
+        Some("You are a concise assistant."),
+        "Explain binary search in one sentence.",
+    );
+    let sample_ids: Vec<usize> = tok
+        .encode(&sample_prompt)
+        .into_iter()
+        .map(|id| id as usize)
+        .collect();
+
+    let budget = PayloadBudget::default();
+    let ref_model = if let Some(ref_p) = ref_qmf_path {
+        let f = match File::open(&ref_p) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("failed opening ref QMF {}: {e}", ref_p.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut r = match QmfFileReader::open(f, &QmfBudget::default()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("invalid ref QMF: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        match QCoreModel::from_qmf_reader_with_backend(&mut r, cfg.clone(), backend) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("failed loading ref model: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        let f = File::open(&model_p).expect("open model");
+        let (ref_qmf, _) = forge_safetensors_to_qmf(
+            f,
+            "ref",
+            "see-source",
+            "llama",
+            &TransformStrategy::Bf16,
+            &budget,
+            42,
+        )
+        .expect("forge bf16 ref");
+        QCoreModel::from_qmf_with_backend(&ref_qmf, cfg.clone(), backend).expect("load ref")
+    };
+
+    let mut rows = Vec::new();
+    for (label, target_bpp, strat) in ladder_specs {
+        let f = match File::open(&model_p) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("failed opening {}: {e}", model_p.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let (cand_qmf, rep) = match forge_safetensors_to_qmf(
+            f,
+            &label,
+            "see-source-model-license",
+            "llama",
+            &strat,
+            &budget,
+            42,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("forge {label} failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Some(ref dir) = out_dir {
+            let out_file = dir.join(format!("{}.qmf", label.to_lowercase()));
+            let _ = cand_qmf.write_to_file_atomic(&out_file, Some(&model_p), &QmfBudget::default());
+        }
+        let cand_model = match QCoreModel::from_qmf_with_backend(&cand_qmf, cfg.clone(), backend) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("load {label} failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let t0 = std::time::Instant::now();
+        let suite =
+            match qml_behavior::evaluate_capability_suite(&ref_model, &cand_model, &examples) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("eval {label} failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+        let dt = t0.elapsed().as_secs_f64().max(1e-6);
+        let n_tok: usize = suite.categories.iter().map(|c| c.token_count).sum();
+
+        let gen_new: Vec<u32> = cand_model
+            .generate(&sample_ids, 20, 0.0, 42)
+            .map(|res| {
+                res.generated_tokens
+                    .into_iter()
+                    .map(|id| id as u32)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sample_text = tok.decode(&gen_new, true).replace(['\r', '\n'], " ");
+
+        let row = ResonanceLadderRow {
+            label,
+            target_bpp,
+            complete_qmf_bytes: rep.qmf_serialized_bytes,
+            complete_qmf_bpp: rep.effective_qmf_bpp,
+            vram_weight_mib: cand_model.backend_stats().vram_weight_bytes as f64 / 1_048_576.0,
+            gpu_resident_ops: cand_model.backend_stats().gpu_resident_operators,
+            cpu_fallback_ops: cand_model.backend_stats().cpu_fallback_operators,
+            eval_tok_per_sec: n_tok as f64 / dt,
+            ref_perplexity: suite.overall_ref_perplexity,
+            cand_perplexity: suite.overall_cand_perplexity,
+            perplexity_ratio: suite.overall_perplexity_ratio,
+            mean_logit_kl: suite.overall_mean_kl,
+            top1_agreement: suite.overall_top1_agreement,
+            final_layer_cosine: suite.overall_final_cosine,
+            composite_retention_pct: suite.composite_retention_pct,
+            catastrophic_failure: suite.catastrophic_failure,
+            sample_output: sample_text,
+        };
+        if !json {
+            eprintln!(
+                "  [done] {:<16} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Ret={:>5.1}% | {:.1} tok/s | {:?}",
+                row.label,
+                row.complete_qmf_bpp,
+                row.vram_weight_mib,
+                row.mean_logit_kl,
+                row.perplexity_ratio,
+                row.top1_agreement * 100.0,
+                row.composite_retention_pct,
+                row.eval_tok_per_sec,
+                row.sample_output
+            );
+        }
+        rows.push(row);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows).unwrap());
+    } else {
+        print_resonance_ladder_table(&rows);
+    }
+    ExitCode::SUCCESS
+}
+
+fn print_resonance_ladder_table(rows: &[ResonanceLadderRow]) {
+    println!("PROJECT RESONANCE — Sub-3-Bit Complete-Artifact Benchmark Ladder");
+    println!(
+        "{:<16} {:>7} {:>9} {:>7} {:>7} {:>7} {:>6} {:>6} {:>7} {:>6}",
+        "Profile",
+        "Eff BPP",
+        "VRAM MiB",
+        "Tok/s",
+        "PPLx",
+        "MeanKL",
+        "Top-1",
+        "Cos",
+        "Ret%",
+        "Status"
+    );
+    for r in rows {
+        println!(
+            "{:<16} {:>7.3} {:>9.1} {:>7.1} {:>7.2} {:>7.3} {:>5.1}% {:>6.3} {:>6.1}% {:>6}",
+            r.label,
+            r.complete_qmf_bpp,
+            r.vram_weight_mib,
+            r.eval_tok_per_sec,
+            r.perplexity_ratio,
+            r.mean_logit_kl,
+            r.top1_agreement * 100.0,
+            r.final_layer_cosine,
+            r.composite_retention_pct,
+            if r.catastrophic_failure {
+                "CLIFF"
+            } else {
+                "OK"
+            }
+        );
     }
 }

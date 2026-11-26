@@ -12,9 +12,10 @@ use crate::{Crc32, QMF_CHECKSUM_BYTES, QMF_MAGIC, QmfError, crc32};
 use qml_core::{DenseMatrix, MatrixError, Sha256};
 use qml_quant::baselines::{QuantizedFactor, SparseResidual};
 use qml_quant::{
-    Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
+    Bf16Matrix, EchoBaseOperator, EchoCorrectedMatrix, FactorPrecision, Fp16Matrix, HadamardSpec,
+    Int2AsymGroupMatrix, Int3AsymGroupMatrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
     Int8SymMatrix, LinearOperator, LowRankSvdMatrix, RmqSharedBasisCluster, RmqSharedCoreCluster,
-    StorageBreakdown,
+    StorageBreakdown, TernaryPackedMatrix, VectorQuantMatrix,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -162,6 +163,53 @@ pub enum QmfRepresentation {
         rank: usize,
         left: SharedLatentEncoding,
         right: SharedLatentEncoding,
+        sparse_residual: Option<SparseResidualDesc>,
+    },
+    /// PROJECT RESONANCE: 3-bit asymmetric groupwise quantization with optional Hadamard rotation.
+    Int3AsymGroup {
+        group_size: usize,
+        hadamard_block: usize,
+        hadamard_seed: u64,
+        scales: BlobRef,
+        mins: BlobRef,
+        packed: BlobRef,
+    },
+    /// PROJECT RESONANCE: 2-bit asymmetric groupwise quantization with optional Hadamard rotation.
+    Int2AsymGroup {
+        group_size: usize,
+        hadamard_block: usize,
+        hadamard_seed: u64,
+        scales: BlobRef,
+        mins: BlobRef,
+        packed: BlobRef,
+    },
+    /// PROJECT RESONANCE: Packed base-3 ternary (5 trits/byte, 1.60 bpp raw) + optional Hadamard.
+    TernaryPacked {
+        group_size: usize,
+        hadamard_block: usize,
+        hadamard_seed: u64,
+        scales: BlobRef,
+        packed: BlobRef,
+    },
+    /// PROJECT RESONANCE: Learned 1- or 2-stage Residual Vector Quantization + optional Hadamard.
+    VectorQuant {
+        subvec_dim: usize,
+        codebook_size: usize,
+        num_stages: usize,
+        group_size: usize,
+        hadamard_block: usize,
+        hadamard_seed: u64,
+        codebooks_f16: BlobRef,
+        scales: BlobRef,
+        codes: BlobRef,
+    },
+    /// PROJECT ECHO: Compact low-rank INT8 adapter and/or sparse FP16 outlier recovery wrapped
+    /// around any sub-3-bit base representation.
+    EchoCorrected {
+        base: Box<QmfRepresentation>,
+        low_rank_r: usize,
+        low_rank_left: Option<SharedLatentEncoding>,
+        low_rank_right: Option<SharedLatentEncoding>,
         sparse_residual: Option<SparseResidualDesc>,
     },
 }
@@ -593,6 +641,186 @@ impl QmfV1Builder {
         Ok(())
     }
 
+    fn encode_u16_slice(&mut self, values: &[u16]) -> BlobRef {
+        let mut raw = Vec::with_capacity(values.len() * 2);
+        for &v in values {
+            raw.extend_from_slice(&v.to_le_bytes());
+        }
+        self.append_blob(&raw)
+    }
+
+    fn encode_echo_base(&mut self, base: &EchoBaseOperator) -> QmfRepresentation {
+        match base {
+            EchoBaseOperator::Int3Asym(mat) => QmfRepresentation::Int3AsymGroup {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales: self.encode_u16_slice(mat.scales_f16()),
+                mins: self.encode_u16_slice(mat.mins_f16()),
+                packed: self.append_blob(mat.packed()),
+            },
+            EchoBaseOperator::Int2Asym(mat) => QmfRepresentation::Int2AsymGroup {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales: self.encode_u16_slice(mat.scales_f16()),
+                mins: self.encode_u16_slice(mat.mins_f16()),
+                packed: self.append_blob(mat.packed()),
+            },
+            EchoBaseOperator::Ternary(mat) => QmfRepresentation::TernaryPacked {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales: self.encode_u16_slice(mat.scales_f16()),
+                packed: self.append_blob(mat.packed()),
+            },
+            EchoBaseOperator::VectorQuant(mat) => QmfRepresentation::VectorQuant {
+                subvec_dim: mat.subvec_dim(),
+                codebook_size: mat.codebook_size(),
+                num_stages: mat.num_stages(),
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                codebooks_f16: self.encode_u16_slice(mat.codebooks_f16()),
+                scales: self.encode_u16_slice(mat.scales_f16()),
+                codes: self.append_blob(mat.codes()),
+            },
+        }
+    }
+
+    pub fn add_int3_asym(
+        &mut self,
+        name: impl Into<String>,
+        mat: &Int3AsymGroupMatrix,
+    ) -> Result<(), QmfError> {
+        let name = name.into();
+        self.check_unique_tensor(&name)?;
+        let scales = self.encode_u16_slice(mat.scales_f16());
+        let mins = self.encode_u16_slice(mat.mins_f16());
+        let packed = self.append_blob(mat.packed());
+        self.manifest.tensors.push(QmfTensorEntry {
+            name,
+            shape: vec![mat.rows(), mat.cols()],
+            representation: QmfRepresentation::Int3AsymGroup {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales,
+                mins,
+                packed,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn add_int2_asym(
+        &mut self,
+        name: impl Into<String>,
+        mat: &Int2AsymGroupMatrix,
+    ) -> Result<(), QmfError> {
+        let name = name.into();
+        self.check_unique_tensor(&name)?;
+        let scales = self.encode_u16_slice(mat.scales_f16());
+        let mins = self.encode_u16_slice(mat.mins_f16());
+        let packed = self.append_blob(mat.packed());
+        self.manifest.tensors.push(QmfTensorEntry {
+            name,
+            shape: vec![mat.rows(), mat.cols()],
+            representation: QmfRepresentation::Int2AsymGroup {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales,
+                mins,
+                packed,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn add_ternary_packed(
+        &mut self,
+        name: impl Into<String>,
+        mat: &TernaryPackedMatrix,
+    ) -> Result<(), QmfError> {
+        let name = name.into();
+        self.check_unique_tensor(&name)?;
+        let scales = self.encode_u16_slice(mat.scales_f16());
+        let packed = self.append_blob(mat.packed());
+        self.manifest.tensors.push(QmfTensorEntry {
+            name,
+            shape: vec![mat.rows(), mat.cols()],
+            representation: QmfRepresentation::TernaryPacked {
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                scales,
+                packed,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn add_vector_quant(
+        &mut self,
+        name: impl Into<String>,
+        mat: &VectorQuantMatrix,
+    ) -> Result<(), QmfError> {
+        let name = name.into();
+        self.check_unique_tensor(&name)?;
+        let codebooks_f16 = self.encode_u16_slice(mat.codebooks_f16());
+        let scales = self.encode_u16_slice(mat.scales_f16());
+        let codes = self.append_blob(mat.codes());
+        self.manifest.tensors.push(QmfTensorEntry {
+            name,
+            shape: vec![mat.rows(), mat.cols()],
+            representation: QmfRepresentation::VectorQuant {
+                subvec_dim: mat.subvec_dim(),
+                codebook_size: mat.codebook_size(),
+                num_stages: mat.num_stages(),
+                group_size: mat.group_size(),
+                hadamard_block: mat.hadamard().block_size,
+                hadamard_seed: mat.hadamard().seed,
+                codebooks_f16,
+                scales,
+                codes,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn add_echo_corrected(
+        &mut self,
+        name: impl Into<String>,
+        mat: &EchoCorrectedMatrix,
+    ) -> Result<(), QmfError> {
+        let name = name.into();
+        self.check_unique_tensor(&name)?;
+        let base_rep = self.encode_echo_base(mat.base());
+        let (low_rank_r, low_rank_left, low_rank_right) = if let Some(lr) = mat.low_rank_adapter() {
+            (
+                lr.rank(),
+                Some(self.encode_factor(lr.left())),
+                Some(self.encode_factor(lr.right())),
+            )
+        } else {
+            (0, None, None)
+        };
+        let sparse_residual = mat.sparse_residual().and_then(|sp| self.encode_sparse(sp));
+        self.manifest.tensors.push(QmfTensorEntry {
+            name,
+            shape: vec![mat.rows(), mat.cols()],
+            representation: QmfRepresentation::EchoCorrected {
+                base: Box::new(base_rep),
+                low_rank_r,
+                low_rank_left,
+                low_rank_right,
+                sparse_residual,
+            },
+        });
+        Ok(())
+    }
+
     pub fn build(mut self) -> Result<QmfArchiveV1, QmfError> {
         self.manifest.shared_latents.sort_by(|a, b| a.id.cmp(&b.id));
         self.manifest.tensors.sort_by(|a, b| a.name.cmp(&b.name));
@@ -634,6 +862,11 @@ pub enum QmfOperator {
         right: QuantizedFactor,
         sparse_residual: Option<SparseResidual>,
     },
+    Int3Asym(Int3AsymGroupMatrix),
+    Int2Asym(Int2AsymGroupMatrix),
+    TernaryPacked(TernaryPackedMatrix),
+    VectorQuant(VectorQuantMatrix),
+    EchoCorrected(EchoCorrectedMatrix),
 }
 
 impl QmfOperator {
@@ -657,6 +890,11 @@ impl QmfOperator {
             Self::Int8Sym(m) => m.decode_row(row),
             Self::Int4Sym(m) => m.decode_row(row),
             Self::Int4Asym(m) => m.decode_row(row),
+            Self::Int3Asym(m) => m.decode_row(row),
+            Self::Int2Asym(m) => m.decode_row(row),
+            Self::TernaryPacked(m) => m.decode_row(row),
+            Self::VectorQuant(m) => m.decode_row(row),
+            Self::EchoCorrected(m) => m.decode_row(row),
             Self::LowRankSvd(_) | Self::RmqSharedBasis { .. } | Self::RmqSharedCore { .. } => {
                 let mut basis = vec![0.0_f64; self.cols()];
                 let mut out = Vec::with_capacity(self.cols());
@@ -681,6 +919,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(_) => "QMF_INT8_SYM",
             Self::Int4Sym(_) => "QMF_INT4_SYM",
             Self::Int4Asym(_) => "QMF_INT4_ASYM",
+            Self::Int3Asym(m) => m.method_name(),
+            Self::Int2Asym(m) => m.method_name(),
+            Self::TernaryPacked(m) => m.method_name(),
+            Self::VectorQuant(m) => m.method_name(),
+            Self::EchoCorrected(m) => m.method_name(),
             Self::LowRankSvd(_) => "QMF_SVD",
             Self::RmqSharedBasis {
                 sparse_residual: Some(_),
@@ -709,6 +952,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(m) => m.rows(),
             Self::Int4Sym(m) => m.rows(),
             Self::Int4Asym(m) => m.rows(),
+            Self::Int3Asym(m) => m.rows(),
+            Self::Int2Asym(m) => m.rows(),
+            Self::TernaryPacked(m) => m.rows(),
+            Self::VectorQuant(m) => m.rows(),
+            Self::EchoCorrected(m) => m.rows(),
             Self::LowRankSvd(m) => m.rows(),
             Self::RmqSharedBasis { rows, .. } | Self::RmqSharedCore { rows, .. } => *rows,
         }
@@ -722,6 +970,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(m) => m.cols(),
             Self::Int4Sym(m) => m.cols(),
             Self::Int4Asym(m) => m.cols(),
+            Self::Int3Asym(m) => m.cols(),
+            Self::Int2Asym(m) => m.cols(),
+            Self::TernaryPacked(m) => m.cols(),
+            Self::VectorQuant(m) => m.cols(),
+            Self::EchoCorrected(m) => m.cols(),
             Self::LowRankSvd(m) => m.cols(),
             Self::RmqSharedBasis { cols, .. } | Self::RmqSharedCore { cols, .. } => *cols,
         }
@@ -735,6 +988,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(m) => m.matvec(vector),
             Self::Int4Sym(m) => m.matvec(vector),
             Self::Int4Asym(m) => m.matvec(vector),
+            Self::Int3Asym(m) => m.matvec(vector),
+            Self::Int2Asym(m) => m.matvec(vector),
+            Self::TernaryPacked(m) => m.matvec(vector),
+            Self::VectorQuant(m) => m.matvec(vector),
+            Self::EchoCorrected(m) => m.matvec(vector),
             Self::LowRankSvd(m) => m.matvec(vector),
             Self::RmqSharedBasis {
                 u_shared,
@@ -777,6 +1035,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(m) => m.reconstruct_dense(),
             Self::Int4Sym(m) => m.reconstruct_dense(),
             Self::Int4Asym(m) => m.reconstruct_dense(),
+            Self::Int3Asym(m) => m.reconstruct_dense(),
+            Self::Int2Asym(m) => m.reconstruct_dense(),
+            Self::TernaryPacked(m) => m.reconstruct_dense(),
+            Self::VectorQuant(m) => m.reconstruct_dense(),
+            Self::EchoCorrected(m) => m.reconstruct_dense(),
             Self::LowRankSvd(m) => m.reconstruct_dense(),
             Self::RmqSharedBasis {
                 u_shared,
@@ -832,6 +1095,11 @@ impl LinearOperator for QmfOperator {
             Self::Int8Sym(m) => m.storage_breakdown(),
             Self::Int4Sym(m) => m.storage_breakdown(),
             Self::Int4Asym(m) => m.storage_breakdown(),
+            Self::Int3Asym(m) => m.storage_breakdown(),
+            Self::Int2Asym(m) => m.storage_breakdown(),
+            Self::TernaryPacked(m) => m.storage_breakdown(),
+            Self::VectorQuant(m) => m.storage_breakdown(),
+            Self::EchoCorrected(m) => m.storage_breakdown(),
             Self::LowRankSvd(m) => m.storage_breakdown(),
             Self::RmqSharedBasis {
                 core,
@@ -1222,7 +1490,64 @@ impl QmfArchiveV1 {
                         let _ = self.blob_slice(sp.values_f16)?;
                     }
                 }
+                rep => self.validate_resonance_rep(rep)?,
             }
+        }
+        Ok(())
+    }
+
+    fn validate_resonance_rep(&self, rep: &QmfRepresentation) -> Result<(), QmfError> {
+        match rep {
+            QmfRepresentation::Int3AsymGroup {
+                scales,
+                mins,
+                packed,
+                ..
+            }
+            | QmfRepresentation::Int2AsymGroup {
+                scales,
+                mins,
+                packed,
+                ..
+            } => {
+                let _ = self.blob_slice(*scales)?;
+                let _ = self.blob_slice(*mins)?;
+                let _ = self.blob_slice(*packed)?;
+            }
+            QmfRepresentation::TernaryPacked { scales, packed, .. } => {
+                let _ = self.blob_slice(*scales)?;
+                let _ = self.blob_slice(*packed)?;
+            }
+            QmfRepresentation::VectorQuant {
+                codebooks_f16,
+                scales,
+                codes,
+                ..
+            } => {
+                let _ = self.blob_slice(*codebooks_f16)?;
+                let _ = self.blob_slice(*scales)?;
+                let _ = self.blob_slice(*codes)?;
+            }
+            QmfRepresentation::EchoCorrected {
+                base,
+                low_rank_left,
+                low_rank_right,
+                sparse_residual,
+                ..
+            } => {
+                self.validate_resonance_rep(base)?;
+                if let Some(l) = low_rank_left {
+                    self.validate_latent_encoding(l)?;
+                }
+                if let Some(r) = low_rank_right {
+                    self.validate_latent_encoding(r)?;
+                }
+                if let Some(sp) = sparse_residual {
+                    let _ = self.blob_slice(sp.indices)?;
+                    let _ = self.blob_slice(sp.values_f16)?;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1477,6 +1802,184 @@ impl QmfArchiveV1 {
                     sparse_residual: sparse,
                 })
             }
+            QmfRepresentation::Int3AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(QmfOperator::Int3Asym(Int3AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                decode_u16_vec(self.blob_slice(*mins)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::Int2AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(QmfOperator::Int2Asym(Int2AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                decode_u16_vec(self.blob_slice(*mins)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::TernaryPacked {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                packed,
+            } => Ok(QmfOperator::TernaryPacked(TernaryPackedMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::VectorQuant {
+                subvec_dim,
+                codebook_size,
+                num_stages,
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                codebooks_f16,
+                scales,
+                codes,
+            } => Ok(QmfOperator::VectorQuant(VectorQuantMatrix::from_raw(
+                rows,
+                cols,
+                *subvec_dim,
+                *codebook_size,
+                *num_stages,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*codebooks_f16)?)?,
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                self.blob_slice(*codes)?.to_vec(),
+            )?)),
+            QmfRepresentation::EchoCorrected {
+                base,
+                low_rank_r,
+                low_rank_left,
+                low_rank_right,
+                sparse_residual,
+            } => {
+                let base_op = self.decode_echo_base(rows, cols, base)?;
+                let lr = match (low_rank_left, low_rank_right) {
+                    (Some(l), Some(r)) if *low_rank_r > 0 => {
+                        let lf = self.decode_factor(rows, *low_rank_r, l)?;
+                        let rf = self.decode_factor(*low_rank_r, cols, r)?;
+                        Some(LowRankSvdMatrix::from_factors(lf, rf)?)
+                    }
+                    _ => None,
+                };
+                let sparse = match sparse_residual {
+                    Some(desc) => Some(SparseResidual::from_parts(
+                        rows,
+                        cols,
+                        decode_u32_vec(self.blob_slice(desc.indices)?)?,
+                        decode_u16_vec(self.blob_slice(desc.values_f16)?)?,
+                    )?),
+                    None => None,
+                };
+                Ok(QmfOperator::EchoCorrected(EchoCorrectedMatrix::from_parts(
+                    base_op, lr, sparse,
+                )))
+            }
+        }
+    }
+
+    fn decode_echo_base(
+        &self,
+        rows: usize,
+        cols: usize,
+        rep: &QmfRepresentation,
+    ) -> Result<EchoBaseOperator, QmfError> {
+        match rep {
+            QmfRepresentation::Int3AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(EchoBaseOperator::Int3Asym(Int3AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                decode_u16_vec(self.blob_slice(*mins)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::Int2AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(EchoBaseOperator::Int2Asym(Int2AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                decode_u16_vec(self.blob_slice(*mins)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::TernaryPacked {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                packed,
+            } => Ok(EchoBaseOperator::Ternary(TernaryPackedMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                self.blob_slice(*packed)?.to_vec(),
+            )?)),
+            QmfRepresentation::VectorQuant {
+                subvec_dim,
+                codebook_size,
+                num_stages,
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                codebooks_f16,
+                scales,
+                codes,
+            } => Ok(EchoBaseOperator::VectorQuant(VectorQuantMatrix::from_raw(
+                rows,
+                cols,
+                *subvec_dim,
+                *codebook_size,
+                *num_stages,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(self.blob_slice(*codebooks_f16)?)?,
+                decode_u16_vec(self.blob_slice(*scales)?)?,
+                self.blob_slice(*codes)?.to_vec(),
+            )?)),
+            _ => Err(QmfError::InvalidManifest(
+                "unsupported base representation inside EchoCorrected".to_owned(),
+            )),
         }
     }
 }
@@ -1827,6 +2330,184 @@ impl<R: Read + Seek> QmfFileReader<R> {
                     sparse_residual: sparse,
                 })
             }
+            QmfRepresentation::Int3AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(QmfOperator::Int3Asym(Int3AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                decode_u16_vec(&self.read_blob(*mins)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::Int2AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(QmfOperator::Int2Asym(Int2AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                decode_u16_vec(&self.read_blob(*mins)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::TernaryPacked {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                packed,
+            } => Ok(QmfOperator::TernaryPacked(TernaryPackedMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::VectorQuant {
+                subvec_dim,
+                codebook_size,
+                num_stages,
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                codebooks_f16,
+                scales,
+                codes,
+            } => Ok(QmfOperator::VectorQuant(VectorQuantMatrix::from_raw(
+                rows,
+                cols,
+                *subvec_dim,
+                *codebook_size,
+                *num_stages,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*codebooks_f16)?)?,
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                self.read_blob(*codes)?,
+            )?)),
+            QmfRepresentation::EchoCorrected {
+                base,
+                low_rank_r,
+                low_rank_left,
+                low_rank_right,
+                sparse_residual,
+            } => {
+                let base_op = self.read_echo_base(rows, cols, base)?;
+                let lr = match (low_rank_left, low_rank_right) {
+                    (Some(l), Some(r)) if *low_rank_r > 0 => {
+                        let lf = self.decode_factor(rows, *low_rank_r, l)?;
+                        let rf = self.decode_factor(*low_rank_r, cols, r)?;
+                        Some(LowRankSvdMatrix::from_factors(lf, rf)?)
+                    }
+                    _ => None,
+                };
+                let sparse = match sparse_residual {
+                    Some(desc) => Some(SparseResidual::from_parts(
+                        rows,
+                        cols,
+                        decode_u32_vec(&self.read_blob(desc.indices)?)?,
+                        decode_u16_vec(&self.read_blob(desc.values_f16)?)?,
+                    )?),
+                    None => None,
+                };
+                Ok(QmfOperator::EchoCorrected(EchoCorrectedMatrix::from_parts(
+                    base_op, lr, sparse,
+                )))
+            }
+        }
+    }
+
+    fn read_echo_base(
+        &mut self,
+        rows: usize,
+        cols: usize,
+        rep: &QmfRepresentation,
+    ) -> Result<EchoBaseOperator, QmfError> {
+        match rep {
+            QmfRepresentation::Int3AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(EchoBaseOperator::Int3Asym(Int3AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                decode_u16_vec(&self.read_blob(*mins)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::Int2AsymGroup {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                mins,
+                packed,
+            } => Ok(EchoBaseOperator::Int2Asym(Int2AsymGroupMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                decode_u16_vec(&self.read_blob(*mins)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::TernaryPacked {
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                scales,
+                packed,
+            } => Ok(EchoBaseOperator::Ternary(TernaryPackedMatrix::from_raw(
+                rows,
+                cols,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                self.read_blob(*packed)?,
+            )?)),
+            QmfRepresentation::VectorQuant {
+                subvec_dim,
+                codebook_size,
+                num_stages,
+                group_size,
+                hadamard_block,
+                hadamard_seed,
+                codebooks_f16,
+                scales,
+                codes,
+            } => Ok(EchoBaseOperator::VectorQuant(VectorQuantMatrix::from_raw(
+                rows,
+                cols,
+                *subvec_dim,
+                *codebook_size,
+                *num_stages,
+                *group_size,
+                HadamardSpec::new(*hadamard_block, *hadamard_seed),
+                decode_u16_vec(&self.read_blob(*codebooks_f16)?)?,
+                decode_u16_vec(&self.read_blob(*scales)?)?,
+                self.read_blob(*codes)?,
+            )?)),
+            _ => Err(QmfError::InvalidManifest(
+                "unsupported base representation inside EchoCorrected".to_owned(),
+            )),
         }
     }
 

@@ -1,3 +1,57 @@
+# v0.6.2 | PROJECT ATLAS
+
+PROJECT ATLAS adds bounded-memory QMF v1 artifact construction. It is a narrowly scoped engineering foundation, not a new compression algorithm or a large-model research result. Project Prism, GPU kernels, quantization mathematics, Q-Genesis, Q-Behavior and historical experiments are unchanged.
+
+## Architecture and compatibility
+
+The existing QmfV1Builder now shares its encoders between an in-memory payload store and an exclusively created disk payload store. Disk construction streams scalar encoding through a 64 KiB buffer and writes packed bytes in bounded chunks. Blob offsets, lengths and CRC-32 values remain identical. Shared latents are emitted once and referenced as before. The existing small-model builder and QMF v1 format remain available; no QMF v2 was introduced.
+
+Q-Forge's path-to-file pipeline now uses the disk store by default for all existing strategies and calibration. It retains a tensor or cluster for the existing quantizer, rather than retaining the complete encoded model. The final header, deterministic JSON manifest, payload and trailer stream into an AEGIS sibling stage. Complete CRC-32 and SHA-256 are incremental. The stage is reopened through the existing file reader, checked against its full-file hash and every referenced blob CRC, then published only after cancellation and all backing source files (including the shard index) are rechecked.
+
+## Independent resource controls
+
+| Limit | Default | Scope |
+|---|---:|---|
+| Artifact file | 8 GiB | Complete serialized QMF file |
+| Builder resident working memory | 256 MiB | Conservative manifest accounting plus bounded encoding/copy buffers |
+| Temporary disk | 16 GiB | Combined owned payload scratch and final sibling stage, measured in logical bytes |
+| Individual tensor allocation | 8 GiB | Decoded source tensor allocation and individual encoded blobs |
+| Manifest | 16 MiB | Serialized manifest, independently bounded |
+
+Use DiskBuildOptions and ArtifactLimits with forge_path_to_file_atomic_with_options, or the new morph flags: --scratch-dir, --max-artifact-bytes, --max-builder-memory-bytes, --max-temp-bytes, --max-tensor-bytes, --max-manifest-bytes and --overwrite. Values are explicit positive byte counts. Raising the artifact limit does not raise the memory limit. Existing reader defaults remain conservative; ArtifactLimits.reader_budget() enables explicit large-file metadata/streaming access.
+
+Default publication refuses an existing destination. The --overwrite flag explicitly authorizes replacement, while source aliases remain forbidden. Scratch files are exclusively created and owned; cleanup never sweeps a directory. Free-space preflight runs at creation, periodically during payload writing, and before final staging. Preflight is advisory, not a reservation against other processes; actual I/O failures propagate. Temporary capacity must accommodate both the payload and final artifact at their peak overlap.
+
+## Synthetic validation and measured builder storage
+
+Regression coverage checks byte-for-byte parity across 17 transformation strategies, calibrated GPTQ parity, reader/operator compatibility, shared latent reuse, exact sizes/bpp/hashes, independent resource limits, integer overflow, exhausted scratch budgets, physical free-space preflight rejection, corrupt scratch data, malformed dimensions, metadata limits, cancellation during transformation and before publication, late shard hard-link aliases, source/index protection, failed publication and owned-file cleanup. A CLI integration test checks explicit limits and overwrite authorization. Existing tests are preserved.
+
+| Synthetic encoded payload | Resident payload buffer | Encoding buffer | Conservative manifest/buffer accounting |
+|---:|---:|---:|---:|
+| 1,048,576 bytes | 0 bytes | 65,536 bytes | 151,280 bytes |
+| 33,554,432 bytes | 0 bytes | 65,536 bytes | 151,728 bytes |
+
+These are builder instrumentation measurements, not whole-process RSS measurements. The fixture holds eight tensors; only their lengths change. Borrowed fixture arrays, decoded tensors, operators, quantizer workspace and OS page cache are outside these builder storage counters. Validation results and CI links are recorded in HANDOFF.md.
+
+## Remaining memory bottlenecks and limits
+
+Individual quantizers still allocate dense tensors and workspace; RMQ can retain a cluster of dense matrices, and calibration profiles and reports occupy additional memory. The builder working-memory limit is conservative accounting for builder-owned state, not an operating-system RSS limiter. Some existing convenience readers and the CLI compare command still buffer a complete archive; use the file-backed reader with an explicit budget for large artifacts. Cancellation is cooperative between quantizer operations and within chunked encoding, copying and verification; a running numerical kernel is not preempted.
+
+No additional pretrained models were downloaded, no deleted checkpoints were restored, no large real-model transformation was run, and no historical measurements were changed. **This assignment does not scientifically validate 14B, 27B or 32B model support.** Those experiments, sampled MAP-B optimization, resumable jobs, lattice methods and architecture extensions require separate authorization.
+
+## Downloads
+
+- [Standalone Windows EXE](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe)
+- [Windows portable ZIP](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip)
+- [Linux x64 archive](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz)
+- [SHA256SUMS.txt](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/SHA256SUMS.txt)
+
+MIT licensing, historical releases and the permanent memorial dedication are preserved.
+
+## Historical release notes (measurements preserved)
+
+
+
 # v0.6.1 | PROJECT AEGIS
 
 PROJECT AEGIS is a scoped correctness and artifact-safety release. QML remains experimental research software. Project Prism's graphical renderer, mathematical algorithms, supported Llama/Qwen2 architectures and CPU/GpuHybrid/GpuFull backends are preserved.

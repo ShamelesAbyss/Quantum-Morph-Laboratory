@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.2 — PROJECT ATLAS
+
+Disk-backed QMF v1 construction shares encoders with the retained memory builder. Q-Forge streams verified artifacts with independent file, builder-memory, disk, tensor and manifest limits, configurable scratch, explicit overwrite, cancellation and repeated source/index protection. Synthetic parity/resource/cleanup tests instrument bounded builder storage. Quantizer/cluster workspace remains a memory bottleneck. No large-model scientific validation is claimed.
+
+
 ## v0.6.1 — PROJECT AEGIS
 
 Safe no-clobber/authorized artifact publication; strict untied output projections; bounded, checksummed and provenance-verified caches; composite numerical fidelity terminology. Legacy caches are preserved and require regeneration. See RELEASE_NOTES.md and HANDOFF.md.

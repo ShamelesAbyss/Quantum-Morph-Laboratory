@@ -1,5 +1,55 @@
 # Handoff
 
+## PROJECT ATLAS — v0.6.2 (local validation complete; CI/release pending)
+
+Starting checkpoint: 1c80f69477c483750dd1162f8ba68698aa918e5e. Work is exclusively on main. This owner-authorized assignment supersedes the prior AEGIS stop only for bounded-memory artifact construction, associated Q-Forge/CLI configuration, synthetic validation and v0.6.2 publication.
+
+### Implementation
+
+- QmfV1Builder retains its existing in-memory API and shares all encoder implementations with a new disk payload store. new_disk and finish_disk return a DiskArtifact. Scalar conversion streams through a fixed 64 KiB buffer; packed bytes are chunked. No complete compressed model payload is retained by the disk builder.
+- The manifest, blob offsets/lengths/CRCs, deterministic ordering, shared latent references and QMF v1 version are preserved. The legacy small-model builder remains available. Existing reader defaults remain unchanged.
+- DiskArtifact streams the complete artifact into an AEGIS sibling stage with incremental CRC-32 and SHA-256, reopens it through QmfFileReader, checks the whole-file hash and every blob without loading operators, checks cancellation and all protected source paths again, and uses AEGIS authorized/no-clobber publication.
+- ArtifactLimits separates maximum artifact file, builder resident accounting, combined owned temporary file bytes, individual tensor allocation and manifest size. Defaults: 8 GiB / 256 MiB / 16 GiB / 8 GiB / 16 MiB respectively. Explicit reader_budget enables larger file-backed reads without raising default RAM allocations.
+- DiskBuildOptions configures scratch storage. Free space is checked before construction, periodically during payload output and before final staging. It is advisory rather than a reservation; actual write failures propagate. NamedTempFile guards exclusively create and remove only owned scratch/stage files.
+- Existing forge_path_to_file_atomic now uses disk construction. forge_path_to_file_atomic_with_options adds limits and explicit overwrite authorization. ForgeControl remains authoritative for cancellation in the forge API; standalone builders use DiskBuildOptions.cancel. Decoded tensor allocation is clamped by PayloadBudget and the artifact's tensor limit. Every backing shard and the original index/input file are protected again immediately before publication.
+- Morph adds --scratch-dir, --max-artifact-bytes, --max-builder-memory-bytes, --max-temp-bytes, --max-tensor-bytes, --max-manifest-bytes and explicit --overwrite. Existing transformation strategies and calibration branches are unchanged.
+- Added QmfError cancellation/resource errors and cooperative file-integrity verification. Checked arithmetic protects lengths, offsets, serialized/temporary totals, parameter counts and allocation conversions. Bounded manifest counting and conservative reservations guard builder metadata; legacy infallible metadata insertion latches any disk-mode resource failure instead of silently publishing.
+- Normal dependencies tempfile and sysinfo are already in the workspace dependency graph; sysinfo is requested with only its disk feature for the new preflight responsibility. tempfile/serde_json test dependencies support isolated synthetic fixtures. No dependency versions were upgraded.
+- Updated README downloads, release notes, changelog, architecture and roadmap. MIT license, memorial text, Prism renderer/shaders/identity, GPU kernels, compression/research algorithms and historical experiments were preserved.
+
+### Synthetic validation and measured storage
+
+- Byte-identical memory/disk artifacts across 17 transformation strategies, plus calibrated GPTQ parity. Existing file readers and operators reproduce numerical outputs, shared latent caches reuse the same entries, and sizes, offsets, complete bpp and SHA-256 match.
+- Regression coverage includes independent resource bounds, checked overflow, physical free-space preflight rejection, logical scratch exhaustion, source allocation rejection before decoding, corrupt scratch CRCs, malformed dimensions, metadata limits, failed publication, cancellation during transformation and before publication, late aliases to a second shard, index protection, temporary file cleanup and unrelated scratch-file preservation. A CLI integration test exercises resource flags and explicit overwrite.
+- Instrumented eight-tensor fixture, 1,048,576 encoded payload bytes: resident payload buffer 0 bytes; encoding buffer 65,536 bytes; conservative manifest/buffer accounting 151,280 bytes.
+- Same eight tensor entries with longer arrays, 33,554,432 encoded payload bytes: resident payload buffer 0 bytes; encoding buffer 65,536 bytes; conservative manifest/buffer accounting 151,728 bytes.
+- These counters measure builder-owned payload/buffers and conservative metadata accounting, not process RSS. Borrowed fixture arrays, input tensors, quantizer workspace, OS page cache and other application allocations are excluded. Fixtures write only modest synthetic data; no pretrained model was downloaded or transformed.
+- cargo fmt --all -- --check: passed.
+- cargo clippy --workspace --all-targets -- -D warnings: passed.
+- cargo test --workspace: all 107 Windows tests passed, zero failures/ignored; doc-tests passed. Linux-specific coverage will be verified in CI.
+- cargo build --workspace --release: passed (45.52 seconds with the existing local dependency cache).
+- cargo deny check: advisories/bans/licenses/sources passed under the unchanged policy; existing duplicate-version warnings remain allowed.
+- Initial strict Clippy identified a cloned-reference test slice; corrected before final successful validation. Existing tests were not weakened or removed.
+
+### Remaining memory bottlenecks and limitations
+
+The 256 MiB resident limit is conservative builder-owned-state accounting (serialized manifest × 16 plus two 64 KiB I/O buffers), not an OS RSS cap. Existing quantizers still allocate full dense tensors and workspace; RMQ may retain a complete dense cluster. Calibration profiles, reports, source metadata and caller-owned operators require additional memory. Therefore this is bounded-payload-memory artifact construction, not complete end-to-end bounded-memory transformation.
+
+Temporary disk limits count logical bytes of payload scratch plus final stage, so peak overlap is approximately twice the artifact payload plus manifest/header. Existing artifacts and unrelated files are not included in that owned-space budget. Disk preflight cannot reserve space against concurrent processes. Cleanup preserves user scratch directories and unrelated files. As in AEGIS, publication assumes user-controlled ancestors rather than hostile concurrent directory replacement.
+
+Cancellation is checked between numerical operations and during bounded encoding, copying and verification; an individual running quantizer/kernel is not preempted. Some existing convenience readers and CLI compare still materialize full artifacts; file-backed APIs with explicit reader budgets are needed for larger files. Default CLI inference reader budgets remain conservative. Checksums detect corruption, not malicious producer authentication.
+
+No 14B, 27B or 32B support has been scientifically validated. No sampled MAP-B optimization, persistent/resumable scheduling, new quantizers, GPU changes, architecture extensions or new research experiments were undertaken.
+
+### Exact files changed from the ATLAS checkpoint
+
+ARCHITECTURE.md; CHANGELOG.md; Cargo.lock; Cargo.toml; HANDOFF.md; README.md; RELEASE_NOTES.md; ROADMAP.md; crates/qml-cli/Cargo.toml; crates/qml-cli/src/main.rs; crates/qml-cli/tests/atlas_cli.rs; crates/qml-forge/Cargo.toml; crates/qml-forge/src/lib.rs; crates/qml-format/Cargo.toml; crates/qml-format/src/lib.rs; crates/qml-format/src/v1.rs; crates/qml-format/src/v1/disk.rs.
+### Pending release steps
+
+Push the validated milestone, verify Windows/Linux and dependency-policy CI, publish v0.6.2 | PROJECT ATLAS as a latest public non-prerelease with all four mandatory assets, download and verify assets/checksums, update this handoff, then STOP and await further instructions.
+
+
+
 ## PROJECT AEGIS — v0.6.1 COMPLETE
 
 - Scope: artifact publication, required untied output projections, calibration/reference cache safety, terminology and release only. Do not start Wave IV or any subsequent milestone without authorization.

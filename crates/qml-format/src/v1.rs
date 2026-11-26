@@ -8,6 +8,10 @@
 //! **Status:** Experimental format; not compatibility-stable. CRC-32 checks
 //! detect accidental corruption only and do not provide cryptographic authentication.
 
+mod disk;
+pub use disk::{ArtifactLimits, BuilderMemoryStats, DiskArtifact, DiskBuildOptions};
+use disk::{COPY_BUFFER_BYTES, DiskPayload, ManifestCounter, PayloadStore};
+
 use crate::{Crc32, QMF_CHECKSUM_BYTES, QMF_MAGIC, QmfError, crc32};
 use qml_core::{DenseMatrix, MatrixError, Sha256};
 use qml_quant::baselines::{QuantizedFactor, SparseResidual};
@@ -247,9 +251,10 @@ pub struct QmfArchiveV1 {
 /// Builder that packs tensors and shared latent structures into a deterministic QMF v1 archive.
 pub struct QmfV1Builder {
     manifest: QmfManifest,
-    payload: Vec<u8>,
+    payload: PayloadStore,
     latent_ids: BTreeSet<String>,
     tensor_names: BTreeSet<String>,
+    metadata_error: Option<String>,
 }
 
 impl QmfV1Builder {
@@ -274,87 +279,265 @@ impl QmfV1Builder {
                 shared_latents: Vec::new(),
                 tensors: Vec::new(),
             },
-            payload: Vec::new(),
+            payload: PayloadStore::Memory(Vec::new()),
             latent_ids: BTreeSet::new(),
             tensor_names: BTreeSet::new(),
+            metadata_error: None,
         }
     }
 
     pub fn insert_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.manifest
-            .extra_metadata
-            .insert(key.into(), value.into());
-    }
-
-    fn append_blob(&mut self, bytes: &[u8]) -> BlobRef {
-        let offset = self.payload.len() as u64;
-        self.payload.extend_from_slice(bytes);
-        BlobRef {
-            offset,
-            len: bytes.len() as u64,
-            crc32: crc32(bytes),
+        if let Err(error) = self.try_insert_metadata(key, value) {
+            self.metadata_error = Some(error.to_string());
         }
     }
 
-    fn encode_factor(&mut self, factor: &QuantizedFactor) -> SharedLatentEncoding {
-        match factor {
+    /// Fallible metadata insertion for resource-constrained construction.
+    pub fn try_insert_metadata(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<(), QmfError> {
+        let key = key.into();
+        let value = value.into();
+        self.guard_name(&key)?;
+        self.guard_name(&value)?;
+        self.manifest.extra_metadata.insert(key, value);
+        self.checkpoint()
+    }
+
+    pub fn new_disk(
+        model_id: impl Into<String>,
+        source_format: impl Into<String>,
+        source_license: impl Into<String>,
+        architecture: impl Into<String>,
+        transformation: impl Into<String>,
+        random_seed: u64,
+        options: DiskBuildOptions,
+    ) -> Result<Self, QmfError> {
+        disk::cancelled(&options)?;
+        options.limits.check(
+            "resident encoding buffer",
+            COPY_BUFFER_BYTES as u64,
+            options.limits.max_resident_bytes,
+        )?;
+        std::fs::create_dir_all(&options.scratch_directory)?;
+        disk::disk_preflight(&options.scratch_directory, 4096)?;
+        let file = tempfile::Builder::new()
+            .prefix(".qml-payload-")
+            .tempfile_in(&options.scratch_directory)?;
+        let mut builder = Self::new(
+            model_id,
+            source_format,
+            source_license,
+            architecture,
+            transformation,
+            random_seed,
+        );
+        builder.payload = PayloadStore::Disk(Box::new(DiskPayload {
+            file,
+            options,
+            bytes: 0,
+            stats: BuilderMemoryStats::default(),
+        }));
+        builder.checkpoint()?;
+        Ok(builder)
+    }
+    fn guard_name(&self, name: &str) -> Result<(), QmfError> {
+        if let PayloadStore::Disk(d) = &self.payload {
+            let mut count = ManifestCounter {
+                bytes: 0,
+                limit: d.options.limits.max_manifest_bytes as u64,
+            };
+            serde_json::to_writer(&mut count, &self.manifest)
+                .map_err(|e| QmfError::InvalidManifest(e.to_string()))?;
+            let incoming = (name.len() as u64)
+                .checked_mul(6)
+                .and_then(|n| n.checked_add(2048))
+                .ok_or(QmfError::PayloadTooLarge)?;
+            let reserved = count
+                .bytes
+                .checked_add(incoming)
+                .ok_or(QmfError::PayloadTooLarge)?;
+            d.options.limits.check(
+                "manifest reservation",
+                reserved,
+                d.options.limits.max_manifest_bytes as u64,
+            )?;
+            let resident = reserved
+                .checked_mul(16)
+                .and_then(|n| n.checked_add((2 * COPY_BUFFER_BYTES) as u64))
+                .ok_or(QmfError::PayloadTooLarge)?;
+            d.options.limits.check(
+                "builder resident reservation",
+                resident,
+                d.options.limits.max_resident_bytes,
+            )?;
+            d.options.limits.check(
+                "manifest name",
+                name.len() as u64,
+                d.options.limits.max_manifest_bytes as u64,
+            )?;
+        }
+        Ok(())
+    }
+    /// Conservative manifest accounting (serialized bytes × 16), including strings, nodes and capacities.
+    fn checkpoint(&mut self) -> Result<(), QmfError> {
+        if let Some(error) = &self.metadata_error {
+            return Err(QmfError::InvalidManifest(error.clone()));
+        }
+        if let PayloadStore::Disk(d) = &mut self.payload {
+            disk::cancelled(&d.options)?;
+            let mut count = ManifestCounter {
+                bytes: 0,
+                limit: d.options.limits.max_manifest_bytes as u64,
+            };
+            serde_json::to_writer(&mut count, &self.manifest)
+                .map_err(|e| QmfError::InvalidManifest(e.to_string()))?;
+            let resident = count
+                .bytes
+                .checked_mul(16)
+                .and_then(|n| n.checked_add((2 * COPY_BUFFER_BYTES) as u64))
+                .ok_or(QmfError::PayloadTooLarge)?;
+            d.options.limits.check(
+                "builder resident accounting",
+                resident,
+                d.options.limits.max_resident_bytes,
+            )?;
+            d.options.limits.total_bytes(count.bytes, d.bytes)?;
+            d.stats.manifest_accounted_bytes = resident;
+        }
+        Ok(())
+    }
+    pub fn memory_stats(&self) -> Option<&BuilderMemoryStats> {
+        match &self.payload {
+            PayloadStore::Disk(d) => Some(&d.stats),
+            _ => None,
+        }
+    }
+    pub fn finish_disk(mut self) -> Result<DiskArtifact, QmfError> {
+        self.checkpoint()?;
+        self.manifest.shared_latents.sort_by(|a, b| a.id.cmp(&b.id));
+        self.manifest.tensors.sort_by(|a, b| a.name.cmp(&b.name));
+        match self.payload {
+            PayloadStore::Disk(payload) => Ok(DiskArtifact::new(self.manifest, payload)),
+            _ => Err(QmfError::InvalidManifest(
+                "memory builder requires build".into(),
+            )),
+        }
+    }
+    fn append_blob(&mut self, bytes: &[u8]) -> Result<BlobRef, QmfError> {
+        self.checkpoint()?;
+        if let PayloadStore::Disk(d) = &self.payload {
+            d.options.limits.check(
+                "individual encoded blob",
+                bytes.len() as u64,
+                d.options.limits.max_tensor_bytes,
+            )?;
+        }
+        let offset = self.payload.len();
+        let mut crc = Crc32::new();
+        for chunk in bytes.chunks(COPY_BUFFER_BYTES) {
+            self.payload.append(chunk)?;
+            crc.update(chunk);
+        }
+        Ok(BlobRef {
+            offset,
+            len: bytes.len() as u64,
+            crc32: crc.finish(),
+        })
+    }
+    fn append_words<const N: usize>(
+        &mut self,
+        words: impl ExactSizeIterator<Item = [u8; N]>,
+    ) -> Result<BlobRef, QmfError> {
+        self.checkpoint()?;
+        let bytes = words
+            .len()
+            .checked_mul(N)
+            .ok_or(QmfError::PayloadTooLarge)?;
+        if let PayloadStore::Disk(d) = &mut self.payload {
+            d.options.limits.check(
+                "individual encoded blob",
+                bytes as u64,
+                d.options.limits.max_tensor_bytes,
+            )?;
+            d.stats.peak_encoding_buffer_bytes =
+                d.stats.peak_encoding_buffer_bytes.max(COPY_BUFFER_BYTES);
+        }
+        let offset = self.payload.len();
+        let mut crc = Crc32::new();
+        let mut buffer = [0u8; COPY_BUFFER_BYTES];
+        let mut filled = 0;
+        for word in words {
+            if N > buffer.len() {
+                return Err(QmfError::PayloadTooLarge);
+            }
+            if filled + N > buffer.len() {
+                self.payload.append(&buffer[..filled])?;
+                crc.update(&buffer[..filled]);
+                filled = 0;
+            }
+            buffer[filled..filled + N].copy_from_slice(&word);
+            filled += N;
+        }
+        if filled > 0 {
+            self.payload.append(&buffer[..filled])?;
+            crc.update(&buffer[..filled]);
+        }
+        Ok(BlobRef {
+            offset,
+            len: bytes as u64,
+            crc32: crc.finish(),
+        })
+    }
+
+    fn encode_factor(
+        &mut self,
+        factor: &QuantizedFactor,
+    ) -> Result<SharedLatentEncoding, QmfError> {
+        Ok(match factor {
             QuantizedFactor::Fp32(mat) => {
-                let mut raw = Vec::with_capacity(mat.as_slice().len() * 4);
-                for &v in mat.as_slice() {
-                    raw.extend_from_slice(&(v as f32).to_le_bytes());
-                }
-                SharedLatentEncoding::Fp32 {
-                    data: self.append_blob(&raw),
-                }
+                let data =
+                    self.append_words(mat.as_slice().iter().map(|&v| (v as f32).to_le_bytes()))?;
+                SharedLatentEncoding::Fp32 { data }
             }
             QuantizedFactor::Fp16(mat) => {
-                let mut raw = Vec::with_capacity(mat.raw_bits().len() * 2);
-                for &bits in mat.raw_bits() {
-                    raw.extend_from_slice(&bits.to_le_bytes());
-                }
-                SharedLatentEncoding::Fp16 {
-                    data: self.append_blob(&raw),
-                }
+                let data = self.encode_u16_slice(mat.raw_bits())?;
+                SharedLatentEncoding::Fp16 { data }
             }
             QuantizedFactor::Int8Sym(mat) => {
-                let mut scales_raw = Vec::with_capacity(mat.scales_f16().len() * 2);
-                for &s in mat.scales_f16() {
-                    scales_raw.extend_from_slice(&s.to_le_bytes());
-                }
-                let codes_raw: Vec<u8> = mat.codes().iter().map(|&c| c as u8).collect();
-                let scales = self.append_blob(&scales_raw);
-                let codes = self.append_blob(&codes_raw);
+                let scales = self.encode_u16_slice(mat.scales_f16())?;
+                let codes = self.append_words(mat.codes().iter().map(|&c| [c as u8]))?;
+
                 SharedLatentEncoding::Int8Sym {
                     group_size: mat.group_size(),
                     scales,
                     codes,
                 }
             }
-        }
-    }
-
-    fn encode_sparse(&mut self, sp: &SparseResidual) -> Option<SparseResidualDesc> {
-        if sp.nnz() == 0 {
-            return None;
-        }
-        let mut idx_raw = Vec::with_capacity(sp.nnz() * 4);
-        for &i in sp.indices() {
-            idx_raw.extend_from_slice(&i.to_le_bytes());
-        }
-        let mut val_raw = Vec::with_capacity(sp.nnz() * 2);
-        for &v in sp.values_f16() {
-            val_raw.extend_from_slice(&v.to_le_bytes());
-        }
-        let indices = self.append_blob(&idx_raw);
-        let values_f16 = self.append_blob(&val_raw);
-        Some(SparseResidualDesc {
-            nnz: sp.nnz(),
-            indices,
-            values_f16,
         })
     }
 
+    fn encode_sparse(
+        &mut self,
+        sp: &SparseResidual,
+    ) -> Result<Option<SparseResidualDesc>, QmfError> {
+        if sp.nnz() == 0 {
+            return Ok(None);
+        }
+        let indices = self.append_words(sp.indices().iter().map(|i| i.to_le_bytes()))?;
+        let values_f16 = self.encode_u16_slice(sp.values_f16())?;
+        Ok(Some(SparseResidualDesc {
+            nnz: sp.nnz(),
+            indices,
+            values_f16,
+        }))
+    }
+
     fn check_unique_tensor(&mut self, name: &str) -> Result<(), QmfError> {
+        self.guard_name(name)?;
+        self.checkpoint()?;
         if !self.tensor_names.insert(name.to_owned()) {
             return Err(QmfError::InvalidManifest(format!(
                 "duplicate tensor name {name:?}"
@@ -371,14 +554,13 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut raw = Vec::with_capacity(values.len() * 4);
         for &v in values {
             if !v.is_finite() {
                 return Err(QmfError::Matrix(MatrixError::NonFiniteValue { index: 0 }));
             }
-            raw.extend_from_slice(&v.to_le_bytes());
         }
-        let data = self.append_blob(&raw);
+        let data = self.append_words(values.iter().map(|v| v.to_le_bytes()))?;
+
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape,
@@ -390,11 +572,8 @@ impl QmfV1Builder {
     pub fn add_fp16(&mut self, name: impl Into<String>, mat: &Fp16Matrix) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut raw = Vec::with_capacity(mat.raw_bits().len() * 2);
-        for &b in mat.raw_bits() {
-            raw.extend_from_slice(&b.to_le_bytes());
-        }
-        let data = self.append_blob(&raw);
+        let data = self.encode_u16_slice(mat.raw_bits())?;
+
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -406,11 +585,8 @@ impl QmfV1Builder {
     pub fn add_bf16(&mut self, name: impl Into<String>, mat: &Bf16Matrix) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut raw = Vec::with_capacity(mat.raw_bits().len() * 2);
-        for &b in mat.raw_bits() {
-            raw.extend_from_slice(&b.to_le_bytes());
-        }
-        let data = self.append_blob(&raw);
+        let data = self.encode_u16_slice(mat.raw_bits())?;
+
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -426,13 +602,9 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut scales_raw = Vec::with_capacity(mat.scales_f16().len() * 2);
-        for &s in mat.scales_f16() {
-            scales_raw.extend_from_slice(&s.to_le_bytes());
-        }
-        let codes_raw: Vec<u8> = mat.codes().iter().map(|&c| c as u8).collect();
-        let scales = self.append_blob(&scales_raw);
-        let codes = self.append_blob(&codes_raw);
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let codes = self.append_words(mat.codes().iter().map(|&c| [c as u8]))?;
+
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -452,12 +624,9 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut scales_raw = Vec::with_capacity(mat.scales_f16().len() * 2);
-        for &s in mat.scales_f16() {
-            scales_raw.extend_from_slice(&s.to_le_bytes());
-        }
-        let scales = self.append_blob(&scales_raw);
-        let nibbles = self.append_blob(mat.packed_nibbles());
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+
+        let nibbles = self.append_blob(mat.packed_nibbles())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -477,17 +646,10 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let mut scales_raw = Vec::with_capacity(mat.scales_f16().len() * 2);
-        for &s in mat.scales_f16() {
-            scales_raw.extend_from_slice(&s.to_le_bytes());
-        }
-        let mut mins_raw = Vec::with_capacity(mat.mins_f16().len() * 2);
-        for &m in mat.mins_f16() {
-            mins_raw.extend_from_slice(&m.to_le_bytes());
-        }
-        let scales = self.append_blob(&scales_raw);
-        let mins = self.append_blob(&mins_raw);
-        let nibbles = self.append_blob(mat.packed_nibbles());
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let mins = self.encode_u16_slice(mat.mins_f16())?;
+
+        let nibbles = self.append_blob(mat.packed_nibbles())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -508,8 +670,8 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let left = self.encode_factor(mat.left());
-        let right = self.encode_factor(mat.right());
+        let left = self.encode_factor(mat.left())?;
+        let right = self.encode_factor(mat.right())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -530,6 +692,7 @@ impl QmfV1Builder {
         layer_names: &[String],
         cluster: &RmqSharedBasisCluster,
     ) -> Result<(), QmfError> {
+        self.guard_name(cluster_id)?;
         if layer_names.len() != cluster.num_layers() {
             return Err(QmfError::InvalidManifest(
                 "layer_names length does not match RMQ cluster layer count".to_owned(),
@@ -543,8 +706,8 @@ impl QmfV1Builder {
             )));
         }
 
-        let u_enc = self.encode_factor(&cluster.u_shared);
-        let vt_enc = self.encode_factor(&cluster.vt_shared);
+        let u_enc = self.encode_factor(&cluster.u_shared)?;
+        let vt_enc = self.encode_factor(&cluster.vt_shared)?;
         self.manifest.shared_latents.push(SharedLatentEntry {
             id: u_id.clone(),
             rows: cluster.rows,
@@ -560,10 +723,10 @@ impl QmfV1Builder {
 
         for (idx, name) in layer_names.iter().enumerate() {
             self.check_unique_tensor(name)?;
-            let core_enc = self.encode_factor(&cluster.cores[idx]);
+            let core_enc = self.encode_factor(&cluster.cores[idx])?;
             let sparse_residual = match &cluster.residuals[idx] {
                 qml_quant::rmq::RmqResidual::None => None,
-                qml_quant::rmq::RmqResidual::Sparse(sp) => self.encode_sparse(sp),
+                qml_quant::rmq::RmqResidual::Sparse(sp) => self.encode_sparse(sp)?,
                 qml_quant::rmq::RmqResidual::Int4Sym(_) => {
                     return Err(QmfError::InvalidManifest(
                         "INT4 residual serialization in RMQ v1 not yet enabled".to_owned(),
@@ -594,6 +757,7 @@ impl QmfV1Builder {
         layer_names: &[String],
         cluster: &RmqSharedCoreCluster,
     ) -> Result<(), QmfError> {
+        self.guard_name(cluster_id)?;
         if layer_names.len() != cluster.left_transforms.len() {
             return Err(QmfError::InvalidManifest(
                 "layer_names length does not match RMQ shared-core cluster count".to_owned(),
@@ -605,7 +769,7 @@ impl QmfV1Builder {
                 "duplicate shared latent cluster {cluster_id:?}"
             )));
         }
-        let s_enc = self.encode_factor(&cluster.shared_core);
+        let s_enc = self.encode_factor(&cluster.shared_core)?;
         self.manifest.shared_latents.push(SharedLatentEntry {
             id: s_id.clone(),
             rows: cluster.rank,
@@ -615,11 +779,11 @@ impl QmfV1Builder {
 
         for (idx, name) in layer_names.iter().enumerate() {
             self.check_unique_tensor(name)?;
-            let left_enc = self.encode_factor(&cluster.left_transforms[idx]);
-            let right_enc = self.encode_factor(&cluster.right_transforms[idx]);
+            let left_enc = self.encode_factor(&cluster.left_transforms[idx])?;
+            let right_enc = self.encode_factor(&cluster.right_transforms[idx])?;
             let sparse_residual = match &cluster.residuals[idx] {
                 qml_quant::rmq::RmqResidual::None => None,
-                qml_quant::rmq::RmqResidual::Sparse(sp) => self.encode_sparse(sp),
+                qml_quant::rmq::RmqResidual::Sparse(sp) => self.encode_sparse(sp)?,
                 qml_quant::rmq::RmqResidual::Int4Sym(_) => {
                     return Err(QmfError::InvalidManifest(
                         "INT4 residual serialization in RMQ v1 not yet enabled".to_owned(),
@@ -641,38 +805,34 @@ impl QmfV1Builder {
         Ok(())
     }
 
-    fn encode_u16_slice(&mut self, values: &[u16]) -> BlobRef {
-        let mut raw = Vec::with_capacity(values.len() * 2);
-        for &v in values {
-            raw.extend_from_slice(&v.to_le_bytes());
-        }
-        self.append_blob(&raw)
+    fn encode_u16_slice(&mut self, values: &[u16]) -> Result<BlobRef, QmfError> {
+        self.append_words(values.iter().map(|v| v.to_le_bytes()))
     }
 
-    fn encode_echo_base(&mut self, base: &EchoBaseOperator) -> QmfRepresentation {
-        match base {
+    fn encode_echo_base(&mut self, base: &EchoBaseOperator) -> Result<QmfRepresentation, QmfError> {
+        Ok(match base {
             EchoBaseOperator::Int3Asym(mat) => QmfRepresentation::Int3AsymGroup {
                 group_size: mat.group_size(),
                 hadamard_block: mat.hadamard().block_size,
                 hadamard_seed: mat.hadamard().seed,
-                scales: self.encode_u16_slice(mat.scales_f16()),
-                mins: self.encode_u16_slice(mat.mins_f16()),
-                packed: self.append_blob(mat.packed()),
+                scales: self.encode_u16_slice(mat.scales_f16())?,
+                mins: self.encode_u16_slice(mat.mins_f16())?,
+                packed: self.append_blob(mat.packed())?,
             },
             EchoBaseOperator::Int2Asym(mat) => QmfRepresentation::Int2AsymGroup {
                 group_size: mat.group_size(),
                 hadamard_block: mat.hadamard().block_size,
                 hadamard_seed: mat.hadamard().seed,
-                scales: self.encode_u16_slice(mat.scales_f16()),
-                mins: self.encode_u16_slice(mat.mins_f16()),
-                packed: self.append_blob(mat.packed()),
+                scales: self.encode_u16_slice(mat.scales_f16())?,
+                mins: self.encode_u16_slice(mat.mins_f16())?,
+                packed: self.append_blob(mat.packed())?,
             },
             EchoBaseOperator::Ternary(mat) => QmfRepresentation::TernaryPacked {
                 group_size: mat.group_size(),
                 hadamard_block: mat.hadamard().block_size,
                 hadamard_seed: mat.hadamard().seed,
-                scales: self.encode_u16_slice(mat.scales_f16()),
-                packed: self.append_blob(mat.packed()),
+                scales: self.encode_u16_slice(mat.scales_f16())?,
+                packed: self.append_blob(mat.packed())?,
             },
             EchoBaseOperator::VectorQuant(mat) => QmfRepresentation::VectorQuant {
                 subvec_dim: mat.subvec_dim(),
@@ -681,11 +841,11 @@ impl QmfV1Builder {
                 group_size: mat.group_size(),
                 hadamard_block: mat.hadamard().block_size,
                 hadamard_seed: mat.hadamard().seed,
-                codebooks_f16: self.encode_u16_slice(mat.codebooks_f16()),
-                scales: self.encode_u16_slice(mat.scales_f16()),
-                codes: self.append_blob(mat.codes()),
+                codebooks_f16: self.encode_u16_slice(mat.codebooks_f16())?,
+                scales: self.encode_u16_slice(mat.scales_f16())?,
+                codes: self.append_blob(mat.codes())?,
             },
-        }
+        })
     }
 
     pub fn add_int3_asym(
@@ -695,9 +855,9 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let scales = self.encode_u16_slice(mat.scales_f16());
-        let mins = self.encode_u16_slice(mat.mins_f16());
-        let packed = self.append_blob(mat.packed());
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let mins = self.encode_u16_slice(mat.mins_f16())?;
+        let packed = self.append_blob(mat.packed())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -720,9 +880,9 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let scales = self.encode_u16_slice(mat.scales_f16());
-        let mins = self.encode_u16_slice(mat.mins_f16());
-        let packed = self.append_blob(mat.packed());
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let mins = self.encode_u16_slice(mat.mins_f16())?;
+        let packed = self.append_blob(mat.packed())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -745,8 +905,8 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let scales = self.encode_u16_slice(mat.scales_f16());
-        let packed = self.append_blob(mat.packed());
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let packed = self.append_blob(mat.packed())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -768,9 +928,9 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let codebooks_f16 = self.encode_u16_slice(mat.codebooks_f16());
-        let scales = self.encode_u16_slice(mat.scales_f16());
-        let codes = self.append_blob(mat.codes());
+        let codebooks_f16 = self.encode_u16_slice(mat.codebooks_f16())?;
+        let scales = self.encode_u16_slice(mat.scales_f16())?;
+        let codes = self.append_blob(mat.codes())?;
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -796,17 +956,20 @@ impl QmfV1Builder {
     ) -> Result<(), QmfError> {
         let name = name.into();
         self.check_unique_tensor(&name)?;
-        let base_rep = self.encode_echo_base(mat.base());
+        let base_rep = self.encode_echo_base(mat.base())?;
         let (low_rank_r, low_rank_left, low_rank_right) = if let Some(lr) = mat.low_rank_adapter() {
             (
                 lr.rank(),
-                Some(self.encode_factor(lr.left())),
-                Some(self.encode_factor(lr.right())),
+                Some(self.encode_factor(lr.left())?),
+                Some(self.encode_factor(lr.right())?),
             )
         } else {
             (0, None, None)
         };
-        let sparse_residual = mat.sparse_residual().and_then(|sp| self.encode_sparse(sp));
+        let sparse_residual = match mat.sparse_residual() {
+            Some(sp) => self.encode_sparse(sp)?,
+            None => None,
+        };
         self.manifest.tensors.push(QmfTensorEntry {
             name,
             shape: vec![mat.rows(), mat.cols()],
@@ -826,7 +989,14 @@ impl QmfV1Builder {
         self.manifest.tensors.sort_by(|a, b| a.name.cmp(&b.name));
         let archive = QmfArchiveV1 {
             manifest: self.manifest,
-            payload: self.payload,
+            payload: match self.payload {
+                PayloadStore::Memory(v) => v,
+                PayloadStore::Disk(_) => {
+                    return Err(QmfError::InvalidManifest(
+                        "disk builder requires finish_disk".into(),
+                    ));
+                }
+            },
         };
         archive.validate_internal()?;
         Ok(archive)
@@ -2047,6 +2217,14 @@ impl<R: Read + Seek> QmfFileReader<R> {
     /// Stream the entire file in 64 KiB chunks to verify the trailing whole-file CRC-32
     /// and return its exact FIPS 180-4 SHA-256 hex digest in O(1) RAM.
     pub fn verify_integrity_streaming(&mut self) -> Result<String, QmfError> {
+        self.verify_integrity_with_cancel(|| Ok(()))
+    }
+
+    /// Cooperative verification with the existing reader budget.
+    pub fn verify_integrity_with_cancel(
+        &mut self,
+        mut check: impl FnMut() -> Result<(), QmfError>,
+    ) -> Result<String, QmfError> {
         self.reader.seek(SeekFrom::Start(0))?;
         let data_len = self
             .file_bytes
@@ -2057,7 +2235,8 @@ impl<R: Read + Seek> QmfFileReader<R> {
         let mut buf = [0_u8; 64 * 1024];
         let mut remaining = data_len;
         while remaining > 0 {
-            let to_read = (remaining as usize).min(buf.len());
+            check()?;
+            let to_read = remaining.min(buf.len() as u64) as usize;
             self.reader.read_exact(&mut buf[..to_read])?;
             crc.update(&buf[..to_read]);
             sha.update(&buf[..to_read]);

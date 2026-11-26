@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.6.1%20PROJECT%20AEGIS-A855F7?style=for-the-badge" alt="Latest Public Release v0.6.1"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/Latest%20Release-v0.6.2%20PROJECT%20ATLAS-A855F7?style=for-the-badge" alt="Latest Public Release v0.6.2"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe"><img src="https://img.shields.io/badge/Windows-x64%20Native%20EXE-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows x64 Available"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-x64%20Tarball-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Linux x64 Available"/></a>
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ShamelesAbyss/Quantum-Morph-Laboratory/ci.yml?branch=main&style=for-the-badge&label=Rust%20CI" alt="CI Status"/></a>
   <img src="https://img.shields.io/badge/Rust-1.100%2B%20(Safe%20Only)-7C3AED?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10B981?style=for-the-badge" alt="MIT License"/></a>
@@ -19,16 +19,16 @@
 
 ---
 
-## Download Quantum Morph Laboratory (`v0.6.1` — PROJECT AEGIS)
+## Download Quantum Morph Laboratory (`v0.6.2` — PROJECT ATLAS)
 
 Launch the native desktop scientific observatory directly on your computer — **no Rust toolchain, no Python, no terminal, and no cloud account required**.
 
 <p align="center">
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.6.1%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe"><img src="https://img.shields.io/badge/Download%20Windows%20EXE-v0.6.2%20x64-06B6D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows EXE"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip"><img src="https://img.shields.io/badge/Download%20Windows%20Portable%20ZIP-GUI%20%2B%20CLI-8B5CF6?style=for-the-badge" alt="Download Windows Portable ZIP"/></a>
   &nbsp;
-  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.6.1%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
+  <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz"><img src="https://img.shields.io/badge/Download%20Linux-v0.6.2%20x64-0EA5E9?style=for-the-badge&logo=linux&logoColor=white" alt="Download Linux"/></a>
   &nbsp;
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest"><img src="https://img.shields.io/badge/View%20Latest%20Release-GitHub%20Releases-10B981?style=for-the-badge" alt="View Latest Release"/></a>
   &nbsp;
@@ -37,12 +37,24 @@ Launch the native desktop scientific observatory directly on your computer — *
 
 | Download Option | Contents | Direct Link |
 |---|---|---|
-| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe) |
-| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip) |
-| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz) |
+| **Windows Standalone EXE** | Single native Windows desktop application (`qml-desktop`) — double-click to launch | [Download `Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe) |
+| **Windows Portable ZIP** | Native desktop app + `qml.exe` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip) |
+| **Linux x64 Tarball** | Native desktop app + `qml` CLI + full docs + MIT License | [Download `Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz) |
 | **Latest Public Release & Checksums** | Full release notes, `SHA256SUMS.txt`, and all release assets | [View Latest Release (`releases/latest`)](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/latest) |
 
 ---
+
+## PROJECT ATLAS — v0.6.2
+
+Q-Forge constructs QMF v1 payloads in owned temporary disk storage instead of retaining the complete compressed model in RAM. Shared encoders preserve deterministic bytes, blob CRCs and shared latents. The final artifact is streamed, verified and checked against every source shard/index before AEGIS-safe publication.
+
+Artifact, builder memory, temporary disk, individual tensor and manifest limits are independent. The morph command accepts --scratch-dir, --max-artifact-bytes, --max-builder-memory-bytes, --max-temp-bytes, --max-tensor-bytes, --max-manifest-bytes and explicit --overwrite. Defaults are 8 GiB artifact, 256 MiB builder accounting, 16 GiB temporary disk, 8 GiB individual tensor allocation and 16 MiB manifest. Default publication refuses replacement.
+
+Synthetic instrumentation grew encoded payload from 1 MiB to 32 MiB with zero resident payload buffer, a 64 KiB encoding buffer and about 152 KiB conservative manifest/buffer accounting. These counters are not process RSS. Dense tensor/cluster quantization, calibration and other working memory remain separate bottlenecks. Temporary disk preflight is advisory; peak scratch includes both payload and final stage.
+
+**No additional models were downloaded and no large-model experiments were performed. ATLAS does not scientifically validate 14B/27B/32B support.** See [release notes](RELEASE_NOTES.md) for configuration, limits and synthetic validation.
+
+
 
 ## PROJECT AEGIS — v0.6.1
 

@@ -31,6 +31,22 @@ Every crate enforces `#![forbid(unsafe_code)]` via workspace lints. Zero Python 
 6. **Mechanistic Interpretability & Capability Retention (`qml-behavior`):** Captures layerwise cosine/L2/RSA traces, executes reversible causal interventions, and evaluates compressed models against disk-cached `ReferenceSuiteCache` (`QREF1`) logits with zero reference VRAM contention.
 7. **Evolutionary Discovery & PROJECT PRISM 3D Observatory (`qml-genesis` + `qml-desktop`):** Multi-objective NSGA-II representation discovery paired with the multi-pass WGPU 3D observatory (`Rgba16Float` HDR selective bloom, 3D ray picking, Consumer VRAM Fit Matrix).
 
+## PROJECT ATLAS artifact construction
+
+The in-memory and disk-backed QmfV1Builder stores share every encoder. Scalar encodings flush a fixed 64 KiB buffer; packed byte slices are written in bounded chunks. Only the manifest, uniqueness indexes and file/control state survive encoding. finish_disk releases uniqueness indexes and returns a DiskArtifact holding the manifest and owned scratch file. It never materializes the complete model payload as Vec<u8>.
+
+Q-Forge's path publication defaults to disk mode. Existing in-memory APIs retain their behavior. Publication streams header, deterministic JSON manifest, payload and CRC trailer to an AEGIS sibling stage, incrementally computes CRC-32/SHA-256, reopens the stage with QmfFileReader, verifies complete-file and per-blob integrity without operator decoding, rechecks cancellation and every original shard/index, then performs authorized/no-clobber publication. The format remains QMF v1.
+
+ArtifactLimits separates file bytes, builder resident accounting, combined temporary bytes, individual decoded tensor allocation and serialized manifest bytes. DiskBuildOptions selects scratch storage. ForgeControl is authoritative for forge cancellation; standalone disk builders use the options token. Individual tensor allocation is also clamped by PayloadBudget. ArtifactLimits.reader_budget() enables explicit large-file streaming while keeping default untrusted-input budgets.
+
+Resident accounting conservatively reserves serialized manifest bytes × 16 for strings, nodes/capacities and temporary reader metadata, plus two 64 KiB I/O buffers. Reservations and serialized sizes use checked arithmetic and bounded counting writers. This is a builder-owned-state budget, not an OS RSS cap. Quantizer tensors, RMQ clusters, solver workspace, calibration and reports remain outside that accounting. Complete end-to-end bounded-memory quantization is not claimed.
+
+Temporary usage is the logical payload plus final staged file at peak overlap, including when these occupy different volumes. Free space is checked before construction, periodically during encoding and before final staging; it is not reserved against concurrent writers. Actual I/O errors propagate. NamedTempFile guards clean up only owned files. Cancellation remains cooperative between numerical operations and during chunked encoding, copying and verification.
+
+Synthetic tests cover 17 strategies and calibrated GPTQ byte equality, exact offsets/sizes/hashes, shared latents, malformed artifacts, resource failures, cancellation, source aliases, cleanup and 1 MiB/32 MiB builder storage instrumentation. No 14B/27B/32B scientific support claim follows.
+
+
+
 ## PROJECT AEGIS cache and publication contracts
 
 QMF publication defaults to no replacement. Explicit authorized replacement uses safe sibling staging without destination deletion. Filesystem identities protect source aliases. QCAL2/QREF2 inside QMLCACHE2 envelopes bind CLI source/config/tokenizer/dataset identities and SHA-256 integrity. Legacy QCAL1/QREF1 files are unverified and require regeneration into a new output directory. The cache file budget is 512 MiB; decoded f64 payloads and collection overhead require additional bounded memory. Composite numerical fidelity is a perplexity/agreement score, not intelligence or benchmark capability.

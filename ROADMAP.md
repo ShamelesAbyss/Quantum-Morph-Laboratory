@@ -19,6 +19,10 @@ Status key: **Done** means implemented, tested, and verified on `main`; **Experi
 
 Scoped artifact publication, required output projection correctness, bounded provenance-checked caches and accurate numerical fidelity terminology. Later milestones require separate authorization; no Wave IV work is included.
 
+## PROJECT ATLAS (v0.6.2)
+
+Disk-backed QMF v1 construction and Q-Forge integration with independent resource limits, verified AEGIS-safe publication and synthetic validation only. This establishes construction foundations; 14B/27B/32B experiments, sampled MAP-B, persistent/resumable jobs, new quantizers and architecture support remain separate unauthorized assignments.
+
 ## Next Milestones (PROJECT EVENT HORIZON Wave IV & Beyond)
 
 - **Next — Stage E (`14B`) & Stage F (`27B–32B`) on 8 GB Consumer GPUs:** Add sampled-row fast `MAP-B` Pass 1 screening (10× faster on `7B–32B`), resumable layer-checkpointed disk streaming in Q-Forge, and benchmark `14B` (`~3.4–4.2 GiB` at `2.00–2.25 bpp`) and `27B–32B` (`~6.8–7.6 GiB` at `1.75–2.00 bpp`) live on an 8 GB RTX 4070!

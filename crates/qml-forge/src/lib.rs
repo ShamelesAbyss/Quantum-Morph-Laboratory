@@ -6,7 +6,10 @@
 //! direct-execution verification against the original weights.
 
 use qml_core::{DenseMatrix, sha256_hex, truncated_svd};
-use qml_format::{QmfArchiveV1, QmfBudget, QmfError, QmfLatentCache, QmfV1Builder};
+use qml_format::{
+    DiskArtifact, DiskBuildOptions, QmfArchiveV1, QmfError, QmfLatentCache, QmfManifest,
+    QmfV1Builder,
+};
 use qml_model::{
     PayloadBudget, PayloadError, SafetensorsFile, SafetensorsMetadata, SafetensorsSource,
 };
@@ -472,8 +475,9 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
         None,
         control,
         true,
+        None,
     )?;
-    Ok((archive, report))
+    Ok((archive.into_memory()?, report))
 }
 
 /// Transform a single `.safetensors` file, sharded `model.safetensors.index.json`, or model
@@ -492,9 +496,57 @@ pub fn forge_path_to_file_atomic(
     calibration: Option<&ModelCalibrationProfile>,
     control: &ForgeControl,
 ) -> Result<ForgeReport, ForgeError> {
+    forge_path_to_file_atomic_with_options(
+        source_path,
+        output_path,
+        model_id,
+        source_license,
+        architecture,
+        strategy,
+        budget,
+        seed,
+        calibration,
+        control,
+        &DiskBuildOptions::default(),
+        false,
+    )
+}
+
+/// Explicit artifact/scratch limits and overwrite authorization; quantizer mathematics are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn forge_path_to_file_atomic_with_options(
+    source_path: &Path,
+    output_path: &Path,
+    model_id: &str,
+    source_license: &str,
+    architecture: &str,
+    strategy: &TransformStrategy,
+    budget: &PayloadBudget,
+    seed: u64,
+    calibration: Option<&ModelCalibrationProfile>,
+    control: &ForgeControl,
+    options: &DiskBuildOptions,
+    overwrite: bool,
+) -> Result<ForgeReport, ForgeError> {
+    let mut options = options.clone();
+    options.cancel = Arc::clone(&control.cancel);
+    let mut bounded_budget = *budget;
+    bounded_budget.max_tensor_bytes = bounded_budget
+        .max_tensor_bytes
+        .min(options.limits.max_tensor_bytes);
+    let budget = &bounded_budget;
     let mut source = SafetensorsSource::open(source_path, budget)?;
-    for path in source.source_paths() {
-        qml_core::publication::validate_destination(output_path, Some(&path))
+    let mut sources = source.source_paths();
+    if source_path.is_dir() {
+        let index = source_path.join("model.safetensors.index.json");
+        if index.exists() {
+            sources.push(index);
+        }
+    } else {
+        sources.push(source_path.to_owned());
+    }
+    for path in &sources {
+        qml_core::publication::validate_destination(output_path, Some(path))
             .map_err(|e| ForgeError::Message(e.to_string()))?;
     }
     let (archive, mut report) = forge_source_internal(
@@ -508,9 +560,23 @@ pub fn forge_path_to_file_atomic(
         calibration,
         control,
         false,
+        Some(options),
     )?;
-    let (written, sha_hex) =
-        archive.write_to_file_atomic(output_path, Some(source_path), &QmfBudget::default())?;
+    control.report(
+        report.transformed_tensor_count,
+        report.transformed_tensor_count,
+        "before-publication",
+    );
+    control.check_cancelled()?;
+    for path in &sources {
+        qml_core::publication::validate_destination(output_path, Some(path))
+            .map_err(|e| ForgeError::Message(e.to_string()))?;
+    }
+    let disk = match archive {
+        ConstructionResult::Disk(d) => d,
+        _ => return Err(ForgeError::Message("expected disk artifact".into())),
+    };
+    let (written, sha_hex) = disk.publish(output_path, &sources, overwrite)?;
     report.qmf_serialized_bytes = written;
     report.qmf_sha256 = sha_hex;
     report.effective_qmf_bpp = if report.total_parameters > 0 {
@@ -520,6 +586,25 @@ pub fn forge_path_to_file_atomic(
     };
     report.compression_ratio_vs_source = report.source_file_bytes as f64 / written.max(1) as f64;
     Ok(report)
+}
+
+enum ConstructionResult {
+    Memory(QmfArchiveV1),
+    Disk(DiskArtifact),
+}
+impl ConstructionResult {
+    fn manifest(&self) -> &QmfManifest {
+        match self {
+            Self::Memory(a) => a.manifest(),
+            Self::Disk(d) => d.manifest(),
+        }
+    }
+    fn into_memory(self) -> Result<QmfArchiveV1, ForgeError> {
+        match self {
+            Self::Memory(a) => Ok(a),
+            _ => Err(ForgeError::Message("expected memory archive".into())),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -534,7 +619,8 @@ fn forge_source_internal<S: TensorStreamSource>(
     calibration: Option<&ModelCalibrationProfile>,
     control: &ForgeControl,
     in_memory_roundtrip: bool,
-) -> Result<(QmfArchiveV1, ForgeReport), ForgeError> {
+    disk_options: Option<DiskBuildOptions>,
+) -> Result<(ConstructionResult, ForgeReport), ForgeError> {
     control.check_cancelled()?;
     let start = Instant::now();
     let meta = file.metadata().clone();
@@ -542,14 +628,25 @@ fn forge_source_internal<S: TensorStreamSource>(
     let total_tensors = meta.tensors.len().max(1);
     let mut processed_tensors = 0usize;
 
-    let mut builder = QmfV1Builder::new(
-        model_id,
-        "safetensors",
-        source_license,
-        architecture,
-        descriptor.name,
-        seed,
-    );
+    let mut builder = match disk_options {
+        Some(options) => QmfV1Builder::new_disk(
+            model_id,
+            "safetensors",
+            source_license,
+            architecture,
+            descriptor.name,
+            seed,
+            options,
+        )?,
+        None => QmfV1Builder::new(
+            model_id,
+            "safetensors",
+            source_license,
+            architecture,
+            descriptor.name,
+            seed,
+        ),
+    };
     builder.insert_metadata("assumptions", descriptor.assumptions);
     builder.insert_metadata("maturity", descriptor.maturity);
     if let Some(cal) = calibration {
@@ -569,7 +666,9 @@ fn forge_source_internal<S: TensorStreamSource>(
     let mut vector_infos = Vec::new();
     for info in &meta.tensors {
         let count = qml_model::tensor_element_count(info)?;
-        total_params = total_params.saturating_add(count);
+        total_params = total_params
+            .checked_add(count)
+            .ok_or(QmfError::PayloadTooLarge)?;
         if info.shape.len() == 2 && info.shape[0] > 0 && info.shape[1] > 0 {
             matrix_infos.push(info.clone());
         } else {
@@ -1526,17 +1625,19 @@ fn forge_source_internal<S: TensorStreamSource>(
         }
     }
 
-    let archive = builder.build()?;
+    control.check_cancelled()?;
     let (verified, qmf_bytes, qmf_sha256) = if in_memory_roundtrip {
+        let archive = builder.build()?;
         let mut serialized = Vec::new();
         let qmf_bytes = archive.write_to(&mut serialized)?;
         let qmf_sha256 = sha256_hex(&serialized);
         let verified = QmfArchiveV1::from_bytes(&serialized)?;
-        (verified, qmf_bytes, qmf_sha256)
+        (ConstructionResult::Memory(verified), qmf_bytes, qmf_sha256)
     } else {
-        // Zero-duplicate-RAM path for multi-GB models written directly via `write_to_file_atomic`
-        let approx_bytes = archive.payload_bytes();
-        (archive, approx_bytes, String::new())
+        let disk = builder.finish_disk()?;
+        let bytes =
+            usize::try_from(disk.serialized_bytes()?).map_err(|_| QmfError::PayloadTooLarge)?;
+        (ConstructionResult::Disk(disk), bytes, String::new())
     };
     tensor_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -1827,5 +1928,367 @@ mod tests {
             &control,
         );
         assert!(matches!(err, Err(ForgeError::Cancelled)));
+    }
+}
+
+#[cfg(test)]
+mod atlas_tests {
+    use super::*;
+    use qml_format::QmfFileReader;
+    use std::io::Cursor;
+    fn options(dir: &Path) -> DiskBuildOptions {
+        DiskBuildOptions {
+            scratch_directory: dir.join("scratch"),
+            ..Default::default()
+        }
+    }
+    fn forge(
+        src: &Path,
+        out: &Path,
+        strategy: &TransformStrategy,
+        opts: &DiskBuildOptions,
+        control: &ForgeControl,
+        overwrite: bool,
+    ) -> Result<ForgeReport, ForgeError> {
+        forge_path_to_file_atomic_with_options(
+            src,
+            out,
+            "synthetic",
+            "MIT",
+            "test",
+            strategy,
+            &PayloadBudget::default(),
+            42,
+            None,
+            control,
+            opts,
+            overwrite,
+        )
+    }
+    #[test]
+    fn disk_forge_matches_memory_for_strategies_and_exact_accounting() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.safetensors");
+        let bytes = qml_scope::generate_synthetic_transformer_safetensors(2, 16, 32, 4, 7).unwrap();
+        std::fs::write(&source, &bytes).unwrap();
+        let strategies = [
+            TransformStrategy::Fp16,
+            TransformStrategy::Bf16,
+            TransformStrategy::Int8Sym { group_size: 16 },
+            TransformStrategy::Int4Sym { group_size: 16 },
+            TransformStrategy::Int4Asym { group_size: 16 },
+            TransformStrategy::LowRankSvd {
+                rank: 4,
+                precision: FactorPrecision::Fp16,
+            },
+            TransformStrategy::RmqSharedBasis {
+                rank: 4,
+                sparse_fraction: 0.01,
+                basis_precision: FactorPrecision::Int8Sym,
+                core_precision: FactorPrecision::Fp16,
+            },
+            TransformStrategy::RmqSharedCore {
+                rank: 4,
+                sparse_fraction: 0.01,
+                factor_precision: FactorPrecision::Int8Sym,
+            },
+            TransformStrategy::Int3Hadamard {
+                group_size: 16,
+                hadamard_block: 16,
+            },
+            TransformStrategy::Int2Hadamard {
+                group_size: 16,
+                hadamard_block: 16,
+            },
+            TransformStrategy::TernaryHadamard {
+                group_size: 16,
+                hadamard_block: 16,
+            },
+            TransformStrategy::VectorQuant {
+                subvec_dim: 4,
+                codebook_size: 8,
+                num_stages: 1,
+                group_size: 16,
+                hadamard_block: 16,
+            },
+            TransformStrategy::Int2Echo {
+                group_size: 16,
+                hadamard_block: 16,
+                echo_rank: 4,
+                sparse_fraction: 0.01,
+            },
+            TransformStrategy::MapAdaptive {
+                target_avg_bpp: 5.5,
+                propagation_weight: 0.35,
+                include_svd_rank: None,
+            },
+            TransformStrategy::BehaviorProtected {
+                base_group_size: 16,
+                protected_layers: vec![0],
+            },
+            TransformStrategy::ResonanceMapB {
+                profile: ResonanceProfile::Qmr300,
+                include_vq: true,
+                include_echo: true,
+                behavior_weights: BehaviorImportanceMap::default_priors(),
+            },
+            TransformStrategy::RmqAffinityGated {
+                rank: 4,
+                affinity_threshold: 0.25,
+                sparse_fraction: 0.01,
+                fallback_group_size: 16,
+            },
+        ];
+        for (i, strategy) in strategies.iter().enumerate() {
+            let (memory, _) = forge_safetensors_to_qmf(
+                Cursor::new(&bytes),
+                "synthetic",
+                "MIT",
+                "test",
+                strategy,
+                &PayloadBudget::default(),
+                42,
+            )
+            .unwrap();
+            let mut expected = Vec::new();
+            memory.write_to(&mut expected).unwrap();
+            let out = dir.path().join(format!("{i}.qmf"));
+            let report = forge(
+                &source,
+                &out,
+                strategy,
+                &options(dir.path()),
+                &ForgeControl::default(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read(&out).unwrap(),
+                expected,
+                "{}",
+                strategy.descriptor().name
+            );
+            assert_eq!(report.qmf_serialized_bytes, expected.len());
+            assert_eq!(report.qmf_sha256, qml_core::sha256_hex(&expected));
+            assert_eq!(
+                report.effective_qmf_bpp,
+                expected.len() as f64 * 8.0 / report.total_parameters as f64
+            );
+            let mut reader = QmfFileReader::open(
+                std::fs::File::open(out).unwrap(),
+                &qml_format::QmfBudget::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                reader.verify_integrity_streaming().unwrap(),
+                report.qmf_sha256
+            );
+        }
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read_dir(options(dir.path()).scratch_directory)
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn cancellation_during_transform_and_before_publication_cleans_owned_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("source.safetensors");
+        std::fs::write(
+            &src,
+            qml_scope::generate_synthetic_transformer_safetensors(2, 16, 32, 4, 7).unwrap(),
+        )
+        .unwrap();
+        for before_publication in [false, true] {
+            let flag = Arc::new(AtomicBool::new(false));
+            let callback_flag = Arc::clone(&flag);
+            let control = ForgeControl {
+                cancel: flag,
+                on_progress: Some(Arc::new(move |_, _, stage| {
+                    if !before_publication || stage == "before-publication" {
+                        callback_flag.store(true, Ordering::Relaxed);
+                    }
+                })),
+            };
+            let out = dir.path().join("out.qmf");
+            std::fs::write(&out, b"existing").unwrap();
+            assert!(
+                forge(
+                    &src,
+                    &out,
+                    &TransformStrategy::Bf16,
+                    &options(dir.path()),
+                    &control,
+                    true
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(out).unwrap(), b"existing");
+            assert_eq!(
+                std::fs::read_dir(options(dir.path()).scratch_directory)
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
+    fn shard(path: &Path, name: &str) {
+        let header = serde_json::to_vec(
+            &serde_json::json!({name:{"dtype":"F32","shape":[8,8],"data_offsets":[0,256]}}),
+        )
+        .unwrap();
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend(header);
+        for i in 0..64 {
+            bytes.extend((i as f32 * 0.01).to_le_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+    #[test]
+    fn sharded_source_is_protected_again_after_transformation() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.safetensors");
+        let b = dir.path().join("b.safetensors");
+        shard(&a, "a.weight");
+        shard(&b, "b.weight");
+        let index = dir.path().join("model.safetensors.index.json");
+        std::fs::write(
+            &index,
+            br#"{"weight_map":{"a.weight":"a.safetensors","b.weight":"b.safetensors"}}"#,
+        )
+        .unwrap();
+        let original = std::fs::read(&b).unwrap();
+        let out = dir.path().join("out.qmf");
+        let callback_out = out.clone();
+        let callback_b = b.clone();
+        let control = ForgeControl {
+            cancel: Arc::new(AtomicBool::new(false)),
+            on_progress: Some(Arc::new(move |_, _, stage| {
+                if stage == "before-publication" {
+                    std::fs::hard_link(&callback_b, &callback_out).unwrap();
+                }
+            })),
+        };
+        assert!(
+            forge(
+                &index,
+                &out,
+                &TransformStrategy::Bf16,
+                &options(dir.path()),
+                &control,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&b).unwrap(), original);
+        std::fs::remove_file(&out).unwrap();
+        let report = forge(
+            &index,
+            &out,
+            &TransformStrategy::Bf16,
+            &options(dir.path()),
+            &ForgeControl::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(report.transformed_tensor_count, 2);
+        assert!(
+            forge(
+                &index,
+                &index,
+                &TransformStrategy::Bf16,
+                &options(dir.path()),
+                &ForgeControl::default(),
+                true
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn tensor_allocation_limit_is_checked_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("source.safetensors");
+        shard(&src, "weight");
+        let mut opts = options(dir.path());
+        opts.limits.max_tensor_bytes = 8;
+        assert!(
+            forge(
+                &src,
+                &dir.path().join("out.qmf"),
+                &TransformStrategy::Bf16,
+                &opts,
+                &ForgeControl::default(),
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read_dir(&opts.scratch_directory).unwrap().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn calibrated_disk_and_memory_encodings_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.safetensors");
+        shard(&source, "weight");
+        let stats = qml_quant::gptq::LayerCalibrationStats::from_samples(
+            "weight",
+            &[vec![0.25; 8], vec![0.5; 8]],
+            4,
+        )
+        .unwrap();
+        let calibration = ModelCalibrationProfile {
+            model_id: "synthetic".into(),
+            calibration_tokens: 2,
+            block_size: 4,
+            layers: BTreeMap::from([("weight".into(), stats)]),
+        };
+        let strategy = TransformStrategy::Int4Sym { group_size: 8 };
+        let mut input = SafetensorsFile::open(
+            std::fs::File::open(&source).unwrap(),
+            &PayloadBudget::default(),
+        )
+        .unwrap();
+        let (memory, _) = forge_source_internal(
+            &mut input,
+            "synthetic",
+            "MIT",
+            "test",
+            &strategy,
+            &PayloadBudget::default(),
+            42,
+            Some(&calibration),
+            &ForgeControl::default(),
+            true,
+            None,
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        memory
+            .into_memory()
+            .unwrap()
+            .write_to(&mut expected)
+            .unwrap();
+        let out = dir.path().join("calibrated.qmf");
+        forge_path_to_file_atomic_with_options(
+            &source,
+            &out,
+            "synthetic",
+            "MIT",
+            "test",
+            &strategy,
+            &PayloadBudget::default(),
+            42,
+            Some(&calibration),
+            &ForgeControl::default(),
+            &options(dir.path()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(out).unwrap(), expected);
     }
 }

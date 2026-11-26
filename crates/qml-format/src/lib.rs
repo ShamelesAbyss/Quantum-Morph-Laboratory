@@ -7,11 +7,11 @@
 pub mod v1;
 
 pub use v1::{
-    BlobRef, DEFAULT_QMF_V1_MAX_FILE_BYTES, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES,
-    QMF_V1_MAX_MANIFEST_BYTES, QMF_V1_VERSION, QmfArchiveV1, QmfBudget, QmfFileReader,
-    QmfLatentCache, QmfManifest, QmfOperator, QmfRepresentation, QmfTensorEntry, QmfV1Builder,
-    SharedLatentEncoding, SharedLatentEntry, SparseResidualDesc, inspect_qmf_v1_header,
-    peek_qmf_version,
+    ArtifactLimits, BlobRef, BuilderMemoryStats, DEFAULT_QMF_V1_MAX_FILE_BYTES, DiskArtifact,
+    DiskBuildOptions, QMF_V1_FLAG_LITTLE_ENDIAN, QMF_V1_HEADER_BYTES, QMF_V1_MAX_MANIFEST_BYTES,
+    QMF_V1_VERSION, QmfArchiveV1, QmfBudget, QmfFileReader, QmfLatentCache, QmfManifest,
+    QmfOperator, QmfRepresentation, QmfTensorEntry, QmfV1Builder, SharedLatentEncoding,
+    SharedLatentEntry, SparseResidualDesc, inspect_qmf_v1_header, peek_qmf_version,
 };
 
 use qml_core::{MatrixError, RankOneFactors};
@@ -30,13 +30,22 @@ const REPRESENTATION_RANK_ONE_F64: u8 = 1;
 #[derive(Debug)]
 pub enum QmfError {
     Io(std::io::Error),
+    Cancelled,
+    ResourceLimit {
+        resource: &'static str,
+        required: u64,
+        limit: u64,
+    },
     InvalidMagic,
     UnsupportedVersion(u16),
     UnsupportedRepresentation(u8),
     NonZeroReservedField,
     InvalidDimensions,
     PayloadTooLarge,
-    LengthMismatch { expected: usize, actual: usize },
+    LengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     ChecksumMismatch,
     Matrix(MatrixError),
     InvalidManifest(String),
@@ -46,6 +55,15 @@ pub enum QmfError {
 impl Display for QmfError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cancelled => write!(f, "QMF construction cancelled"),
+            Self::ResourceLimit {
+                resource,
+                required,
+                limit,
+            } => write!(
+                f,
+                "QMF {resource} exhausted: requires {required} bytes, limit {limit}"
+            ),
             Self::Io(error) => write!(f, "QMF I/O error: {error}"),
             Self::InvalidMagic => write!(f, "invalid QMF magic bytes"),
             Self::UnsupportedVersion(version) => {

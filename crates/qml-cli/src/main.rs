@@ -1,7 +1,7 @@
 use qml_core::{DenseMatrix, DeterministicRng};
 use qml_forge::{
     ForgeControl, TransformStrategy, compare_safetensors_and_qmf, forge_path_to_file_atomic,
-    forge_safetensors_to_qmf,
+    forge_path_to_file_atomic_with_options, forge_safetensors_to_qmf,
 };
 use qml_format::{QmfArchiveV1, QmfBudget, QmfFileReader, QmfRankOne, peek_qmf_version};
 use qml_genesis::{GenesisConfig, run_genesis};
@@ -903,10 +903,51 @@ fn run_morph(args: Vec<String>) -> ExitCode {
     let mut protect_layers: Vec<usize> = Vec::new();
     let mut seed = 42_u64;
     let mut json = false;
+    let mut construction = qml_format::DiskBuildOptions::default();
+    let mut overwrite = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--scratch-dir" => {
+                let Some(path) = args.get(i + 1) else {
+                    return ExitCode::from(2);
+                };
+                construction.scratch_directory = PathBuf::from(path);
+                i += 2;
+            }
+            "--overwrite" => {
+                overwrite = true;
+                i += 1;
+            }
+            "--max-artifact-bytes"
+            | "--max-builder-memory-bytes"
+            | "--max-temp-bytes"
+            | "--max-tensor-bytes"
+            | "--max-manifest-bytes" => {
+                let Some(value) = args
+                    .get(i + 1)
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .filter(|&v| v > 0)
+                else {
+                    eprintln!("{} requires a positive byte count", args[i]);
+                    return ExitCode::from(2);
+                };
+                match args[i].as_str() {
+                    "--max-artifact-bytes" => construction.limits.max_artifact_bytes = value,
+                    "--max-builder-memory-bytes" => construction.limits.max_resident_bytes = value,
+                    "--max-temp-bytes" => construction.limits.max_temporary_bytes = value,
+                    "--max-tensor-bytes" => construction.limits.max_tensor_bytes = value,
+                    _ => {
+                        let Ok(value) = usize::try_from(value) else {
+                            return ExitCode::from(2);
+                        };
+                        construction.limits.max_manifest_bytes = value;
+                    }
+                }
+                i += 2;
+            }
+
             "--method" => {
                 let Some(m) = args.get(i + 1) else {
                     return ExitCode::from(2);
@@ -977,7 +1018,7 @@ fn run_morph(args: Vec<String>) -> ExitCode {
 
     let (Some(source), Some(output)) = (source, output) else {
         eprintln!(
-            "usage: qml morph SOURCE.safetensors --method <fp16|bf16|int8|int4|int4-asym|svd|rmq|map> --output OUT.qmf"
+            "usage: qml morph SOURCE.safetensors --method <fp16|bf16|int8|int4|int4-asym|svd|rmq|map> --output OUT.qmf [--scratch-dir DIR] [--max-artifact-bytes N] [--max-builder-memory-bytes N] [--max-temp-bytes N] [--max-tensor-bytes N] [--max-manifest-bytes N] [--overwrite]"
         );
         return ExitCode::from(2);
     };
@@ -1066,8 +1107,11 @@ fn run_morph(args: Vec<String>) -> ExitCode {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
-    let budget = PayloadBudget::default();
-    let report = match forge_path_to_file_atomic(
+    let budget = PayloadBudget {
+        max_tensor_bytes: construction.limits.max_tensor_bytes,
+        ..Default::default()
+    };
+    let report = match forge_path_to_file_atomic_with_options(
         &source,
         &output,
         model_id,
@@ -1078,6 +1122,8 @@ fn run_morph(args: Vec<String>) -> ExitCode {
         seed,
         None,
         &ForgeControl::default(),
+        &construction,
+        overwrite,
     ) {
         Ok(rep) => rep,
         Err(e) => {

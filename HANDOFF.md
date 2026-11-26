@@ -1,6 +1,6 @@
 # Handoff
 
-## PROJECT AEGIS — v0.6.1 (local validation complete; CI/release pending)
+## PROJECT AEGIS — v0.6.1 COMPLETE
 
 - Scope: artifact publication, required untied output projections, calibration/reference cache safety, terminology and release only. Do not start Wave IV or any subsequent milestone without authorization.
 - Work performed on `main` in the Codex workspace; no downloaded models or new live-model experiments. The original v0.6.0 checkout was clean.
@@ -18,14 +18,26 @@
 - Rust 1.100.0 selected with a directory-local rustup override; cargo-deny 0.21.0.
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed on final v0.6.1 source.
-- `cargo test --workspace`: all 95 tests passed on Windows, zero failed/ignored; all doc-tests passed. This includes the final projection/cache/publication regressions and existing desktop/GPU parity tests. Unix-only symbolic-link coverage will run in Linux CI.
+- `cargo test --workspace`: all 95 tests passed on Windows, zero failed/ignored; all doc-tests passed. This includes the final projection/cache/publication regressions and existing desktop/GPU parity tests. Linux CI passed all 96 tests, including Unix symbolic/dangling-link coverage.
 - `cargo deny check`: passed on v0.6.1 (`advisories ok, bans ok, licenses ok, sources ok`); existing duplicate-version warnings remain allowed by the unchanged policy.
-- `cargo build --workspace --release`: passed (optimized workspace build, 5m 05s). Release CLI smoke check pending below. All five requested commands passed locally. Windows/Linux CI, tag and public release verification remain pending.
+- `cargo build --workspace --release`: passed (optimized workspace build, 5m 05s). Release CLI smoke check passed (`qml 0.6.1`). All five requested commands passed locally.
+
+Initial compile/lint checks during implementation found a missing direct qml-core dependency, a serialization test API mismatch, and Clippy formatting/conditional suggestions; these were corrected before the successful final validation. No existing tests were weakened or removed.
 
 ### Limits and remaining work
 
-Cache checksums detect corruption rather than authenticate a malicious producer. Hashing source provenance reads every backing weight byte once. Decoded f64 values and collection overhead require additional bounded RAM beyond the 512 MiB file ceiling. Path-based publication assumes output ancestors are user-controlled, not concurrently replaced by a hostile process. No claim of new live-model benchmark validation is made. Baseline commit: `1631b824ce9daa8f256d46c45497f1e804442dd8`. Next: push this validated milestone, verify Windows/Linux CI, publish all four mandatory assets as a latest public non-prerelease, verify download hashes, update this handoff and stop.
+Cache checksums detect corruption rather than authenticate a malicious producer. Hashing source provenance reads every backing weight byte once. Decoded f64 values and collection overhead require additional bounded RAM beyond the 512 MiB file ceiling. Path-based publication assumes output ancestors are user-controlled, not concurrently replaced by a hostile process. No claim of new live-model benchmark validation is made. Baseline commit: `1631b824ce9daa8f256d46c45497f1e804442dd8`. Implementation commit: `7c669db9e369bcd92ec08f4cb0cc4fefc663680a`, pushed to `main`; annotated release tag `v0.6.1` points to this commit. [Windows/Linux/dependency-policy CI](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45805000853) passed all jobs. [Release workflow](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45805910710) passed both platform builds and public publication. Public asset verification is complete below. No scoped implementation issues remain; stop and await authorization for further work.
 
+### Public release verified (November 26, 2026)
+
+- Latest completed milestone: **v0.6.1 | PROJECT AEGIS**. [Public release](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/tag/v0.6.1); GitHub's public `releases/latest` endpoint returns `v0.6.1`. Confirmed `draft: false`, `prerelease: false`; release workflow sets `make_latest: true`.
+- Downloaded all four mandatory public release assets without authentication. All three binary package hashes matched the downloaded `SHA256SUMS.txt`. The Windows standalone EXE is byte-identical to the portable archive's `qml-desktop.exe`; the packaged CLI executed successfully as `qml 0.6.1`. The portable ZIP includes both executables, documentation and MIT LICENSE. The Linux archive lists both binaries and LICENSE; the Linux workflow also smoke-tested its CLI.
+- Verified Windows standalone EXE: 13,719,040 bytes; SHA-256 `4b75143261d56150ce660d0cac2f5e27029c0d599c28150b177e90a5f43f7a59`.
+- Verified Windows portable ZIP: 8,964,903 bytes; SHA-256 `ca1d4e88678e7d2929ab024ad33461f03b2e77a7d91dd6d94827b4eccbd2d906`.
+- Verified Linux archive: 11,819,180 bytes; SHA-256 `2a080e0af708743ef7417e0f9da5baee8bae9776c77301d18c2fe55ebd1452fa`.
+- Implementation and release tag: `7c669db9e369bcd92ec08f4cb0cc4fefc663680a`. A final documentation-only follow-up records these verification results on `main`; the release tag and repository history remain immutable.
+- Permanent memorial text verified verbatim against the baseline README. MIT license, experiment manifests, mathematical algorithms and Project Prism renderer were not modified. No models were downloaded and no later milestone was begun.
+- **STRICT STOP: PROJECT AEGIS is complete. Await explicit further instructions.** Future roadmap entries below are historical planning, not authorization.
 ## Current state
 
 - Public repository: <https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory>
@@ -35,7 +47,7 @@ Cache checksums detect corruption rather than authenticate a malicious producer.
   - `C:\Users\Shame\.gemini\antigravity\scratch\qml-models-cache` (`smollm2-135m`, `smollm2-360m`, `smollm2-1.7b`, `qwen2.5-1.5b`, `qwen2.5-3b`)
   - `D:\qml-models-cache\qwen2.5-7b` (`Qwen/Qwen2.5-7B-Instruct`, 4 shards, `14.19 GiB` BF16)
   - `D:\qml-work\qwen25-7b` (cached `_cal_profile.qcal`, `_ref_logits.qref`, and forged `int4/int3/int2/qmr-200/qmr-175/ternary` QMF v1 artifacts)
-- Latest completed milestone: **`v0.6.0` — PROJECT EVENT HORIZON Wave III** (Layer-by-Layer Streaming BF16 Calibration & Reference Engine `< 450 MiB` peak VRAM for `7B–32B`, GPU-Resident Per-Head INT8 KV-Cache `~3.88×` smaller VRAM, 10th Persistent GPU Kernel `MATVEC_VQ_WGSL`, `QCAL1`/`QREF1` binary disk caches, activation-weighted `fit_vq_calibrated`, and `exp-006` Live Stage D **`Qwen2.5-7B-Instruct`** 8 GB GPU Breakthrough breaking **`2.251 bpp` (`1.85 GiB`, `PPLx = 1.43×`, `65.7%` Top-1)** and **exact `2.000 bpp` (`1.63 GiB`, `PPLx = 2.13×`, `52.6%` Top-1, `8.00×` smaller than BF16)**!).
+- Previous completed milestone: **`v0.6.0` — PROJECT EVENT HORIZON Wave III** (Layer-by-Layer Streaming BF16 Calibration & Reference Engine `< 450 MiB` peak VRAM for `7B–32B`, GPU-Resident Per-Head INT8 KV-Cache `~3.88×` smaller VRAM, 10th Persistent GPU Kernel `MATVEC_VQ_WGSL`, `QCAL1`/`QREF1` binary disk caches, activation-weighted `fit_vq_calibrated`, and `exp-006` Live Stage D **`Qwen2.5-7B-Instruct`** 8 GB GPU Breakthrough breaking **`2.251 bpp` (`1.85 GiB`, `PPLx = 1.43×`, `65.7%` Top-1)** and **exact `2.000 bpp` (`1.63 GiB`, `PPLx = 2.13×`, `52.6%` Top-1, `8.00×` smaller than BF16)**!).
 - **Permanent Release Distribution Policy:** All user-facing releases use clean semantic versions (`v0.3.0`, `v0.4.0`, `v0.5.1`, `v0.6.0`, ...) and MUST be published as full, visible public GitHub Releases (`draft: false`, `prerelease: false`, `make_latest: true`) with all 4 compiled assets (`Quantum-Morph-Laboratory-<tag>-Windows-x64.exe`, `Quantum-Morph-Laboratory-<tag>-Windows-x64-Portable.zip`, `Quantum-Morph-Laboratory-<tag>-Linux-x64.tar.gz`, `SHA256SUMS.txt`), full `RELEASE_NOTES.md`, and prominent `README.md` download links. Never delete or overwrite historical tags/releases.
 - The workspace contains **13 cohesive safe-Rust crates** with `#![forbid(unsafe_code)]` and zero Python dependencies.
 - **License:** MIT ([LICENSE](LICENSE)). All workspace crates inherit `license.workspace = true`.
@@ -75,7 +87,7 @@ All of the following passed locally on Windows 11 with Rust `1.100.0` (`cargo +1
 - `MAP-B` Pass 1 currently evaluates 8 full quantizers across all rows (~15 min on 7.6B); sampled-row screening will speed up `14B–32B` allocation ~10×.
 - Safe cross-platform WGPU intentionally does not expose GPU temperature, board power draw, or OS-wide VRAM usage.
 
-## Next steps (PROJECT EVENT HORIZON Wave IV — `v0.7.0`)
+## Future roadmap — NOT AUTHORIZED by PROJECT AEGIS (Wave IV — `v0.7.0`)
 
 1. **Stage E (`14B`, e.g., `Qwen2.5-14B-Instruct`) & Stage F (`27B–32B`, e.g., `Qwen2.5-32B-Instruct`) on 8 GB RTX 4070:** Implement sampled-row `MAP-B` Pass 1 screening and resumable layer-checkpointed Q-Forge disk streaming, then run `14B` (`~3.6 GiB` at `2.00 bpp`) and `32B` (`~7.5 GiB` at `1.75–2.00 bpp`) live on 8 GB VRAM!
 2. **Hessian-Compensated Lattice/Trellis Quantization (`< 1.75 bpp` Breakthrough):** Pair our GPU-resident `MATVEC_VQ_WGSL` / E8 lattice decoder with blockwise Cholesky `H⁻¹` compensation and PV-Tuning coordinate refinement to push `7B–32B` cleanly into `1.75–1.50 bpp`.

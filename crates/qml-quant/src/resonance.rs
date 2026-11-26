@@ -1988,6 +1988,32 @@ pub fn profile_tensor_for_resonance(
     include_echo: bool,
     seed: u64,
 ) -> Result<ResonanceTensorProfile, MatrixError> {
+    profile_tensor_for_resonance_calibrated(
+        tensor_name,
+        tensor_index,
+        mat,
+        behavioral_weight,
+        include_vq,
+        include_echo,
+        None,
+        seed,
+    )
+}
+
+/// Activation-calibrated Pass 1 profiler for `MAP-B`: when `cal` is provided, evaluates
+/// candidates using activation-weighted probes (`probe[c] *= input_rms[c]`) and
+/// Blockwise Cholesky GPTQ + Hadamard quantizers.
+#[allow(clippy::too_many_arguments)]
+pub fn profile_tensor_for_resonance_calibrated(
+    tensor_name: &str,
+    tensor_index: usize,
+    mat: &DenseMatrix,
+    behavioral_weight: f64,
+    include_vq: bool,
+    include_echo: bool,
+    cal: Option<&crate::gptq::LayerCalibrationStats>,
+    seed: u64,
+) -> Result<ResonanceTensorProfile, MatrixError> {
     let is_huge_table = mat.rows() > 8192 || mat.cols() > 8192;
     let spectral_norm = if is_huge_table {
         mat.frobenius_norm() / (mat.rows().min(mat.cols()) as f64).sqrt().max(1.0)
@@ -1995,7 +2021,16 @@ pub fn profile_tensor_for_resonance(
         truncated_svd(mat, 1, seed.wrapping_add(tensor_index as u64))?.singular_values[0]
     };
     let param_count = mat.rows() * mat.cols();
-    let probes = deterministic_probe_vectors(mat.cols(), 3, seed.wrapping_add(tensor_index as u64));
+    let cal_matched = cal.filter(|s| s.cols == mat.cols());
+    let mut probes =
+        deterministic_probe_vectors(mat.cols(), 3, seed.wrapping_add(tensor_index as u64));
+    if let Some(stats) = cal_matched {
+        for p in &mut probes {
+            for (v, &rms) in p.iter_mut().zip(&stats.input_rms) {
+                *v *= rms;
+            }
+        }
+    }
     let ref_outputs: Vec<Vec<f64>> = probes
         .iter()
         .map(|p| mat.matvec(p))
@@ -2021,6 +2056,8 @@ pub fn profile_tensor_for_resonance(
     }
 
     // 1. Extreme sub-2-bit candidates (VQ ~1.25 bpp & Ternary ~1.725-1.85 bpp)
+    // Pass 1 uses fast screening quantizers evaluated against activation-weighted probes
+    // (Pass 2 applies full Blockwise Cholesky GPTQ to the selected winner — ~10x faster!).
     if include_vq && mat.cols() >= 8 {
         let cb_k = if is_huge_table { 64 } else { 256 };
         let vq = VectorQuantMatrix::fit(mat, 8, cb_k, 1, 64, had, seed + tensor_index as u64)?;

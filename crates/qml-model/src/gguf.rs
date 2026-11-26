@@ -355,12 +355,17 @@ pub fn ggml_type_name(id: u32) -> &'static str {
 /// Returns `(block_elements, block_bytes)` for GGUF tensor types supported by [`GgufFile`] decoding.
 pub fn ggml_supported_block_layout(ggml_type_id: u32) -> Option<(u64, u64)> {
     match ggml_type_id {
-        0 => Some((1, 4)),   // F32
-        1 => Some((1, 2)),   // F16
-        2 => Some((32, 18)), // Q4_0: 2B f16 scale + 16B nibbles
-        3 => Some((32, 20)), // Q4_1: 2B f16 scale + 2B f16 min + 16B nibbles
-        8 => Some((32, 34)), // Q8_0: 2B f16 scale + 32B i8 codes
-        30 => Some((1, 2)),  // BF16
+        0 => Some((1, 4)),      // F32
+        1 => Some((1, 2)),      // F16
+        2 => Some((32, 18)),    // Q4_0: 2B f16 scale + 16B nibbles
+        3 => Some((32, 20)),    // Q4_1: 2B f16 scale + 2B f16 min + 16B nibbles
+        8 => Some((32, 34)),    // Q8_0: 2B f16 scale + 32B i8 codes
+        10 => Some((256, 84)),  // Q2_K: 16B scales + 64B qs + 2B d + 2B dmin
+        11 => Some((256, 110)), // Q3_K: 32B hmask + 64B qs + 12B scales + 2B d
+        12 => Some((256, 144)), // Q4_K: 2B d + 2B dmin + 12B scales + 128B qs
+        13 => Some((256, 176)), // Q5_K: 2B d + 2B dmin + 12B scales + 32B qh + 128B qs
+        14 => Some((256, 210)), // Q6_K: 128B ql + 64B qh + 16B i8 scales + 2B d
+        30 => Some((1, 2)),     // BF16
         _ => None,
     }
 }
@@ -559,6 +564,196 @@ impl<R: Read + Seek> GgufFile<R> {
                     }
                 }
             }
+            10 => {
+                // Q2_K: 256 elements / 84 bytes (scales[16], qs[64], d f16, dmin f16)
+                for blk in raw.as_chunks::<84>().0 {
+                    let scales = &blk[0..16];
+                    let qs = &blk[16..80];
+                    let d = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[80], blk[81],
+                    ])));
+                    let dmin = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[82], blk[83],
+                    ])));
+                    let mut is = 0usize;
+                    for chunk in 0..2 {
+                        let q = &qs[chunk * 32..(chunk + 1) * 32];
+                        let mut shift = 0u32;
+                        for _ in 0..4 {
+                            let sc0 = scales[is];
+                            is += 1;
+                            let dl0 = d * f64::from(sc0 & 0x0f);
+                            let ml0 = dmin * f64::from(sc0 >> 4);
+                            for &qb in &q[0..16] {
+                                out.push(dl0 * f64::from((qb >> shift) & 3) - ml0);
+                            }
+                            let sc1 = scales[is];
+                            is += 1;
+                            let dl1 = d * f64::from(sc1 & 0x0f);
+                            let ml1 = dmin * f64::from(sc1 >> 4);
+                            for &qb in &q[16..32] {
+                                out.push(dl1 * f64::from((qb >> shift) & 3) - ml1);
+                            }
+                            shift += 2;
+                        }
+                    }
+                }
+            }
+            11 => {
+                // Q3_K: 256 elements / 110 bytes (hmask[32], qs[64], scales[12], d f16)
+                for blk in raw.as_chunks::<110>().0 {
+                    let hmask = &blk[0..32];
+                    let qs = &blk[32..96];
+                    let sc_raw = &blk[96..108];
+                    let d_all = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[108], blk[109],
+                    ])));
+                    let mut aux = [0u32; 4];
+                    aux[0] = u32::from_le_bytes([sc_raw[0], sc_raw[1], sc_raw[2], sc_raw[3]]);
+                    aux[1] = u32::from_le_bytes([sc_raw[4], sc_raw[5], sc_raw[6], sc_raw[7]]);
+                    aux[2] = u32::from_le_bytes([sc_raw[8], sc_raw[9], sc_raw[10], sc_raw[11]]);
+                    let tmp = aux[2];
+                    const KMASK1: u32 = 0x0303_0303;
+                    const KMASK2: u32 = 0x0f0f_0f0f;
+                    aux[2] = ((aux[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);
+                    aux[3] = ((aux[1] >> 4) & KMASK2) | (((tmp >> 6) & KMASK1) << 4);
+                    aux[0] = (aux[0] & KMASK2) | ((tmp & KMASK1) << 4);
+                    aux[1] = (aux[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
+                    let mut scales = [0i8; 16];
+                    for (w_idx, &word) in aux.iter().enumerate() {
+                        let bs = word.to_le_bytes();
+                        for j in 0..4 {
+                            scales[w_idx * 4 + j] = (bs[j] as i32 - 32) as i8;
+                        }
+                    }
+                    let mut is = 0usize;
+                    let mut m: u8 = 1;
+                    for chunk in 0..2 {
+                        let q = &qs[chunk * 32..(chunk + 1) * 32];
+                        let mut shift = 0u32;
+                        for _ in 0..4 {
+                            let dl0 = d_all * f64::from(scales[is]);
+                            is += 1;
+                            for l in 0..16 {
+                                let low2 = i32::from((q[l] >> shift) & 3);
+                                let sub = if (hmask[l] & m) != 0 { 0 } else { 4 };
+                                out.push(dl0 * f64::from(low2 - sub));
+                            }
+                            let dl1 = d_all * f64::from(scales[is]);
+                            is += 1;
+                            for l in 0..16 {
+                                let low2 = i32::from((q[16 + l] >> shift) & 3);
+                                let sub = if (hmask[16 + l] & m) != 0 { 0 } else { 4 };
+                                out.push(dl1 * f64::from(low2 - sub));
+                            }
+                            shift += 2;
+                            m = m.wrapping_shl(1);
+                        }
+                    }
+                }
+            }
+            12 => {
+                // Q4_K: 256 elements / 144 bytes (d f16, dmin f16, scales[12], qs[128])
+                for blk in raw.as_chunks::<144>().0 {
+                    let d = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[0], blk[1],
+                    ])));
+                    let dmin = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[2], blk[3],
+                    ])));
+                    let sc_bytes = &blk[4..16];
+                    let qs = &blk[16..144];
+                    let mut is = 0usize;
+                    for j in 0..4 {
+                        let q = &qs[j * 32..(j + 1) * 32];
+                        let (sc0, m0) = decode_k4_scale_min(is, sc_bytes);
+                        let (sc1, m1) = decode_k4_scale_min(is + 1, sc_bytes);
+                        is += 2;
+                        let d1 = d * f64::from(sc0);
+                        let min1 = dmin * f64::from(m0);
+                        let d2 = d * f64::from(sc1);
+                        let min2 = dmin * f64::from(m1);
+                        for &qb in q {
+                            out.push(d1 * f64::from(qb & 0x0f) - min1);
+                        }
+                        for &qb in q {
+                            out.push(d2 * f64::from(qb >> 4) - min2);
+                        }
+                    }
+                }
+            }
+            13 => {
+                // Q5_K: 256 elements / 176 bytes (d f16, dmin f16, scales[12], qh[32], qs[128])
+                for blk in raw.as_chunks::<176>().0 {
+                    let d = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[0], blk[1],
+                    ])));
+                    let dmin = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[2], blk[3],
+                    ])));
+                    let sc_bytes = &blk[4..16];
+                    let qh = &blk[16..48];
+                    let qs = &blk[48..176];
+                    let mut is = 0usize;
+                    let mut u1: u8 = 1;
+                    let mut u2: u8 = 2;
+                    for j in 0..4 {
+                        let q = &qs[j * 32..(j + 1) * 32];
+                        let (sc0, m0) = decode_k4_scale_min(is, sc_bytes);
+                        let (sc1, m1) = decode_k4_scale_min(is + 1, sc_bytes);
+                        is += 2;
+                        let d1 = d * f64::from(sc0);
+                        let min1 = dmin * f64::from(m0);
+                        let d2 = d * f64::from(sc1);
+                        let min2 = dmin * f64::from(m1);
+                        for l in 0..32 {
+                            let hi = if (qh[l] & u1) != 0 { 16 } else { 0 };
+                            out.push(d1 * f64::from((q[l] & 0x0f) + hi) - min1);
+                        }
+                        for l in 0..32 {
+                            let hi = if (qh[l] & u2) != 0 { 16 } else { 0 };
+                            out.push(d2 * f64::from((q[l] >> 4) + hi) - min2);
+                        }
+                        u1 = u1.wrapping_shl(2);
+                        u2 = u2.wrapping_shl(2);
+                    }
+                }
+            }
+            14 => {
+                // Q6_K: 256 elements / 210 bytes (ql[128], qh[64], scales[16] i8, d f16)
+                for blk in raw.as_chunks::<210>().0 {
+                    let ql = &blk[0..128];
+                    let qh = &blk[128..192];
+                    let sc = &blk[192..208];
+                    let d = f64::from(crate::dtype::f16_to_f32(u16::from_le_bytes([
+                        blk[208], blk[209],
+                    ])));
+                    let mut block_out = [0.0_f64; 256];
+                    for n in 0..2 {
+                        let ql_n = &ql[n * 64..(n + 1) * 64];
+                        let qh_n = &qh[n * 32..(n + 1) * 32];
+                        let sc_n = &sc[n * 8..(n + 1) * 8];
+                        let y_base = n * 128;
+                        for l in 0..32 {
+                            let is = l / 16;
+                            let q1 = i32::from((ql_n[l] & 0x0f) | ((qh_n[l] & 3) << 4)) - 32;
+                            let q2 =
+                                i32::from((ql_n[l + 32] & 0x0f) | (((qh_n[l] >> 2) & 3) << 4)) - 32;
+                            let q3 = i32::from((ql_n[l] >> 4) | (((qh_n[l] >> 4) & 3) << 4)) - 32;
+                            let q4 =
+                                i32::from((ql_n[l + 32] >> 4) | (((qh_n[l] >> 6) & 3) << 4)) - 32;
+                            block_out[y_base + l] = d * f64::from(sc_n[is] as i8) * f64::from(q1);
+                            block_out[y_base + l + 32] =
+                                d * f64::from(sc_n[is + 2] as i8) * f64::from(q2);
+                            block_out[y_base + l + 64] =
+                                d * f64::from(sc_n[is + 4] as i8) * f64::from(q3);
+                            block_out[y_base + l + 96] =
+                                d * f64::from(sc_n[is + 6] as i8) * f64::from(q4);
+                        }
+                    }
+                    out.extend_from_slice(&block_out);
+                }
+            }
             _ => unreachable!("filtered by ggml_supported_block_layout"),
         }
 
@@ -592,6 +787,17 @@ impl<R: Read + Seek> GgufFile<R> {
         let vals = self.read_tensor_f64(name, budget)?;
         qml_core::DenseMatrix::from_flat(rows, cols, vals)
             .map_err(|e| GgufError::InvalidLayout(e.to_string()))
+    }
+}
+
+#[inline]
+fn decode_k4_scale_min(j: usize, q: &[u8]) -> (u8, u8) {
+    if j < 4 {
+        (q[j] & 63, q[j + 4] & 63)
+    } else {
+        let d = (q[j + 4] & 0x0f) | ((q[j - 4] >> 6) << 4);
+        let m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
+        (d, m)
     }
 }
 
@@ -751,5 +957,95 @@ mod tests {
         assert_eq!(v_q4_1.len(), 32);
         assert!((v_q4_1[0] - 0.0).abs() < 1e-6); // 2 * 0.5 - 1.0
         assert!((v_q4_1[16] - 2.0).abs() < 1e-6); // 6 * 0.5 - 1.0
+    }
+
+    #[test]
+    fn decodes_gguf_k_quant_superblocks_q2k_q3k_q4k_q5k_q6k() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&GGUF_MAGIC);
+        buf.extend_from_slice(&3_u32.to_le_bytes());
+        buf.extend_from_slice(&5_u64.to_le_bytes()); // 5 K-quant tensors
+        buf.extend_from_slice(&0_u64.to_le_bytes());
+
+        let write_str = |b: &mut Vec<u8>, s: &str| {
+            b.extend_from_slice(&(s.len() as u64).to_le_bytes());
+            b.extend_from_slice(s.as_bytes());
+        };
+        let specs = [
+            ("t_q2k", 10_u32, 0_u64),
+            ("t_q3k", 11_u32, 96_u64),
+            ("t_q4k", 12_u32, 224_u64),
+            ("t_q5k", 13_u32, 384_u64),
+            ("t_q6k", 14_u32, 576_u64),
+        ];
+        for (name, tid, off) in specs {
+            write_str(&mut buf, name);
+            buf.extend_from_slice(&1_u32.to_le_bytes());
+            buf.extend_from_slice(&256_u64.to_le_bytes());
+            buf.extend_from_slice(&tid.to_le_bytes());
+            buf.extend_from_slice(&off.to_le_bytes());
+        }
+        while buf.len() % 32 != 0 {
+            buf.push(0);
+        }
+        let data_start = buf.len();
+        buf.resize(data_start + 576 + 224, 0);
+
+        // Q2_K at +0: scales[0] = (1<<4)|2 (sc=2, m=1), qs[0] = 0b00_00_00_11 (q=3), d=0.5, dmin=0.25
+        let f16_half = crate::dtype::f32_to_f16(0.5_f32).to_le_bytes();
+        let f16_quarter = crate::dtype::f32_to_f16(0.25_f32).to_le_bytes();
+        buf[data_start] = (1 << 4) | 2;
+        buf[data_start + 16] = 3;
+        buf[data_start + 80..data_start + 82].copy_from_slice(&f16_half);
+        buf[data_start + 82..data_start + 84].copy_from_slice(&f16_quarter);
+
+        // Q3_K at +96: hmask[0]=1 (high bit set -> sub=0), qs[0]=2, scales raw all 34 (+2), d=0.5
+        buf[data_start + 96] = 1;
+        buf[data_start + 96 + 32] = 2;
+        buf[data_start + 96 + 96] = 2; // low nibble 2 + high 2 bits 0b10 -> 34 -> 34-32 = +2
+        buf[data_start + 96 + 104] = 2;
+        buf[data_start + 96 + 108..data_start + 96 + 110].copy_from_slice(&f16_half);
+
+        // Q4_K at +224: d=0.5, dmin=0.25, scales[0]=4, scales[4]=2, qs[0]=0x05 -> 0.5*4*5 - 0.25*2 = 9.5
+        buf[data_start + 224..data_start + 226].copy_from_slice(&f16_half);
+        buf[data_start + 226..data_start + 228].copy_from_slice(&f16_quarter);
+        buf[data_start + 228] = 4;
+        buf[data_start + 232] = 2;
+        buf[data_start + 240] = 5;
+
+        // Q5_K at +384: d=0.5, dmin=0.25, scales[0]=2, scales[4]=0, qh[0]=1 (+16), qs[0]=3 -> 0.5*2*19 = 19.0
+        buf[data_start + 384..data_start + 386].copy_from_slice(&f16_half);
+        buf[data_start + 386..data_start + 388].copy_from_slice(&f16_quarter);
+        buf[data_start + 388] = 2;
+        buf[data_start + 400] = 1;
+        buf[data_start + 432] = 3;
+
+        // Q6_K at +576: ql[0]=4, qh[0]=2 (q1 = (4 | 32) - 32 = 4), sc[0]=3, d=0.5 -> 0.5*3*4 = 6.0
+        buf[data_start + 576] = 4;
+        buf[data_start + 576 + 128] = 2;
+        buf[data_start + 576 + 192] = 3;
+        buf[data_start + 576 + 208..data_start + 576 + 210].copy_from_slice(&f16_half);
+
+        let budget = crate::PayloadBudget::default();
+        let mut gf = GgufFile::open(Cursor::new(buf)).unwrap();
+        let q2k = gf.read_tensor_f64("t_q2k", &budget).unwrap();
+        assert_eq!(q2k.len(), 256);
+        assert!((q2k[0] - (0.5 * 2.0 * 3.0 - 0.25 * 1.0)).abs() < 1e-6);
+
+        let q3k = gf.read_tensor_f64("t_q3k", &budget).unwrap();
+        assert_eq!(q3k.len(), 256);
+        assert!((q3k[0] - (0.5 * 2.0 * 2.0)).abs() < 1e-6);
+
+        let q4k = gf.read_tensor_f64("t_q4k", &budget).unwrap();
+        assert_eq!(q4k.len(), 256);
+        assert!((q4k[0] - 9.5).abs() < 1e-6);
+
+        let q5k = gf.read_tensor_f64("t_q5k", &budget).unwrap();
+        assert_eq!(q5k.len(), 256);
+        assert!((q5k[0] - 19.0).abs() < 1e-6);
+
+        let q6k = gf.read_tensor_f64("t_q6k", &budget).unwrap();
+        assert_eq!(q6k.len(), 256);
+        assert!((q6k[0] - 6.0).abs() < 1e-6);
     }
 }

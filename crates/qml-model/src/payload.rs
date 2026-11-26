@@ -17,10 +17,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 /// Hard safety ceiling on a single shard index JSON file (16 MiB).
 pub const MAX_SHARD_INDEX_BYTES: u64 = 16 * 1024 * 1024;
-/// Default per-tensor allocation ceiling (2 GiB in decoded f64 — covers 360M–3B embeddings).
-pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-/// Default cumulative payload budget for multi-tensor reads (16 GiB).
-pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// Default per-tensor allocation ceiling (4 GiB in decoded f64 — covers 3B–32B embeddings up to 256K vocab).
+pub const DEFAULT_MAX_TENSOR_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Default cumulative payload budget for multi-tensor reads (32 GiB).
+pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 /// Default element count per streaming chunk (65,536 elements = 512 KiB in f64).
 pub const DEFAULT_STREAM_CHUNK_ELEMENTS: usize = 65_536;
 
@@ -467,6 +467,171 @@ pub fn parse_shard_index<R: Read>(reader: R) -> Result<SafetensorsShardIndex, Pa
         shard_files: shard_set.into_iter().collect(),
         weight_map: raw.weight_map,
     })
+}
+
+/// Unified read-only Safetensors source supporting BOTH single `.safetensors` files AND
+/// multi-shard Hugging Face `model.safetensors.index.json` directories with bounded memory
+/// (keeps at most ONE shard file open at any time so 3B–32B checkpoints stream safely).
+pub struct SafetensorsSource {
+    base_dir: std::path::PathBuf,
+    single_file: Option<std::path::PathBuf>,
+    tensor_to_shard: BTreeMap<String, String>,
+    metadata: SafetensorsMetadata,
+    cached_shard: Option<(String, SafetensorsFile<std::fs::File>)>,
+}
+
+impl SafetensorsSource {
+    /// Open either a single `.safetensors` file OR a `model.safetensors.index.json` shard index
+    /// (or a directory containing `model.safetensors.index.json` / `model.safetensors`).
+    pub fn open(path: &std::path::Path, budget: &PayloadBudget) -> Result<Self, PayloadError> {
+        let resolved = if path.is_dir() {
+            let idx = path.join("model.safetensors.index.json");
+            if idx.exists() {
+                idx
+            } else {
+                path.join("model.safetensors")
+            }
+        } else {
+            path.to_path_buf()
+        };
+
+        let is_index = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".index.json"));
+
+        if is_index {
+            let base_dir = resolved
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            let idx_file = std::fs::File::open(&resolved)?;
+            let shard_index = parse_shard_index(idx_file)?;
+            let mut total_file_bytes = 0_u64;
+            let mut total_header_bytes = 0_u64;
+            let mut total_data_bytes = 0_u64;
+            let mut all_tensors = Vec::new();
+            let mut combined_meta = BTreeMap::new();
+            let mut tensor_to_shard = BTreeMap::new();
+
+            for shard_name in &shard_index.shard_files {
+                let shard_path = base_dir.join(shard_name);
+                let f = std::fs::File::open(&shard_path)?;
+                let st = SafetensorsFile::open(f, budget)?;
+                let m = st.metadata();
+                total_file_bytes = total_file_bytes.saturating_add(m.file_bytes);
+                total_header_bytes = total_header_bytes.saturating_add(m.header_bytes);
+                total_data_bytes = total_data_bytes.saturating_add(m.data_bytes);
+                for (k, v) in &m.metadata {
+                    combined_meta.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+                for t in &m.tensors {
+                    tensor_to_shard.insert(t.name.clone(), shard_name.clone());
+                    all_tensors.push(t.clone());
+                }
+            }
+            all_tensors.sort_by(|a, b| a.name.cmp(&b.name));
+            let metadata = SafetensorsMetadata {
+                file_bytes: total_file_bytes,
+                header_bytes: total_header_bytes,
+                data_bytes: total_data_bytes,
+                tensors: all_tensors,
+                metadata: combined_meta,
+            };
+            Ok(Self {
+                base_dir,
+                single_file: None,
+                tensor_to_shard,
+                metadata,
+                cached_shard: None,
+            })
+        } else {
+            let f = std::fs::File::open(&resolved)?;
+            let st = SafetensorsFile::open(f, budget)?;
+            let metadata = st.metadata().clone();
+            let base_dir = resolved
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            Ok(Self {
+                base_dir,
+                single_file: Some(resolved.clone()),
+                tensor_to_shard: BTreeMap::new(),
+                metadata,
+                cached_shard: Some((resolved.to_string_lossy().into_owned(), st)),
+            })
+        }
+    }
+
+    pub fn metadata(&self) -> &SafetensorsMetadata {
+        &self.metadata
+    }
+
+    pub fn is_sharded(&self) -> bool {
+        self.single_file.is_none()
+    }
+
+    pub fn shard_count(&self) -> usize {
+        if self.single_file.is_some() {
+            1
+        } else {
+            self.tensor_to_shard
+                .values()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        }
+    }
+
+    fn shard_for_tensor(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<&mut SafetensorsFile<std::fs::File>, PayloadError> {
+        let shard_key = if let Some(single) = &self.single_file {
+            single.to_string_lossy().into_owned()
+        } else {
+            self.tensor_to_shard
+                .get(name)
+                .cloned()
+                .ok_or_else(|| PayloadError::TensorNotFound(name.to_owned()))?
+        };
+
+        let needs_open = match &self.cached_shard {
+            Some((cur, _)) => cur != &shard_key,
+            None => true,
+        };
+        if needs_open {
+            // Drop previous shard handle before opening the new one (bounded RAM & file descriptors)
+            self.cached_shard = None;
+            let path = if self.single_file.is_some() {
+                std::path::PathBuf::from(&shard_key)
+            } else {
+                self.base_dir.join(&shard_key)
+            };
+            let f = std::fs::File::open(&path)?;
+            let st = SafetensorsFile::open(f, budget)?;
+            self.cached_shard = Some((shard_key, st));
+        }
+        Ok(&mut self.cached_shard.as_mut().expect("opened").1)
+    }
+
+    pub fn read_tensor_f64(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<Vec<f64>, PayloadError> {
+        let st = self.shard_for_tensor(name, budget)?;
+        st.read_tensor_f64(name, budget)
+    }
+
+    pub fn read_tensor_matrix(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<DenseMatrix, PayloadError> {
+        let st = self.shard_for_tensor(name, budget)?;
+        st.read_tensor_matrix(name, budget)
+    }
 }
 
 /// Write a deterministic synthetic Safetensors buffer from named `(shape, dtype, raw_bytes)` entries.

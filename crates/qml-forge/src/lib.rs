@@ -6,25 +6,85 @@
 //! direct-execution verification against the original weights.
 
 use qml_core::{DenseMatrix, sha256_hex, truncated_svd};
-use qml_format::{QmfArchiveV1, QmfError, QmfLatentCache, QmfV1Builder};
-use qml_model::{PayloadBudget, PayloadError, SafetensorsFile};
+use qml_format::{QmfArchiveV1, QmfBudget, QmfError, QmfLatentCache, QmfV1Builder};
+use qml_model::{
+    PayloadBudget, PayloadError, SafetensorsFile, SafetensorsMetadata, SafetensorsSource,
+};
 use qml_quant::{
     BehaviorImportanceMap, Bf16Matrix, EchoBaseOperator, EchoCorrectedMatrix, FactorPrecision,
     Fp16Matrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix, Int4AsymGroupMatrix,
     Int4SymGroupMatrix, Int8SymMatrix, LinearOperator, LowRankSvdMatrix, MapConfig,
-    ResonanceCandidateKind, ResonanceProfile, RmqResidualKind, RmqSharedBasisCluster,
-    RmqSharedBasisConfig, RmqSharedCoreCluster, TernaryPackedMatrix, VectorQuantMatrix,
-    allocate_from_profiles, allocate_resonance_map_b, deterministic_probe_vectors,
-    evaluate_operator, profile_layer_for_map, profile_tensor_for_resonance,
+    ModelCalibrationProfile, ResonanceCandidateKind, ResonanceProfile, RmqResidualKind,
+    RmqSharedBasisCluster, RmqSharedBasisConfig, RmqSharedCoreCluster, TernaryPackedMatrix,
+    VectorQuantMatrix, allocate_from_profiles, allocate_resonance_map_b,
+    deterministic_probe_vectors, evaluate_operator, fit_echo_calibrated, profile_layer_for_map,
+    profile_tensor_for_resonance_calibrated, quantize_int2_gptq, quantize_int3_gptq,
+    quantize_int4_sym_gptq, quantize_ternary_gptq,
 };
 use qml_scope::{LayerRole, classify_tensor_name};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Seek};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+/// Abstraction over single-file `SafetensorsFile<R>` and multi-shard `SafetensorsSource`.
+trait TensorStreamSource {
+    fn metadata(&self) -> &SafetensorsMetadata;
+    fn read_tensor_f64(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<Vec<f64>, PayloadError>;
+    fn read_tensor_matrix(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<DenseMatrix, PayloadError>;
+}
+
+impl<R: Read + Seek> TensorStreamSource for SafetensorsFile<R> {
+    fn metadata(&self) -> &SafetensorsMetadata {
+        SafetensorsFile::metadata(self)
+    }
+    fn read_tensor_f64(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<Vec<f64>, PayloadError> {
+        SafetensorsFile::read_tensor_f64(self, name, budget)
+    }
+    fn read_tensor_matrix(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<DenseMatrix, PayloadError> {
+        SafetensorsFile::read_tensor_matrix(self, name, budget)
+    }
+}
+
+impl TensorStreamSource for SafetensorsSource {
+    fn metadata(&self) -> &SafetensorsMetadata {
+        SafetensorsSource::metadata(self)
+    }
+    fn read_tensor_f64(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<Vec<f64>, PayloadError> {
+        SafetensorsSource::read_tensor_f64(self, name, budget)
+    }
+    fn read_tensor_matrix(
+        &mut self,
+        name: &str,
+        budget: &PayloadBudget,
+    ) -> Result<DenseMatrix, PayloadError> {
+        SafetensorsSource::read_tensor_matrix(self, name, budget)
+    }
+}
 
 /// Supported model-level transformation strategies in Q-Forge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -400,9 +460,79 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
     seed: u64,
     control: &ForgeControl,
 ) -> Result<(QmfArchiveV1, ForgeReport), ForgeError> {
+    let mut file = SafetensorsFile::open(reader, budget)?;
+    let (archive, report) = forge_source_internal(
+        &mut file,
+        model_id,
+        source_license,
+        architecture,
+        strategy,
+        budget,
+        seed,
+        None,
+        control,
+        true,
+    )?;
+    Ok((archive, report))
+}
+
+/// Transform a single `.safetensors` file, sharded `model.safetensors.index.json`, or model
+/// directory directly to an atomic QMF v1 file on disk (zero duplicate full-file serialization
+/// in RAM), optionally applying Activation-Aware Blockwise Cholesky GPTQ + Hadamard calibration!
+#[allow(clippy::too_many_arguments)]
+pub fn forge_path_to_file_atomic(
+    source_path: &Path,
+    output_path: &Path,
+    model_id: &str,
+    source_license: &str,
+    architecture: &str,
+    strategy: &TransformStrategy,
+    budget: &PayloadBudget,
+    seed: u64,
+    calibration: Option<&ModelCalibrationProfile>,
+    control: &ForgeControl,
+) -> Result<ForgeReport, ForgeError> {
+    let mut source = SafetensorsSource::open(source_path, budget)?;
+    let (archive, mut report) = forge_source_internal(
+        &mut source,
+        model_id,
+        source_license,
+        architecture,
+        strategy,
+        budget,
+        seed,
+        calibration,
+        control,
+        false,
+    )?;
+    let (written, sha_hex) =
+        archive.write_to_file_atomic(output_path, Some(source_path), &QmfBudget::default())?;
+    report.qmf_serialized_bytes = written;
+    report.qmf_sha256 = sha_hex;
+    report.effective_qmf_bpp = if report.total_parameters > 0 {
+        (written as f64 * 8.0) / report.total_parameters as f64
+    } else {
+        0.0
+    };
+    report.compression_ratio_vs_source = report.source_file_bytes as f64 / written.max(1) as f64;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn forge_source_internal<S: TensorStreamSource>(
+    file: &mut S,
+    model_id: &str,
+    source_license: &str,
+    architecture: &str,
+    strategy: &TransformStrategy,
+    budget: &PayloadBudget,
+    seed: u64,
+    calibration: Option<&ModelCalibrationProfile>,
+    control: &ForgeControl,
+    in_memory_roundtrip: bool,
+) -> Result<(QmfArchiveV1, ForgeReport), ForgeError> {
     control.check_cancelled()?;
     let start = Instant::now();
-    let mut file = SafetensorsFile::open(reader, budget)?;
     let meta = file.metadata().clone();
     let descriptor = strategy.descriptor();
     let total_tensors = meta.tensors.len().max(1);
@@ -418,6 +548,10 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
     );
     builder.insert_metadata("assumptions", descriptor.assumptions);
     builder.insert_metadata("maturity", descriptor.maturity);
+    if let Some(cal) = calibration {
+        builder.insert_metadata("activation_calibrated", "true");
+        builder.insert_metadata("calibration_tokens", cal.calibration_tokens.to_string());
+    }
 
     let mut total_params = 0_u64;
     let mut tensor_summaries: Vec<TransformedTensorSummary> =
@@ -478,23 +612,23 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                 let (rep_name, rel_frob, mv_err) = match strategy {
                     TransformStrategy::Fp16 => {
                         let op = Fp16Matrix::quantize(&mat);
-                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        let mv = if in_memory_roundtrip {
+                            evaluate_operator(&mat, &op, &probes, 0)?.mean_matvec_rel_error
+                        } else {
+                            0.0
+                        };
                         builder.add_fp16(info.name.clone(), &op)?;
-                        (
-                            "QMF_FP16".to_owned(),
-                            ev.relative_frobenius_error,
-                            ev.mean_matvec_rel_error,
-                        )
+                        ("QMF_FP16".to_owned(), mv, mv)
                     }
                     TransformStrategy::Bf16 => {
                         let op = Bf16Matrix::quantize(&mat);
-                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        let mv = if in_memory_roundtrip {
+                            evaluate_operator(&mat, &op, &probes, 0)?.mean_matvec_rel_error
+                        } else {
+                            0.0
+                        };
                         builder.add_bf16(info.name.clone(), &op)?;
-                        (
-                            "QMF_BF16".to_owned(),
-                            ev.relative_frobenius_error,
-                            ev.mean_matvec_rel_error,
-                        )
+                        ("QMF_BF16".to_owned(), mv, mv)
                     }
                     TransformStrategy::Int8Sym { group_size } => {
                         let op = Int8SymMatrix::quantize(&mat, *group_size)?;
@@ -507,14 +641,17 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                         )
                     }
                     TransformStrategy::Int4Sym { group_size } => {
-                        let op = Int4SymGroupMatrix::quantize(&mat, *group_size)?;
-                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            quantize_int4_sym_gptq(&mat, *group_size, stats, 0.01)?
+                        } else {
+                            Int4SymGroupMatrix::quantize(&mat, *group_size)?
+                        };
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_int4_sym(info.name.clone(), &op)?;
-                        (
-                            "QMF_INT4_SYM".to_owned(),
-                            ev.relative_frobenius_error,
-                            ev.mean_matvec_rel_error,
-                        )
+                        ("QMF_INT4_SYM".to_owned(), mv, mv)
                     }
                     TransformStrategy::Int4Asym { group_size } => {
                         let op = Int4AsymGroupMatrix::quantize(&mat, *group_size)?;
@@ -550,7 +687,14 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             *hadamard_block,
                             seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
                         );
-                        let op = Int3AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            quantize_int3_gptq(&mat, *group_size, had, stats, 0.01)?
+                        } else {
+                            Int3AsymGroupMatrix::quantize(&mat, *group_size, had)?
+                        };
                         let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_int3_asym(info.name.clone(), &op)?;
                         (op.method_name().to_owned(), mv, mv)
@@ -563,7 +707,14 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             *hadamard_block,
                             seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
                         );
-                        let op = Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            quantize_int2_gptq(&mat, *group_size, had, stats, 0.01)?
+                        } else {
+                            Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?
+                        };
                         let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_int2_asym(info.name.clone(), &op)?;
                         (op.method_name().to_owned(), mv, mv)
@@ -576,7 +727,14 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             *hadamard_block,
                             seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
                         );
-                        let op = TernaryPackedMatrix::quantize(&mat, *group_size, had)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            quantize_ternary_gptq(&mat, *group_size, had, stats, 0.01)?
+                        } else {
+                            TernaryPackedMatrix::quantize(&mat, *group_size, had)?
+                        };
                         let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_ternary_packed(info.name.clone(), &op)?;
                         (op.method_name().to_owned(), mv, mv)
@@ -619,21 +777,32 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             *hadamard_block,
                             seed ^ (idx as u64).wrapping_mul(0x9e37_79b9),
                         );
-                        let base = Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?;
-                        let op = EchoCorrectedMatrix::fit(
-                            &mat,
-                            EchoBaseOperator::Int2Asym(base),
-                            *echo_rank,
-                            *sparse_fraction,
-                            seed.wrapping_add(idx as u64),
-                        )?;
-                        let ev = evaluate_operator(&mat, &op, &probes, 0)?;
+                        let cal_stats = calibration
+                            .and_then(|c| c.get(&info.name))
+                            .filter(|s| s.cols == mat.cols());
+                        let op = if let Some(stats) = cal_stats {
+                            let base = quantize_int2_gptq(&mat, *group_size, had, stats, 0.01)?;
+                            fit_echo_calibrated(
+                                &mat,
+                                EchoBaseOperator::Int2Asym(base),
+                                stats,
+                                *echo_rank,
+                                *sparse_fraction,
+                                seed.wrapping_add(idx as u64),
+                            )?
+                        } else {
+                            let base = Int2AsymGroupMatrix::quantize(&mat, *group_size, had)?;
+                            EchoCorrectedMatrix::fit(
+                                &mat,
+                                EchoBaseOperator::Int2Asym(base),
+                                *echo_rank,
+                                *sparse_fraction,
+                                seed.wrapping_add(idx as u64),
+                            )?
+                        };
+                        let mv = fast_matvec_rel_error(&mat, &op, &probes)?;
                         builder.add_echo_corrected(info.name.clone(), &op)?;
-                        (
-                            op.method_name().to_owned(),
-                            ev.relative_frobenius_error,
-                            ev.mean_matvec_rel_error,
-                        )
+                        (op.method_name().to_owned(), mv, mv)
                     }
                     TransformStrategy::BehaviorProtected {
                         base_group_size,
@@ -1138,13 +1307,17 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                     let mat = file.read_tensor_matrix(&info.name, budget)?;
                     let (layer_idx, _) = classify_tensor_name(&info.name);
                     let bw = behavior_weights.weight_for_tensor(&info.name, layer_idx, max_layer);
-                    profiles.push(profile_tensor_for_resonance(
+                    let cal_stats = calibration
+                        .and_then(|c| c.get(&info.name))
+                        .filter(|s| s.cols == mat.cols());
+                    profiles.push(profile_tensor_for_resonance_calibrated(
                         &info.name,
                         idx,
                         &mat,
                         bw,
                         *include_vq,
                         *include_echo,
+                        cal_stats,
                         seed,
                     )?);
                 }
@@ -1175,6 +1348,9 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                     let name = &matrix_infos[idx].name;
                     let mat = file.read_tensor_matrix(name, budget)?;
                     let had = HadamardSpec::new(64, seed ^ (idx as u64).wrapping_mul(0x9e37_79b9));
+                    let cal_stats = calibration
+                        .and_then(|c| c.get(name))
+                        .filter(|s| s.cols == mat.cols());
                     let rep_name = match alloc.selected.kind {
                         ResonanceCandidateKind::VqD8Hadamard => {
                             let cb_k = if mat.rows() > 8192 || mat.cols() > 8192 {
@@ -1195,61 +1371,113 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::TernaryHadamardG128 => {
-                            let op = TernaryPackedMatrix::quantize(&mat, 128, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_ternary_gptq(&mat, 128, had, s, 0.01)?
+                            } else {
+                                TernaryPackedMatrix::quantize(&mat, 128, had)?
+                            };
                             builder.add_ternary_packed(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::TernaryHadamardG64 => {
-                            let op = TernaryPackedMatrix::quantize(&mat, 64, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_ternary_gptq(&mat, 64, had, s, 0.01)?
+                            } else {
+                                TernaryPackedMatrix::quantize(&mat, 64, had)?
+                            };
                             builder.add_ternary_packed(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::TernaryEchoR8 => {
-                            let base = TernaryPackedMatrix::quantize(&mat, 128, had)?;
-                            let op = EchoCorrectedMatrix::fit(
-                                &mat,
-                                EchoBaseOperator::Ternary(base),
-                                8,
-                                0.0,
-                                seed + idx as u64,
-                            )?;
+                            let op = if let Some(s) = cal_stats {
+                                let base = quantize_ternary_gptq(&mat, 128, had, s, 0.01)?;
+                                fit_echo_calibrated(
+                                    &mat,
+                                    EchoBaseOperator::Ternary(base),
+                                    s,
+                                    8,
+                                    0.0,
+                                    seed + idx as u64,
+                                )?
+                            } else {
+                                let base = TernaryPackedMatrix::quantize(&mat, 128, had)?;
+                                EchoCorrectedMatrix::fit(
+                                    &mat,
+                                    EchoBaseOperator::Ternary(base),
+                                    8,
+                                    0.0,
+                                    seed + idx as u64,
+                                )?
+                            };
                             builder.add_echo_corrected(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int2HadamardG128 => {
-                            let op = Int2AsymGroupMatrix::quantize(&mat, 128, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_int2_gptq(&mat, 128, had, s, 0.01)?
+                            } else {
+                                Int2AsymGroupMatrix::quantize(&mat, 128, had)?
+                            };
                             builder.add_int2_asym(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int2HadamardG64 => {
-                            let op = Int2AsymGroupMatrix::quantize(&mat, 64, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_int2_gptq(&mat, 64, had, s, 0.01)?
+                            } else {
+                                Int2AsymGroupMatrix::quantize(&mat, 64, had)?
+                            };
                             builder.add_int2_asym(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int2EchoR8 => {
-                            let base = Int2AsymGroupMatrix::quantize(&mat, 128, had)?;
-                            let op = EchoCorrectedMatrix::fit(
-                                &mat,
-                                EchoBaseOperator::Int2Asym(base),
-                                8,
-                                0.0,
-                                seed + idx as u64,
-                            )?;
+                            let op = if let Some(s) = cal_stats {
+                                let base = quantize_int2_gptq(&mat, 128, had, s, 0.01)?;
+                                fit_echo_calibrated(
+                                    &mat,
+                                    EchoBaseOperator::Int2Asym(base),
+                                    s,
+                                    8,
+                                    0.0,
+                                    seed + idx as u64,
+                                )?
+                            } else {
+                                let base = Int2AsymGroupMatrix::quantize(&mat, 128, had)?;
+                                EchoCorrectedMatrix::fit(
+                                    &mat,
+                                    EchoBaseOperator::Int2Asym(base),
+                                    8,
+                                    0.0,
+                                    seed + idx as u64,
+                                )?
+                            };
                             builder.add_echo_corrected(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int3HadamardG128 => {
-                            let op = Int3AsymGroupMatrix::quantize(&mat, 128, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_int3_gptq(&mat, 128, had, s, 0.01)?
+                            } else {
+                                Int3AsymGroupMatrix::quantize(&mat, 128, had)?
+                            };
                             builder.add_int3_asym(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int3HadamardG64 => {
-                            let op = Int3AsymGroupMatrix::quantize(&mat, 64, had)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_int3_gptq(&mat, 64, had, s, 0.01)?
+                            } else {
+                                Int3AsymGroupMatrix::quantize(&mat, 64, had)?
+                            };
                             builder.add_int3_asym(name.clone(), &op)?;
                             op.method_name().to_owned()
                         }
                         ResonanceCandidateKind::Int4SymG32 => {
-                            let op = Int4SymGroupMatrix::quantize(&mat, 32)?;
+                            let op = if let Some(s) = cal_stats {
+                                quantize_int4_sym_gptq(&mat, 32, s, 0.01)?
+                            } else {
+                                Int4SymGroupMatrix::quantize(&mat, 32)?
+                            };
                             builder.add_int4_sym(name.clone(), &op)?;
                             "QMF_INT4_SYM".to_owned()
                         }
@@ -1279,10 +1507,17 @@ pub fn forge_safetensors_to_qmf_with_control<R: Read + Seek>(
     }
 
     let archive = builder.build()?;
-    let mut serialized = Vec::new();
-    let qmf_bytes = archive.write_to(&mut serialized)?;
-    let qmf_sha256 = sha256_hex(&serialized);
-    let verified = QmfArchiveV1::from_bytes(&serialized)?;
+    let (verified, qmf_bytes, qmf_sha256) = if in_memory_roundtrip {
+        let mut serialized = Vec::new();
+        let qmf_bytes = archive.write_to(&mut serialized)?;
+        let qmf_sha256 = sha256_hex(&serialized);
+        let verified = QmfArchiveV1::from_bytes(&serialized)?;
+        (verified, qmf_bytes, qmf_sha256)
+    } else {
+        // Zero-duplicate-RAM path for multi-GB models written directly via `write_to_file_atomic`
+        let approx_bytes = archive.payload_bytes();
+        (archive, approx_bytes, String::new())
+    };
     tensor_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
     let effective_qmf_bpp = if total_params > 0 {

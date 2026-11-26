@@ -1,5 +1,8 @@
 use qml_core::{DenseMatrix, DeterministicRng};
-use qml_forge::{TransformStrategy, compare_safetensors_and_qmf, forge_safetensors_to_qmf};
+use qml_forge::{
+    ForgeControl, TransformStrategy, compare_safetensors_and_qmf, forge_path_to_file_atomic,
+    forge_safetensors_to_qmf,
+};
 use qml_format::{QmfArchiveV1, QmfBudget, QmfFileReader, QmfRankOne, peek_qmf_version};
 use qml_genesis::{GenesisConfig, run_genesis};
 use qml_model::{
@@ -1059,38 +1062,29 @@ fn run_morph(args: Vec<String>) -> ExitCode {
         }
     };
 
-    let file = match File::open(&source) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("could not open {}: {e}", source.display());
-            return ExitCode::FAILURE;
-        }
-    };
     let model_id = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
     let budget = PayloadBudget::default();
-    let (archive, report) = match forge_safetensors_to_qmf(
-        file,
+    let report = match forge_path_to_file_atomic(
+        &source,
+        &output,
         model_id,
         "see-source-model-license",
         "unspecified",
         &strategy,
         &budget,
         seed,
+        None,
+        &ForgeControl::default(),
     ) {
-        Ok(res) => res,
+        Ok(rep) => rep,
         Err(e) => {
             eprintln!("Q-Forge transformation failed: {e}");
             return ExitCode::FAILURE;
         }
     };
-
-    if let Err(e) = archive.write_to_file_atomic(&output, Some(&source), &QmfBudget::default()) {
-        eprintln!("failed publishing QMF v1 artifact atomically: {e}");
-        return ExitCode::FAILURE;
-    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report).unwrap());
@@ -1608,11 +1602,14 @@ fn run_generate(args: Vec<String>) -> ExitCode {
                 i += 1;
                 match args.get(i).map(String::as_str) {
                     Some("cpu") => backend = qml_runtime::QCoreBackend::Cpu,
-                    Some("gpu") | Some("gpu-hybrid") | Some("auto") => {
-                        backend = qml_runtime::QCoreBackend::GpuHybrid;
+                    Some("gpu-hybrid") => backend = qml_runtime::QCoreBackend::GpuHybrid,
+                    Some("gpu") | Some("gpu-full") | Some("auto") => {
+                        backend = qml_runtime::QCoreBackend::GpuFull;
                     }
                     other => {
-                        eprintln!("invalid --backend value: {other:?} (expected cpu or gpu)");
+                        eprintln!(
+                            "invalid --backend value: {other:?} (expected cpu, gpu-hybrid, or gpu)"
+                        );
                         return ExitCode::from(2);
                     }
                 }
@@ -2052,10 +2049,11 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
     let mut tok_path: Option<PathBuf> = None;
     let mut ref_qmf_path: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
-    let mut backend = qml_runtime::QCoreBackend::GpuHybrid;
+    let mut backend = qml_runtime::QCoreBackend::GpuFull;
     let mut profiles_arg: Option<String> = None;
     let mut include_vq = false;
     let mut include_echo = true;
+    let mut calibrate = false;
     let mut json = false;
 
     let mut i = 0;
@@ -2065,6 +2063,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             "--json" => json = true,
             "--with-vq" => include_vq = true,
             "--no-echo" => include_echo = false,
+            "--calibrate" => calibrate = true,
             "--model" => {
                 i += 1;
                 model_path = args.get(i).map(PathBuf::from);
@@ -2091,10 +2090,10 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             }
             "--backend" => {
                 i += 1;
-                if let Some("cpu") = args.get(i).map(String::as_str) {
-                    backend = qml_runtime::QCoreBackend::Cpu;
-                } else {
-                    backend = qml_runtime::QCoreBackend::GpuHybrid;
+                match args.get(i).map(String::as_str) {
+                    Some("cpu") => backend = qml_runtime::QCoreBackend::Cpu,
+                    Some("gpu-hybrid") => backend = qml_runtime::QCoreBackend::GpuHybrid,
+                    _ => backend = qml_runtime::QCoreBackend::GpuFull,
                 }
             }
             other => {
@@ -2373,60 +2372,130 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         .collect();
 
     let budget = PayloadBudget::default();
-    let ref_model = if let Some(ref_p) = ref_qmf_path {
-        let f = match File::open(&ref_p) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("failed opening ref QMF {}: {e}", ref_p.display());
+    let work_dir = out_dir
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("qml-resonance-ladder"));
+    let _ = fs::create_dir_all(&work_dir);
+
+    let (ref_cache, cal_profile) = {
+        let ref_model = if let Some(ref_p) = ref_qmf_path {
+            let f = match File::open(&ref_p) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("failed opening ref QMF {}: {e}", ref_p.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut r = match QmfFileReader::open(f, &QmfBudget::default()) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("invalid ref QMF: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match QCoreModel::from_qmf_reader_with_backend(&mut r, cfg.clone(), backend) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("failed loading ref model: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            let ref_tmp = work_dir.join("_ref_bf16.qmf");
+            if let Err(e) = forge_path_to_file_atomic(
+                &model_p,
+                &ref_tmp,
+                "ref-bf16",
+                "see-source",
+                "transformer",
+                &TransformStrategy::Bf16,
+                &budget,
+                42,
+                None,
+                &ForgeControl::default(),
+            ) {
+                eprintln!("failed forging BF16 reference QMF: {e}");
                 return ExitCode::FAILURE;
             }
+            let f = File::open(&ref_tmp).expect("open ref bf16");
+            let mut r = QmfFileReader::open(f, &QmfBudget::default()).expect("open ref reader");
+            let m = QCoreModel::from_qmf_reader_with_backend(&mut r, cfg.clone(), backend)
+                .expect("load ref");
+            if out_dir.is_none() {
+                let _ = fs::remove_file(&ref_tmp);
+            }
+            m
         };
-        let mut r = match QmfFileReader::open(f, &QmfBudget::default()) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("invalid ref QMF: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        match QCoreModel::from_qmf_reader_with_backend(&mut r, cfg.clone(), backend) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("failed loading ref model: {e}");
-                return ExitCode::FAILURE;
-            }
+
+        if !json {
+            eprintln!(
+                "  [ref ] Backend: {} | VRAM={:.1} MiB — caching BF16 reference logits...",
+                ref_model.backend_stats().backend,
+                ref_model.backend_stats().vram_weight_bytes as f64 / 1_048_576.0
+            );
         }
-    } else {
-        let f = File::open(&model_p).expect("open model");
-        let (ref_qmf, _) = forge_safetensors_to_qmf(
-            f,
-            "ref",
-            "see-source",
-            "llama",
-            &TransformStrategy::Bf16,
-            &budget,
-            42,
-        )
-        .expect("forge bf16 ref");
-        QCoreModel::from_qmf_with_backend(&ref_qmf, cfg.clone(), backend).expect("load ref")
+        let rcache = match qml_behavior::ReferenceSuiteCache::build(&ref_model, &examples) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("failed building reference suite cache: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Disjoint multi-domain calibration corpus (strictly separate from held-out eval prompts!)
+        let cal = if calibrate {
+            let cal_texts = [
+                "Modern operating systems schedule threads across multiple processor cores while isolating virtual address spaces through hierarchical page tables.",
+                "In numerical linear algebra, Cholesky factorization decomposes a symmetric positive-definite matrix into a lower triangular factor and its transpose.",
+                "def quicksort(arr): return arr if len(arr) <= 1 else quicksort([x for x in arr[1:] if x <= arr[0]]) + [arr[0]] + quicksort([x for x in arr[1:] if x > arr[0]])",
+                "Photosynthesis converts light energy into chemical energy inside chloroplasts, fixing atmospheric carbon dioxide into glucose molecules.",
+                "When designing distributed databases, consensus algorithms such as Raft elect a leader to replicate a deterministic state-machine log across nodes.",
+                "Calculate the area of a right triangle with legs of length 9 cm and 12 cm: area equals one-half times 9 times 12, which is 54 square centimeters.",
+            ];
+            let cal_seqs: Vec<Vec<usize>> = cal_texts
+                .iter()
+                .map(|t| tok.encode(t).into_iter().map(|id| id as usize).collect())
+                .collect();
+            let t_cal = std::time::Instant::now();
+            match ref_model.collect_calibration_profile("calibration", &cal_seqs) {
+                Ok(p) => {
+                    if !json {
+                        eprintln!(
+                            "  [cal ] Collected {} disjoint calibration tokens across {} tensors ({:.1} MiB Hessians, {:.1}s)",
+                            p.calibration_tokens,
+                            p.layers.len(),
+                            p.memory_bytes() as f64 / 1_048_576.0,
+                            t_cal.elapsed().as_secs_f64()
+                        );
+                    }
+                    Some(p)
+                }
+                Err(e) => {
+                    eprintln!("calibration collection failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            None
+        };
+        // `ref_model` drops right here, freeing 100% of VRAM before candidate runs!
+        (rcache, cal)
     };
 
     let mut rows = Vec::new();
     for (label, target_bpp, strat) in ladder_specs {
-        let f = match File::open(&model_p) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("failed opening {}: {e}", model_p.display());
-                return ExitCode::FAILURE;
-            }
-        };
-        let (cand_qmf, rep) = match forge_safetensors_to_qmf(
-            f,
+        let out_file = work_dir.join(format!("{}.qmf", label.to_lowercase()));
+        let rep = match forge_path_to_file_atomic(
+            &model_p,
+            &out_file,
             &label,
             "see-source-model-license",
-            "llama",
+            "transformer",
             &strat,
             &budget,
             42,
+            cal_profile.as_ref(),
+            &ForgeControl::default(),
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -2434,20 +2503,31 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        if let Some(ref dir) = out_dir {
-            let out_file = dir.join(format!("{}.qmf", label.to_lowercase()));
-            let _ = cand_qmf.write_to_file_atomic(&out_file, Some(&model_p), &QmfBudget::default());
-        }
-        let cand_model = match QCoreModel::from_qmf_with_backend(&cand_qmf, cfg.clone(), backend) {
-            Ok(m) => m,
+        let cf = match File::open(&out_file) {
+            Ok(f) => f,
             Err(e) => {
-                eprintln!("load {label} failed: {e}");
+                eprintln!("open {label} QMF failed: {e}");
                 return ExitCode::FAILURE;
             }
         };
+        let mut cr = match QmfFileReader::open(cf, &QmfBudget::default()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("read {label} QMF failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let cand_model =
+            match QCoreModel::from_qmf_reader_with_backend(&mut cr, cfg.clone(), backend) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("load {label} failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
         let t0 = std::time::Instant::now();
         let suite =
-            match qml_behavior::evaluate_capability_suite(&ref_model, &cand_model, &examples) {
+            match qml_behavior::evaluate_capability_suite_with_cache(&ref_cache, &cand_model) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("eval {label} failed: {e}");
@@ -2457,26 +2537,29 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         let dt = t0.elapsed().as_secs_f64().max(1e-6);
         let n_tok: usize = suite.categories.iter().map(|c| c.token_count).sum();
 
-        let gen_new: Vec<u32> = cand_model
-            .generate(&sample_ids, 20, 0.0, 42)
-            .map(|res| {
-                res.generated_tokens
-                    .into_iter()
-                    .map(|id| id as u32)
-                    .collect()
-            })
+        let gen_res = cand_model.generate(&sample_ids, 20, 0.0, 42).ok();
+        let gen_new: Vec<u32> = gen_res
+            .as_ref()
+            .map(|res| res.generated_tokens.iter().map(|&id| id as u32).collect())
             .unwrap_or_default();
         let sample_text = tok.decode(&gen_new, true).replace(['\r', '\n'], " ");
+        let display_tps = gen_res
+            .as_ref()
+            .map_or(n_tok as f64 / dt, |g| g.tokens_per_second);
 
         let row = ResonanceLadderRow {
-            label,
+            label: if calibrate {
+                format!("{label}_GPTQ")
+            } else {
+                label
+            },
             target_bpp,
             complete_qmf_bytes: rep.qmf_serialized_bytes,
             complete_qmf_bpp: rep.effective_qmf_bpp,
             vram_weight_mib: cand_model.backend_stats().vram_weight_bytes as f64 / 1_048_576.0,
             gpu_resident_ops: cand_model.backend_stats().gpu_resident_operators,
             cpu_fallback_ops: cand_model.backend_stats().cpu_fallback_operators,
-            eval_tok_per_sec: n_tok as f64 / dt,
+            eval_tok_per_sec: display_tps,
             ref_perplexity: suite.overall_ref_perplexity,
             cand_perplexity: suite.overall_cand_perplexity,
             perplexity_ratio: suite.overall_perplexity_ratio,
@@ -2487,9 +2570,12 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             catastrophic_failure: suite.catastrophic_failure,
             sample_output: sample_text,
         };
+        if out_dir.is_none() {
+            let _ = fs::remove_file(&out_file);
+        }
         if !json {
             eprintln!(
-                "  [done] {:<16} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Ret={:>5.1}% | {:.1} tok/s | {:?}",
+                "  [done] {:<20} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Ret={:>5.1}% | {:>5.1} tok/s | {:?}",
                 row.label,
                 row.complete_qmf_bpp,
                 row.vram_weight_mib,

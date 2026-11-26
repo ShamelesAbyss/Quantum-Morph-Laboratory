@@ -5,6 +5,10 @@
 //! multiplication prototype (`y = A * x`) with graceful CPU fallback when no
 //! GPU adapter is available (such as on headless CI runners).
 
+pub mod gpu_full;
+
+pub use gpu_full::{GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache};
+
 use qml_core::{DenseMatrix, MatrixError};
 use qml_quant::{
     Bf16Matrix, Fp16Matrix, HadamardSpec, Int2AsymGroupMatrix, Int3AsymGroupMatrix,
@@ -445,9 +449,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-/// Preallocated reusable GPU scratch vector capacity (131,072 f32s = 512 KiB per buffer).
-/// Covers vocabularies up to 131K tokens (e.g., SmolLM2 49K, Llama-3 128K) with zero per-token allocations.
-pub const GPU_SCRATCH_MAX_ELEMS: usize = 131_072;
+/// Preallocated reusable GPU scratch vector capacity (262,144 f32s = 1 MiB per buffer).
+/// Covers vocabularies up to 262K tokens (SmolLM2 49K, Llama-3 128K, Qwen2.5 152K, Gemma 256K)
+/// with zero per-token allocations.
+pub const GPU_SCRATCH_MAX_ELEMS: usize = 262_144;
 
 fn pack_bytes_u32(bytes: &[u8]) -> Vec<u32> {
     let mut out = Vec::with_capacity(bytes.len().div_ceil(4).max(1));
@@ -704,6 +709,93 @@ impl PersistentGpuMatrix {
         self.vram_bytes
     }
 
+    pub fn hadamard(&self) -> HadamardSpec {
+        self.hadamard
+    }
+
+    pub fn engine(&self) -> &Arc<WgpuMatvecEngine> {
+        &self.engine
+    }
+
+    pub(crate) fn pipeline(&self) -> &wgpu::ComputePipeline {
+        match self.kind {
+            GpuMatrixKind::Fp32 => &self.engine.pipeline_f32,
+            GpuMatrixKind::Fp16 => &self.engine.pipeline_fp16,
+            GpuMatrixKind::Bf16 => &self.engine.pipeline_bf16,
+            GpuMatrixKind::Int8Sym => &self.engine.pipeline_int8,
+            GpuMatrixKind::Int4Sym => &self.engine.pipeline_q4_0,
+            GpuMatrixKind::Int4Asym => &self.engine.pipeline_q4_1,
+            GpuMatrixKind::Int3Asym => &self.engine.pipeline_int3,
+            GpuMatrixKind::Int2Asym => &self.engine.pipeline_int2,
+            GpuMatrixKind::TernaryPacked => &self.engine.pipeline_ternary,
+        }
+    }
+
+    /// Create a compute bind group binding this matrix's persistent VRAM weights to arbitrary
+    /// GPU-resident `input_buf` and `output_buf` storage buffers (used by Full GPU-Resident inference).
+    pub(crate) fn create_io_bind_group(
+        &self,
+        input_buf: &wgpu::Buffer,
+        output_buf: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        match self.kind {
+            GpuMatrixKind::Fp32 | GpuMatrixKind::Fp16 | GpuMatrixKind::Bf16 => self
+                .engine
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("full-gpu-matvec-1buf-bg"),
+                    layout: &self.engine.bgl_f32,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self._weight_buffers[0].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self._weight_buffers[1].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: input_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: output_buf.as_entire_binding(),
+                        },
+                    ],
+                }),
+            _ => self
+                .engine
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("full-gpu-matvec-2buf-bg"),
+                    layout: &self.engine.bgl_quant,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self._weight_buffers[0].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self._weight_buffers[1].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self._weight_buffers[2].as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: input_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: output_buf.as_entire_binding(),
+                        },
+                    ],
+                }),
+        }
+    }
+
     /// Execute `y = W * x` directly on the GPU-resident compressed matrix using
     /// preallocated reusable scratch buffers (zero weight transfer per call).
     pub fn matvec(&self, vector: &[f64]) -> Result<Vec<f64>, GpuComputeError> {
@@ -774,8 +866,7 @@ impl WgpuMatvecEngine {
             &wgpu::DeviceDescriptor {
                 label: Some("qml-wgpu-compute"),
                 required_features: wgpu::Features::empty(),
-                required_limits:
-                    wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+                required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,

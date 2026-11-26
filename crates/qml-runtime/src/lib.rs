@@ -11,9 +11,15 @@
 
 use qml_core::{DeterministicRng, MatrixError};
 use qml_format::{QmfArchiveV1, QmfError, QmfFileReader, QmfLatentCache, QmfOperator};
-use qml_hardware::{PersistentGpuMatrix, WgpuMatvecEngine};
-use qml_model::{DType, encode_safetensors};
-use qml_quant::{EchoBaseOperator, LinearOperator, QuantizedFactor, SparseResidual};
+use qml_hardware::{
+    GpuFullConfig, GpuFullLayerSpec, GpuFullModel, GpuFullOperator, GpuKvCache,
+    PersistentGpuMatrix, WgpuMatvecEngine,
+};
+use qml_model::{DType, encode_safetensors, f16_to_f32, f32_to_f16};
+use qml_quant::{
+    DEFAULT_HESSIAN_BLOCK_SIZE, EchoBaseOperator, LayerCalibrationAccumulator, LinearOperator,
+    ModelCalibrationProfile, QuantizedFactor, SparseResidual,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -157,23 +163,86 @@ impl From<MatrixError> for RuntimeError {
     }
 }
 
-/// Incremental key-value cache for autoregressive decoding.
+/// Storage precision mode for CPU incremental KV-cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum KvCacheMode {
+    /// Full-precision f64 KV-cache reference.
+    #[default]
+    Fp64,
+    /// Per-token symmetric INT8 KV-cache with f16 scales (~7.5x smaller than f64).
+    Int8,
+}
+
 #[derive(Debug, Clone)]
+struct Int8KvEntry {
+    scale_f16: u16,
+    codes: Vec<i8>,
+}
+
+impl Int8KvEntry {
+    fn encode(vec: &[f64]) -> Self {
+        let absmax = vec.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+        let scale = if absmax > 0.0 { absmax / 127.0 } else { 0.0 };
+        let scale_f16 = f32_to_f16(scale as f32);
+        let eff = f64::from(f16_to_f32(scale_f16));
+        let codes = if eff > 0.0 {
+            vec.iter()
+                .map(|&v| (v / eff).round().clamp(-127.0, 127.0) as i8)
+                .collect()
+        } else {
+            vec![0i8; vec.len()]
+        };
+        Self { scale_f16, codes }
+    }
+
+    #[inline]
+    fn scale(&self) -> f64 {
+        f64::from(f16_to_f32(self.scale_f16))
+    }
+}
+
+/// Incremental key-value cache for autoregressive decoding (supports FP64, INT8, and GPU-resident KV).
 pub struct KvCache {
-    keys: Vec<Vec<Vec<f64>>>,   // [layer][pos][kv_dim]
-    values: Vec<Vec<Vec<f64>>>, // [layer][pos][kv_dim]
+    mode: KvCacheMode,
+    keys: Vec<Vec<Vec<f64>>>,   // [layer][pos][kv_dim] (Fp64 mode)
+    values: Vec<Vec<Vec<f64>>>, // [layer][pos][kv_dim] (Fp64 mode)
+    keys_i8: Vec<Vec<Int8KvEntry>>,
+    values_i8: Vec<Vec<Int8KvEntry>>,
+    gpu_kv: Option<GpuKvCache>,
 }
 
 impl KvCache {
     pub fn new(num_layers: usize) -> Self {
+        Self::with_mode(num_layers, KvCacheMode::Fp64)
+    }
+
+    pub fn new_int8(num_layers: usize) -> Self {
+        Self::with_mode(num_layers, KvCacheMode::Int8)
+    }
+
+    pub fn with_mode(num_layers: usize, mode: KvCacheMode) -> Self {
         Self {
+            mode,
             keys: (0..num_layers).map(|_| Vec::new()).collect(),
             values: (0..num_layers).map(|_| Vec::new()).collect(),
+            keys_i8: (0..num_layers).map(|_| Vec::new()).collect(),
+            values_i8: (0..num_layers).map(|_| Vec::new()).collect(),
+            gpu_kv: None,
         }
     }
 
+    pub fn mode(&self) -> KvCacheMode {
+        self.mode
+    }
+
     pub fn seq_len(&self) -> usize {
-        self.keys.first().map_or(0, Vec::len)
+        if let Some(g) = &self.gpu_kv {
+            return g.seq_len();
+        }
+        match self.mode {
+            KvCacheMode::Fp64 => self.keys.first().map_or(0, Vec::len),
+            KvCacheMode::Int8 => self.keys_i8.first().map_or(0, Vec::len),
+        }
     }
 }
 
@@ -183,10 +252,14 @@ pub enum QCoreBackend {
     /// Multi-threaded Rayon CPU execution over compressed QMF operators.
     #[default]
     Cpu,
-    /// Persistent GPU-resident compressed operators via WGPU compute shaders
-    /// (zero per-token weight transfer or buffer allocation), with automatic
-    /// graceful fallback to CPU if no compatible GPU adapter is present.
+    /// Persistent GPU-resident compressed linear operators via WGPU compute shaders,
+    /// with RMSNorm/RoPE/Attention on CPU.
     GpuHybrid,
+    /// Full GPU-resident single-submission transformer execution (RMSNorm, RoPE,
+    /// Qwen2 biases, VRAM KV-cache, GQA attention, SwiGLU, residuals, GPU Hadamard,
+    /// and direct compressed matvecs in ONE submission per token), falling back to
+    /// `GpuHybrid` if any operator requires CPU fallback.
+    GpuFull,
 }
 
 /// Runtime backend telemetry for an initialized [`QCoreModel`].
@@ -201,31 +274,49 @@ pub struct QCoreBackendStats {
 }
 
 enum GpuOperator {
-    Single(PersistentGpuMatrix),
+    Single(Arc<PersistentGpuMatrix>),
     LowRankSvd {
-        left: PersistentGpuMatrix,
-        right: PersistentGpuMatrix,
+        left: Arc<PersistentGpuMatrix>,
+        right: Arc<PersistentGpuMatrix>,
     },
     RmqSharedBasis {
         u_shared: Arc<PersistentGpuMatrix>,
-        core: PersistentGpuMatrix,
+        core: Arc<PersistentGpuMatrix>,
         vt_shared: Arc<PersistentGpuMatrix>,
         sparse_residual: Option<SparseResidual>,
     },
     RmqSharedCore {
-        left: PersistentGpuMatrix,
+        left: Arc<PersistentGpuMatrix>,
         shared_core: Arc<PersistentGpuMatrix>,
-        right: PersistentGpuMatrix,
+        right: Arc<PersistentGpuMatrix>,
         sparse_residual: Option<SparseResidual>,
     },
     EchoCorrected {
-        base: PersistentGpuMatrix,
-        low_rank: Option<(PersistentGpuMatrix, PersistentGpuMatrix)>,
+        base: Arc<PersistentGpuMatrix>,
+        low_rank: Option<(Arc<PersistentGpuMatrix>, Arc<PersistentGpuMatrix>)>,
         sparse_residual: Option<SparseResidual>,
     },
 }
 
 impl GpuOperator {
+    fn to_full_op(&self) -> Option<GpuFullOperator> {
+        match self {
+            Self::Single(m) => Some(GpuFullOperator::Single(Arc::clone(m))),
+            Self::EchoCorrected {
+                base,
+                low_rank,
+                sparse_residual,
+            } if sparse_residual.is_none() => match low_rank {
+                None => Some(GpuFullOperator::Single(Arc::clone(base))),
+                Some((left, right)) => Some(GpuFullOperator::EchoLowRank {
+                    base: Arc::clone(base),
+                    left: Arc::clone(left),
+                    right: Arc::clone(right),
+                }),
+            },
+            _ => None,
+        }
+    }
     fn matvec(&self, x: &[f64]) -> Result<Vec<f64>, MatrixError> {
         let map_err = |_| MatrixError::Empty;
         match self {
@@ -344,27 +435,27 @@ impl GpuUploadContext {
         let gpu_op = match &cpu {
             QmfOperator::DenseF32(m) => self.engine.upload_f32(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::DenseF16(m) => self.engine.upload_fp16(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::DenseBf16(m) => self.engine.upload_bf16(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::Int8Sym(m) => self.engine.upload_int8_sym(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::Int4Sym(m) => self.engine.upload_int4_sym(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::Int4Asym(m) => self.engine.upload_int4_asym(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::LowRankSvd(svd) => {
                 let left = self.engine.upload_quantized_factor(svd.left()).ok();
@@ -372,7 +463,10 @@ impl GpuUploadContext {
                 match (left, right) {
                     (Some(l), Some(r)) => {
                         self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
-                        Some(GpuOperator::LowRankSvd { left: l, right: r })
+                        Some(GpuOperator::LowRankSvd {
+                            left: Arc::new(l),
+                            right: Arc::new(r),
+                        })
                     }
                     _ => None,
                 }
@@ -392,7 +486,7 @@ impl GpuUploadContext {
                         self.vram_weight_bytes += c.vram_bytes();
                         Some(GpuOperator::RmqSharedBasis {
                             u_shared: u,
-                            core: c,
+                            core: Arc::new(c),
                             vt_shared: vt,
                             sparse_residual: sparse_residual.clone(),
                         })
@@ -414,9 +508,9 @@ impl GpuUploadContext {
                     (Some(l), Some(s), Some(r)) => {
                         self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
                         Some(GpuOperator::RmqSharedCore {
-                            left: l,
+                            left: Arc::new(l),
                             shared_core: s,
-                            right: r,
+                            right: Arc::new(r),
                             sparse_residual: sparse_residual.clone(),
                         })
                     }
@@ -425,20 +519,17 @@ impl GpuUploadContext {
             }
             QmfOperator::Int3Asym(m) => self.engine.upload_int3_asym(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::Int2Asym(m) => self.engine.upload_int2_asym(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
             QmfOperator::TernaryPacked(m) => self.engine.upload_ternary_packed(m).ok().map(|p| {
                 self.vram_weight_bytes += p.vram_bytes();
-                GpuOperator::Single(p)
+                GpuOperator::Single(Arc::new(p))
             }),
-            QmfOperator::VectorQuant(_) => {
-                // LUT-accelerated CPU path executes zero-multiply codebook matvec directly.
-                None
-            }
+            QmfOperator::VectorQuant(_) => None,
             QmfOperator::EchoCorrected(echo) => {
                 let base_gpu = match echo.base() {
                     EchoBaseOperator::Int3Asym(m) => self.engine.upload_int3_asym(m).ok(),
@@ -455,7 +546,7 @@ impl GpuUploadContext {
                         ) {
                             (Some(l), Some(r)) => {
                                 self.vram_weight_bytes += l.vram_bytes() + r.vram_bytes();
-                                Some((l, r))
+                                Some((Arc::new(l), Arc::new(r)))
                             }
                             _ => None,
                         }
@@ -463,7 +554,7 @@ impl GpuUploadContext {
                         None
                     };
                     Some(GpuOperator::EchoCorrected {
-                        base,
+                        base: Arc::new(base),
                         low_rank,
                         sparse_residual: echo.sparse_residual().cloned(),
                     })
@@ -484,8 +575,11 @@ impl GpuUploadContext {
 struct TransformerBlock {
     input_norm: Vec<f64>,
     q_proj: RuntimeOperator,
+    q_bias: Option<Vec<f64>>,
     k_proj: RuntimeOperator,
+    k_bias: Option<Vec<f64>>,
     v_proj: RuntimeOperator,
+    v_bias: Option<Vec<f64>>,
     o_proj: RuntimeOperator,
     post_attn_norm: Vec<f64>,
     gate_proj: RuntimeOperator,
@@ -497,16 +591,59 @@ struct TransformerBlock {
 ///
 /// Retains embeddings and linear projections in their native compressed `QmfOperator`
 /// form (zero dense `f64` reconstruction of embeddings or weights), deduplicates
-/// shared RMQ latent structures across layers via `Arc`, and optionally executes
-/// persistent compressed weights directly in GPU VRAM via WGPU compute shaders.
+/// shared RMQ latent structures across layers via `Arc`, supports Qwen2 attention
+/// biases, INT8 KV-cache, and optionally executes the full transformer inside a single
+/// GPU submission (`QCoreBackend::GpuFull`) or hybrid GPU matvecs (`QCoreBackend::GpuHybrid`).
 pub struct QCoreModel {
     config: TransformerConfig,
     embed_tokens: Arc<RuntimeOperator>,
     layers: Vec<TransformerBlock>,
     final_norm: Vec<f64>,
     lm_head: Arc<RuntimeOperator>,
+    gpu_full: Option<Arc<GpuFullModel>>,
     shared_latents_deduped: usize,
     backend_stats: QCoreBackendStats,
+}
+
+fn try_build_gpu_full(
+    engine: Arc<WgpuMatvecEngine>,
+    config: &TransformerConfig,
+    layers: &[TransformerBlock],
+    final_norm: &[f64],
+    lm_head: &RuntimeOperator,
+) -> Option<Arc<GpuFullModel>> {
+    let lm_full = lm_head.gpu.as_ref()?.to_full_op()?;
+    let mut specs = Vec::with_capacity(layers.len());
+    for blk in layers {
+        specs.push(GpuFullLayerSpec {
+            input_norm: blk.input_norm.clone(),
+            q_proj: blk.q_proj.gpu.as_ref()?.to_full_op()?,
+            q_bias: blk.q_bias.clone(),
+            k_proj: blk.k_proj.gpu.as_ref()?.to_full_op()?,
+            k_bias: blk.k_bias.clone(),
+            v_proj: blk.v_proj.gpu.as_ref()?.to_full_op()?,
+            v_bias: blk.v_bias.clone(),
+            o_proj: blk.o_proj.gpu.as_ref()?.to_full_op()?,
+            post_attn_norm: blk.post_attn_norm.clone(),
+            gate_proj: blk.gate_proj.gpu.as_ref()?.to_full_op()?,
+            up_proj: blk.up_proj.gpu.as_ref()?.to_full_op()?,
+            down_proj: blk.down_proj.gpu.as_ref()?.to_full_op()?,
+        });
+    }
+    let full_cfg = GpuFullConfig {
+        vocab_size: config.vocab_size,
+        hidden_size: config.hidden_size,
+        intermediate_size: config.intermediate_size,
+        num_layers: config.num_layers,
+        num_heads: config.num_heads,
+        num_kv_heads: config.num_kv_heads,
+        rms_norm_eps: config.rms_norm_eps,
+        rope_theta: config.rope_theta,
+        max_kv_len: config.max_seq_len.min(4096),
+    };
+    GpuFullModel::new(engine, full_cfg, specs, final_norm.to_vec(), lm_full)
+        .ok()
+        .map(Arc::new)
 }
 
 /// Output of autoregressive generation.
@@ -593,7 +730,7 @@ impl QCoreModel {
         config.validate()?;
         let mut gpu_ctx = match backend {
             QCoreBackend::Cpu => None,
-            QCoreBackend::GpuHybrid => WgpuMatvecEngine::try_new()
+            QCoreBackend::GpuHybrid | QCoreBackend::GpuFull => WgpuMatvecEngine::try_new()
                 .ok()
                 .map(|e| GpuUploadContext::new(Arc::new(e))),
         };
@@ -616,7 +753,6 @@ impl QCoreModel {
                 config.hidden_size
             )));
         }
-        // Only upload embed_tokens to VRAM when it is also tied as lm_head (decode_row runs on CPU).
         let embed_op = if config.tie_word_embeddings {
             Arc::new(wrap_op(embed_raw))
         } else {
@@ -632,14 +768,23 @@ impl QCoreModel {
                     &format!("{p}.self_attn.q_proj.weight"),
                     &mut latent_cache,
                 )?),
+                q_bias: reader
+                    .load_vector_f64(&format!("{p}.self_attn.q_proj.bias"))
+                    .ok(),
                 k_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.k_proj.weight"),
                     &mut latent_cache,
                 )?),
+                k_bias: reader
+                    .load_vector_f64(&format!("{p}.self_attn.k_proj.bias"))
+                    .ok(),
                 v_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.v_proj.weight"),
                     &mut latent_cache,
                 )?),
+                v_bias: reader
+                    .load_vector_f64(&format!("{p}.self_attn.v_proj.bias"))
+                    .ok(),
                 o_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.o_proj.weight"),
                     &mut latent_cache,
@@ -673,19 +818,41 @@ impl QCoreModel {
             }
         };
 
+        let gpu_full = if backend == QCoreBackend::GpuFull {
+            gpu_ctx.as_ref().and_then(|ctx| {
+                try_build_gpu_full(
+                    Arc::clone(&ctx.engine),
+                    &config,
+                    &layers,
+                    &final_norm,
+                    &lm_head,
+                )
+            })
+        } else {
+            None
+        };
+
         let backend_stats = match gpu_ctx {
-            Some(ctx) => QCoreBackendStats {
-                backend: format!(
-                    "WGPU Hybrid ({} / {})",
-                    ctx.engine.adapter_name(),
-                    ctx.engine.backend_name()
-                ),
-                gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
-                gpu_resident_operators: ctx.gpu_resident_operators,
-                cpu_fallback_operators: ctx.cpu_fallback_operators,
-                vram_weight_bytes: ctx.vram_weight_bytes,
-                shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
-            },
+            Some(ctx) => {
+                let mode_tag = if gpu_full.is_some() {
+                    "WGPU Full-Resident"
+                } else {
+                    "WGPU Hybrid"
+                };
+                QCoreBackendStats {
+                    backend: format!(
+                        "{mode_tag} ({} / {})",
+                        ctx.engine.adapter_name(),
+                        ctx.engine.backend_name()
+                    ),
+                    gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
+                    gpu_resident_operators: ctx.gpu_resident_operators,
+                    cpu_fallback_operators: ctx.cpu_fallback_operators,
+                    vram_weight_bytes: ctx.vram_weight_bytes
+                        + gpu_full.as_ref().map_or(0, |f| f.vram_runtime_bytes()),
+                    shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
+                }
+            }
             None => QCoreBackendStats {
                 backend: "Rayon Multi-Threaded CPU".to_owned(),
                 gpu_adapter: None,
@@ -702,6 +869,7 @@ impl QCoreModel {
             layers,
             final_norm,
             lm_head,
+            gpu_full,
             shared_latents_deduped: latent_cache.len(),
             backend_stats,
         })
@@ -721,7 +889,7 @@ impl QCoreModel {
         let mut latent_cache = QmfLatentCache::new();
         let mut gpu_ctx = match backend {
             QCoreBackend::Cpu => None,
-            QCoreBackend::GpuHybrid => WgpuMatvecEngine::try_new()
+            QCoreBackend::GpuHybrid | QCoreBackend::GpuFull => WgpuMatvecEngine::try_new()
                 .ok()
                 .map(|e| GpuUploadContext::new(Arc::new(e))),
         };
@@ -757,14 +925,17 @@ impl QCoreModel {
                     &format!("model.layers.{l}.self_attn.q_proj.weight"),
                     &mut latent_cache,
                 )?),
+                q_bias: load_vec(&format!("model.layers.{l}.self_attn.q_proj.bias")).ok(),
                 k_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.k_proj.weight"),
                     &mut latent_cache,
                 )?),
+                k_bias: load_vec(&format!("model.layers.{l}.self_attn.k_proj.bias")).ok(),
                 v_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.v_proj.weight"),
                     &mut latent_cache,
                 )?),
+                v_bias: load_vec(&format!("model.layers.{l}.self_attn.v_proj.bias")).ok(),
                 o_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.o_proj.weight"),
                     &mut latent_cache,
@@ -797,19 +968,41 @@ impl QCoreModel {
             }
         };
 
+        let gpu_full = if backend == QCoreBackend::GpuFull {
+            gpu_ctx.as_ref().and_then(|ctx| {
+                try_build_gpu_full(
+                    Arc::clone(&ctx.engine),
+                    &config,
+                    &layers,
+                    &final_norm,
+                    &lm_head,
+                )
+            })
+        } else {
+            None
+        };
+
         let backend_stats = match gpu_ctx {
-            Some(ctx) => QCoreBackendStats {
-                backend: format!(
-                    "WGPU Hybrid ({} / {})",
-                    ctx.engine.adapter_name(),
-                    ctx.engine.backend_name()
-                ),
-                gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
-                gpu_resident_operators: ctx.gpu_resident_operators,
-                cpu_fallback_operators: ctx.cpu_fallback_operators,
-                vram_weight_bytes: ctx.vram_weight_bytes,
-                shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
-            },
+            Some(ctx) => {
+                let mode_tag = if gpu_full.is_some() {
+                    "WGPU Full-Resident"
+                } else {
+                    "WGPU Hybrid"
+                };
+                QCoreBackendStats {
+                    backend: format!(
+                        "{mode_tag} ({} / {})",
+                        ctx.engine.adapter_name(),
+                        ctx.engine.backend_name()
+                    ),
+                    gpu_adapter: Some(ctx.engine.adapter_name().to_owned()),
+                    gpu_resident_operators: ctx.gpu_resident_operators,
+                    cpu_fallback_operators: ctx.cpu_fallback_operators,
+                    vram_weight_bytes: ctx.vram_weight_bytes
+                        + gpu_full.as_ref().map_or(0, |f| f.vram_runtime_bytes()),
+                    shared_latents_deduped_gpu: ctx.latent_gpu_cache.len(),
+                }
+            }
             None => QCoreBackendStats {
                 backend: "Rayon Multi-Threaded CPU".to_owned(),
                 gpu_adapter: None,
@@ -826,6 +1019,7 @@ impl QCoreModel {
             layers,
             final_norm,
             lm_head,
+            gpu_full,
             shared_latents_deduped: latent_cache.len(),
             backend_stats,
         })
@@ -844,15 +1038,211 @@ impl QCoreModel {
     }
 
     /// Execute one autoregressive forward step for `token_id` at `position`, updating `cache`.
+    /// Uses single-submission Full GPU-Resident execution whenever [`QCoreBackend::GpuFull`] is active.
     pub fn forward_token(
         &self,
         token_id: usize,
         position: usize,
         cache: &mut KvCache,
     ) -> Result<Vec<f64>, RuntimeError> {
+        if let Some(full) = &self.gpu_full {
+            if token_id >= self.config.vocab_size {
+                return Err(RuntimeError::TokenOutOfRange {
+                    token: token_id,
+                    vocab_size: self.config.vocab_size,
+                });
+            }
+            if position >= self.config.max_seq_len {
+                return Err(RuntimeError::ContextLengthExceeded {
+                    position,
+                    max_seq_len: self.config.max_seq_len,
+                });
+            }
+            let embed = self.embed_tokens.decode_row(token_id)?;
+            let gkv = cache
+                .gpu_kv
+                .get_or_insert_with(|| full.create_kv_cache(self.config.max_seq_len.min(4096)));
+            return full
+                .forward_embedding(&embed, position, gkv)
+                .map_err(|e| RuntimeError::InvalidConfig(format!("GPU Full error: {e}")));
+        }
         Ok(self
             .forward_token_with_trace(token_id, position, cache, None)?
             .logits)
+    }
+
+    /// Collect per-linear-layer input activation RMS and `64×64` block-diagonal Hessian covariances
+    /// (`H_b = (2/N) X_bᵀ X_b`) across calibration token sequences for activation-aware GPTQ/AWQ/ECHO.
+    pub fn collect_calibration_profile(
+        &self,
+        model_id: &str,
+        sequences: &[Vec<usize>],
+    ) -> Result<ModelCalibrationProfile, RuntimeError> {
+        let bs = DEFAULT_HESSIAN_BLOCK_SIZE;
+        let h = self.config.hidden_size;
+        let inter = self.config.intermediate_size;
+        let mut attn_in_accs: Vec<LayerCalibrationAccumulator> = (0..self.layers.len())
+            .map(|l| LayerCalibrationAccumulator::new(format!("layer.{l}.attn_in"), h, bs))
+            .collect();
+        let mut o_in_accs: Vec<LayerCalibrationAccumulator> = (0..self.layers.len())
+            .map(|l| {
+                LayerCalibrationAccumulator::new(
+                    format!("model.layers.{l}.self_attn.o_proj.weight"),
+                    h,
+                    bs,
+                )
+            })
+            .collect();
+        let mut mlp_in_accs: Vec<LayerCalibrationAccumulator> = (0..self.layers.len())
+            .map(|l| LayerCalibrationAccumulator::new(format!("layer.{l}.mlp_in"), h, bs))
+            .collect();
+        let mut down_in_accs: Vec<LayerCalibrationAccumulator> = (0..self.layers.len())
+            .map(|l| {
+                LayerCalibrationAccumulator::new(
+                    format!("model.layers.{l}.mlp.down_proj.weight"),
+                    inter,
+                    bs,
+                )
+            })
+            .collect();
+        let mut lm_head_acc = LayerCalibrationAccumulator::new("lm_head.weight", h, bs);
+
+        let head_dim = self.config.head_dim();
+        let kv_groups = self.config.num_heads / self.config.num_kv_heads;
+        let scale = 1.0 / (head_dim as f64).sqrt();
+        let mut total_tokens = 0usize;
+
+        for seq in sequences {
+            let mut cache = KvCache::new(self.config.num_layers);
+            for (pos, &tok) in seq.iter().enumerate() {
+                if tok >= self.config.vocab_size || pos >= self.config.max_seq_len {
+                    break;
+                }
+                total_tokens += 1;
+                let mut hidden = self.embed_tokens.decode_row(tok)?;
+                for (layer_idx, block) in self.layers.iter().enumerate() {
+                    let normed = rms_norm(&hidden, &block.input_norm, self.config.rms_norm_eps);
+                    attn_in_accs[layer_idx].observe(&normed);
+
+                    let mut q = block.q_proj.matvec(&normed)?;
+                    if let Some(b) = &block.q_bias {
+                        for (qv, &bv) in q.iter_mut().zip(b) {
+                            *qv += bv;
+                        }
+                    }
+                    let mut k = block.k_proj.matvec(&normed)?;
+                    if let Some(b) = &block.k_bias {
+                        for (kv, &bv) in k.iter_mut().zip(b) {
+                            *kv += bv;
+                        }
+                    }
+                    let mut v = block.v_proj.matvec(&normed)?;
+                    if let Some(b) = &block.v_bias {
+                        for (vv, &bv) in v.iter_mut().zip(b) {
+                            *vv += bv;
+                        }
+                    }
+                    for hd in 0..self.config.num_heads {
+                        apply_rope(
+                            &mut q[hd * head_dim..(hd + 1) * head_dim],
+                            pos,
+                            self.config.rope_theta,
+                        );
+                    }
+                    for kh in 0..self.config.num_kv_heads {
+                        apply_rope(
+                            &mut k[kh * head_dim..(kh + 1) * head_dim],
+                            pos,
+                            self.config.rope_theta,
+                        );
+                    }
+                    cache.keys[layer_idx].push(k);
+                    cache.values[layer_idx].push(v);
+                    let seq_len = cache.keys[layer_idx].len();
+                    let mut attn_out = vec![0.0_f64; h];
+                    for hd in 0..self.config.num_heads {
+                        let kv_h = hd / kv_groups;
+                        let q_head = &q[hd * head_dim..(hd + 1) * head_dim];
+                        let mut scores = Vec::with_capacity(seq_len);
+                        for k_vec in &cache.keys[layer_idx] {
+                            let k_head = &k_vec[kv_h * head_dim..(kv_h + 1) * head_dim];
+                            let dot: f64 = q_head.iter().zip(k_head).map(|(a, b)| a * b).sum();
+                            scores.push(dot * scale);
+                        }
+                        let probs = softmax(&scores);
+                        let out_head = &mut attn_out[hd * head_dim..(hd + 1) * head_dim];
+                        for (t, &p) in probs.iter().enumerate() {
+                            let v_head =
+                                &cache.values[layer_idx][t][kv_h * head_dim..(kv_h + 1) * head_dim];
+                            for (o, &vv) in out_head.iter_mut().zip(v_head) {
+                                *o += p * vv;
+                            }
+                        }
+                    }
+                    o_in_accs[layer_idx].observe(&attn_out);
+                    let proj_out = block.o_proj.matvec(&attn_out)?;
+                    for (hv, pv) in hidden.iter_mut().zip(proj_out) {
+                        *hv += pv;
+                    }
+
+                    let mlp_in = rms_norm(&hidden, &block.post_attn_norm, self.config.rms_norm_eps);
+                    mlp_in_accs[layer_idx].observe(&mlp_in);
+                    let gate = block.gate_proj.matvec(&mlp_in)?;
+                    let up = block.up_proj.matvec(&mlp_in)?;
+                    let activated: Vec<f64> =
+                        gate.iter().zip(up).map(|(&g, u)| silu(g) * u).collect();
+                    down_in_accs[layer_idx].observe(&activated);
+                    let mlp_out = block.down_proj.matvec(&activated)?;
+                    for (hv, mv) in hidden.iter_mut().zip(mlp_out) {
+                        *hv += mv;
+                    }
+                }
+                let final_hidden = rms_norm(&hidden, &self.final_norm, self.config.rms_norm_eps);
+                lm_head_acc.observe(&final_hidden);
+            }
+        }
+
+        let mut layers_map = BTreeMap::new();
+        for (l, ((a_acc, o_acc), (m_acc, d_acc))) in attn_in_accs
+            .into_iter()
+            .zip(o_in_accs)
+            .zip(mlp_in_accs.into_iter().zip(down_in_accs))
+            .enumerate()
+        {
+            let a_stats = a_acc.finalize();
+            for proj in ["q_proj", "k_proj", "v_proj"] {
+                let name = format!("model.layers.{l}.self_attn.{proj}.weight");
+                let mut s = a_stats.clone();
+                s.tensor_name = name.clone();
+                layers_map.insert(name, s);
+            }
+            let o_stats = o_acc.finalize();
+            layers_map.insert(o_stats.tensor_name.clone(), o_stats);
+
+            let m_stats = m_acc.finalize();
+            for proj in ["gate_proj", "up_proj"] {
+                let name = format!("model.layers.{l}.mlp.{proj}.weight");
+                let mut s = m_stats.clone();
+                s.tensor_name = name.clone();
+                layers_map.insert(name, s);
+            }
+            let d_stats = d_acc.finalize();
+            layers_map.insert(d_stats.tensor_name.clone(), d_stats);
+        }
+        let lm_stats = lm_head_acc.finalize();
+        if self.config.tie_word_embeddings {
+            let mut emb_s = lm_stats.clone();
+            emb_s.tensor_name = "model.embed_tokens.weight".to_owned();
+            layers_map.insert("model.embed_tokens.weight".to_owned(), emb_s);
+        }
+        layers_map.insert("lm_head.weight".to_owned(), lm_stats);
+
+        Ok(ModelCalibrationProfile {
+            model_id: model_id.to_owned(),
+            calibration_tokens: total_tokens,
+            block_size: bs,
+            layers: layers_map,
+        })
     }
 
     /// Execute one autoregressive forward step while capturing post-block hidden states
@@ -888,10 +1278,25 @@ impl QCoreModel {
             // Pre-attention RMSNorm
             let normed = rms_norm(&hidden, &block.input_norm, self.config.rms_norm_eps);
 
-            // Direct compressed linear projections (no dense weight reconstruction!)
+            // Direct compressed linear projections (+ optional Qwen2 attention biases)
             let mut q = block.q_proj.matvec(&normed)?;
+            if let Some(b) = &block.q_bias {
+                for (qv, &bv) in q.iter_mut().zip(b) {
+                    *qv += bv;
+                }
+            }
             let mut k = block.k_proj.matvec(&normed)?;
-            let v = block.v_proj.matvec(&normed)?;
+            if let Some(b) = &block.k_bias {
+                for (kv, &bv) in k.iter_mut().zip(b) {
+                    *kv += bv;
+                }
+            }
+            let mut v = block.v_proj.matvec(&normed)?;
+            if let Some(b) = &block.v_bias {
+                for (vv, &bv) in v.iter_mut().zip(b) {
+                    *vv += bv;
+                }
+            }
 
             // Apply RoPE to each Q and K head
             for h in 0..self.config.num_heads {
@@ -909,28 +1314,61 @@ impl QCoreModel {
                 );
             }
 
-            cache.keys[layer_idx].push(k);
-            cache.values[layer_idx].push(v);
-            let seq_len = cache.keys[layer_idx].len();
-
-            // Multi-head / Grouped-query causal attention
+            // Multi-head / Grouped-query causal attention (supports both FP64 and INT8 KV-cache)
             let mut attn_out = vec![0.0_f64; self.config.hidden_size];
-            for h in 0..self.config.num_heads {
-                let kv_h = h / kv_groups;
-                let q_head = &q[h * head_dim..(h + 1) * head_dim];
-                let mut scores = Vec::with_capacity(seq_len);
-                for k_vec in &cache.keys[layer_idx] {
-                    let k_head = &k_vec[kv_h * head_dim..(kv_h + 1) * head_dim];
-                    let dot: f64 = q_head.iter().zip(k_head).map(|(a, b)| a * b).sum();
-                    scores.push(dot * scale);
+            match cache.mode {
+                KvCacheMode::Fp64 => {
+                    cache.keys[layer_idx].push(k);
+                    cache.values[layer_idx].push(v);
+                    let seq_len = cache.keys[layer_idx].len();
+                    for h in 0..self.config.num_heads {
+                        let kv_h = h / kv_groups;
+                        let q_head = &q[h * head_dim..(h + 1) * head_dim];
+                        let mut scores = Vec::with_capacity(seq_len);
+                        for k_vec in &cache.keys[layer_idx] {
+                            let k_head = &k_vec[kv_h * head_dim..(kv_h + 1) * head_dim];
+                            let dot: f64 = q_head.iter().zip(k_head).map(|(a, b)| a * b).sum();
+                            scores.push(dot * scale);
+                        }
+                        let probs = softmax(&scores);
+                        let out_head = &mut attn_out[h * head_dim..(h + 1) * head_dim];
+                        for (t, &p) in probs.iter().enumerate() {
+                            let v_head =
+                                &cache.values[layer_idx][t][kv_h * head_dim..(kv_h + 1) * head_dim];
+                            for (o, &vv) in out_head.iter_mut().zip(v_head) {
+                                *o += p * vv;
+                            }
+                        }
+                    }
                 }
-                let probs = softmax(&scores);
-                let out_head = &mut attn_out[h * head_dim..(h + 1) * head_dim];
-                for (t, &p) in probs.iter().enumerate() {
-                    let v_head =
-                        &cache.values[layer_idx][t][kv_h * head_dim..(kv_h + 1) * head_dim];
-                    for (o, &vv) in out_head.iter_mut().zip(v_head) {
-                        *o += p * vv;
+                KvCacheMode::Int8 => {
+                    cache.keys_i8[layer_idx].push(Int8KvEntry::encode(&k));
+                    cache.values_i8[layer_idx].push(Int8KvEntry::encode(&v));
+                    let seq_len = cache.keys_i8[layer_idx].len();
+                    for h in 0..self.config.num_heads {
+                        let kv_h = h / kv_groups;
+                        let q_head = &q[h * head_dim..(h + 1) * head_dim];
+                        let mut scores = Vec::with_capacity(seq_len);
+                        for k_entry in &cache.keys_i8[layer_idx] {
+                            let ks = k_entry.scale();
+                            let k_codes = &k_entry.codes[kv_h * head_dim..(kv_h + 1) * head_dim];
+                            let dot: f64 = q_head
+                                .iter()
+                                .zip(k_codes)
+                                .map(|(&qv, &kc)| qv * f64::from(kc) * ks)
+                                .sum();
+                            scores.push(dot * scale);
+                        }
+                        let probs = softmax(&scores);
+                        let out_head = &mut attn_out[h * head_dim..(h + 1) * head_dim];
+                        for (t, &p) in probs.iter().enumerate() {
+                            let v_entry = &cache.values_i8[layer_idx][t];
+                            let vs = v_entry.scale();
+                            let v_codes = &v_entry.codes[kv_h * head_dim..(kv_h + 1) * head_dim];
+                            for (o, &vc) in out_head.iter_mut().zip(v_codes) {
+                                *o += p * (f64::from(vc) * vs);
+                            }
+                        }
                     }
                 }
             }
@@ -1448,5 +1886,97 @@ mod tests {
             assert!(rmq_gpu.backend_stats().shared_latents_deduped_gpu > 0);
             assert!(rmq_gpu.backend_stats().vram_weight_bytes > 0);
         }
+    }
+
+    #[test]
+    fn gpu_full_single_submission_and_int8_kv_and_calibration_match_cpu_reference() {
+        let cfg = TransformerConfig {
+            vocab_size: 48,
+            hidden_size: 64,
+            intermediate_size: 128,
+            num_layers: 2,
+            num_heads: 4,
+            num_kv_heads: 2,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            max_seq_len: 32,
+            tie_word_embeddings: false,
+        };
+        let model_bytes = generate_synthetic_llama_safetensors(&cfg, 8, 9001).unwrap();
+        let budget = PayloadBudget::default();
+
+        // Forge Hadamard INT3 model (tests GPU Hadamard FWHT + GPU INT3 + GPU RMSNorm + GPU RoPE + GPU GQA + GPU SwiGLU!)
+        let (int3_archive, _) = forge_safetensors_to_qmf(
+            Cursor::new(&model_bytes),
+            "mini-llama-int3-had",
+            "synthetic",
+            "llama",
+            &TransformStrategy::Int3Hadamard {
+                group_size: 64,
+                hadamard_block: 64,
+            },
+            &budget,
+            77,
+        )
+        .unwrap();
+
+        let cpu_model = QCoreModel::from_qmf(&int3_archive, cfg.clone()).unwrap();
+        let full_gpu_model =
+            QCoreModel::from_qmf_with_backend(&int3_archive, cfg.clone(), QCoreBackend::GpuFull)
+                .unwrap();
+
+        // 1. Verify Full GPU-Resident single-submission matches CPU logits and greedy generation!
+        let seq = [1, 7, 13, 21, 5, 33, 9];
+        let cmp = evaluate_inference_fidelity(&cpu_model, &full_gpu_model, &seq).unwrap();
+        assert!(
+            cmp.mean_logit_rmse < 1e-3,
+            "GpuFull diverged from CPU on Hadamard INT3 transformer: logit_rmse={:.6}",
+            cmp.mean_logit_rmse
+        );
+        assert_eq!(
+            cpu_model
+                .generate(&[1, 7, 13], 5, 0.0, 42)
+                .unwrap()
+                .generated_tokens,
+            full_gpu_model
+                .generate(&[1, 7, 13], 5, 0.0, 42)
+                .unwrap()
+                .generated_tokens
+        );
+        if full_gpu_model.backend_stats().gpu_adapter.is_some() {
+            assert!(
+                full_gpu_model
+                    .backend_stats()
+                    .backend
+                    .contains("Full-Resident"),
+                "expected WGPU Full-Resident backend, got {}",
+                full_gpu_model.backend_stats().backend
+            );
+        }
+
+        // 2. Verify INT8 KV-cache matches FP64 KV-cache tightly
+        let mut fp64_kv = KvCache::new(cfg.num_layers);
+        let mut int8_kv = KvCache::new_int8(cfg.num_layers);
+        let mut max_kv_diff = 0.0_f64;
+        for (pos, &tok) in seq.iter().enumerate() {
+            let l_fp = cpu_model.forward_token(tok, pos, &mut fp64_kv).unwrap();
+            let l_i8 = cpu_model.forward_token(tok, pos, &mut int8_kv).unwrap();
+            for (&a, &b) in l_fp.iter().zip(&l_i8) {
+                max_kv_diff = max_kv_diff.max((a - b).abs());
+            }
+        }
+        assert!(
+            max_kv_diff < 5e-2,
+            "INT8 KV-cache drifted too far from FP64: max_diff={max_kv_diff:.6}"
+        );
+
+        // 3. Verify calibration profile collection covers all layers and lm_head
+        let cal = cpu_model
+            .collect_calibration_profile("mini-llama", &[seq.to_vec()])
+            .unwrap();
+        assert_eq!(cal.calibration_tokens, seq.len());
+        assert!(cal.get("model.layers.0.self_attn.q_proj.weight").is_some());
+        assert!(cal.get("model.layers.1.mlp.down_proj.weight").is_some());
+        assert!(cal.get("lm_head.weight").is_some());
     }
 }

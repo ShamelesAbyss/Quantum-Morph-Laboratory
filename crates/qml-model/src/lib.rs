@@ -23,8 +23,8 @@ pub use gguf::{
 };
 pub use payload::{
     DEFAULT_MAX_TENSOR_BYTES, DEFAULT_MAX_TOTAL_BYTES, DEFAULT_STREAM_CHUNK_ELEMENTS,
-    PayloadBudget, PayloadError, SafetensorsFile, SafetensorsShardIndex, encode_safetensors,
-    parse_shard_index, tensor_element_count,
+    PayloadBudget, PayloadError, SafetensorsFile, SafetensorsShardIndex, SafetensorsSource,
+    encode_safetensors, parse_shard_index, tensor_element_count,
 };
 
 use serde::de::{self, MapAccess, Visitor};

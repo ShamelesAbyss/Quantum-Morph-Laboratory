@@ -1,0 +1,378 @@
+# Experiment Record: exp-005 — PROJECT EVENT HORIZON Wave II
+# Activation-Aware Blockwise Cholesky GPTQ + Hadamard Incoherence, Full GPU-Resident
+# Single-Submission WGSL Execution (`GpuFull`), Qwen2 Attention-Bias Support, and
+# Progressive Scaling Across Stage A (360M), Stage B (1.5B & 1.7B), and Stage C (2-Shard 3B).
+# All numbers below were measured directly from `qml.exe --release` on Windows 11 x86_64.
+# Pretrained model weights are stored strictly outside Git (Apache-2.0 source checkpoints).
+
+[experiment]
+id = "exp-005-event-horizon-wave2-gptq-scaling"
+title = "Activation-Calibrated Blockwise Cholesky GPTQ + Hadamard & Single-Submission Full GPU-Resident Inference Across 360M, 1.5B, 1.7B, and 2-Shard 3B Pretrained LLMs"
+date = "2026-11-26"
+milestone = "v0.5.0 — PROJECT EVENT HORIZON Wave II"
+host_os = "Windows 11 Home (26H2) x86_64"
+host_cpu = "Intel Core i9-14900HX (32 logical cores, SSE4.2/AVX/AVX2/FMA/F16C)"
+host_gpu = "NVIDIA GeForce RTX 4070 Laptop GPU (8 GB VRAM, WGPU Vulkan)"
+host_ram_gb = 32
+rust_toolchain = "rustc 1.100.0 (x86_64-pc-windows-msvc)"
+calibration_corpus = "6 disjoint multi-domain passages (196 tokens: OS scheduling, Cholesky factorization, Python quicksort, photosynthesis, Raft consensus, geometry) — strictly separate from held-out evaluation prompts"
+hessian_block_size = 64
+evaluation_suite = "Held-out 4-category Capability Retention Suite (Reasoning, Coding, Knowledge, InstructionFollowing)"
+bpp_accounting = "Complete on-disk QMF v1 artifact size * 8 / total_parameters (including scales, mins, biases, JSON manifest, alignment, and CRC-32)"
+
+[source_models.smollm2_360m]
+repo = "HuggingFaceTB/SmolLM2-360M-Instruct"
+architecture = "LlamaForCausalLM"
+license = "Apache-2.0"
+safetensors_bytes = 723674912
+safetensors_sha256 = "e6bffe7435d7ddc10fd3b9a9efd429dafbacb1cb17015fb5562664e7532bf86e"
+parameters = 361821120
+layers = 32
+hidden_size = 960
+vocab_size = 49152
+
+[source_models.smollm2_1_7b]
+repo = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
+architecture = "LlamaForCausalLM"
+license = "Apache-2.0"
+safetensors_bytes = 3422777952
+safetensors_sha256 = "f55217be716b6a997b97b9d8d7eb6fad02e00858f5010ec24f64603c3a98a0e8"
+parameters = 1711376384
+layers = 24
+hidden_size = 2048
+intermediate_size = 8192
+vocab_size = 49152
+embed_tokens_param_fraction = 0.0588
+
+[source_models.qwen2_5_1_5b]
+repo = "Qwen/Qwen2.5-1.5B-Instruct"
+architecture = "Qwen2ForCausalLM (with q/k/v_proj.bias)"
+license = "Apache-2.0"
+safetensors_bytes = 3087467144
+safetensors_sha256 = "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee"
+parameters = 1543714304
+layers = 28
+hidden_size = 1536
+intermediate_size = 8960
+num_heads = 12
+num_kv_heads = 2
+vocab_size = 151936
+rope_theta = 1000000.0
+
+[source_models.qwen2_5_3b]
+repo = "Qwen/Qwen2.5-3B-Instruct"
+architecture = "Qwen2ForCausalLM (2-shard Safetensors, q/k/v_proj.bias)"
+license = "Apache-2.0"
+shards = 2
+shard1_bytes = 3968658944
+shard1_sha256 = "67347b23fb4165b652eb6611f5e1f2a06dfcddba8e909df1b2b0b1857bee06c2"
+shard2_bytes = 2203268048
+shard2_sha256 = "a40d941d0e7e0b966ad8b62bb6d6b7c88cce1299197b599d9d0a4ce59aabfc1d"
+total_safetensors_bytes = 6171926992
+parameters = 3085938688
+layers = 36
+hidden_size = 2048
+intermediate_size = 11008
+num_heads = 16
+num_kv_heads = 2
+vocab_size = 151936
+rope_theta = 1000000.0
+
+# ==============================================================================
+# 1. Single-Submission Full GPU-Resident (`GpuFull`) vs `GpuHybrid` Speedup
+# ==============================================================================
+
+[gpu_full_speedup_smollm2_360m_q4_0]
+model = "HuggingFaceTB/SmolLM2-360M-Instruct"
+variant = "INT4_SYM (Q4_0 g32, 4.506 bpp)"
+prompt_tokens = 28
+generated_tokens = 40
+exact_output_match = true
+gpu_hybrid_tok_per_s = 1.84
+gpu_hybrid_elapsed_ms = 36923.2
+gpu_full_tok_per_s = 40.70
+gpu_full_elapsed_ms = 1670.7
+gpu_full_vram_mib = 194.74
+speedup_gpu_full_vs_hybrid = 22.12
+
+# ==============================================================================
+# 2. Stage A — SmolLM2-360M-Instruct (Activation-Calibrated GPTQ+Hadamard, GpuFull)
+# ==============================================================================
+
+[[stage_a_smollm2_360m]]
+variant = "INT4_Q4_0_GPTQ"
+complete_qmf_bpp = 4.506
+vram_mib = 194.7
+gpu_full_tok_per_s = 52.0
+ppl_inflation = 1.16
+mean_kl_vs_bf16 = 0.190
+top1_agreement = 0.744
+logit_cosine = 0.950
+retention_pct = 80.4
+catastrophic_cliff = false
+
+[[stage_a_smollm2_360m]]
+variant = "INT3_HADAMARD_GPTQ"
+complete_qmf_bpp = 3.270
+vram_mib = 141.4
+gpu_full_tok_per_s = 41.8
+ppl_inflation = 1.64
+mean_kl_vs_bf16 = 0.624
+top1_agreement = 0.682
+logit_cosine = 0.871
+retention_pct = 64.6
+catastrophic_cliff = false
+notes = "Matched-byte vs v0.4.0 weight-only INT3_HADAMARD (KL=1.910, PPLx=5.63, Top1=41.5%): -67.3% KL, 3.43x lower PPLx, +26.7 pp Top-1 with zero extra bytes."
+
+[[stage_a_smollm2_360m]]
+variant = "QMR-300_GPTQ"
+complete_qmf_bpp = 3.000
+vram_mib = 129.7
+gpu_full_tok_per_s = 44.8
+ppl_inflation = 2.49
+mean_kl_vs_bf16 = 1.072
+top1_agreement = 0.585
+logit_cosine = 0.770
+retention_pct = 49.3
+catastrophic_cliff = false
+notes = "Matched-byte vs v0.4.0 weight-only QMR-300 (KL=2.803, PPLx=13.35, Top1=31.8%): -61.8% KL, 5.36x lower PPLx, +26.7 pp Top-1, 11.2x faster."
+
+[[stage_a_smollm2_360m]]
+variant = "QMR-275_GPTQ"
+complete_qmf_bpp = 2.750
+vram_mib = 119.0
+gpu_full_tok_per_s = 50.7
+ppl_inflation = 3.52
+mean_kl_vs_bf16 = 1.457
+top1_agreement = 0.443
+logit_cosine = 0.715
+retention_pct = 36.4
+catastrophic_cliff = false
+notes = "First non-cliff 2.75 bpp representation on 360M; coherent English output."
+
+[[stage_a_smollm2_360m]]
+variant = "QMR-250_GPTQ"
+complete_qmf_bpp = 2.500
+vram_mib = 108.2
+gpu_full_tok_per_s = 54.5
+ppl_inflation = 5.45
+mean_kl_vs_bf16 = 1.981
+top1_agreement = 0.369
+logit_cosine = 0.681
+retention_pct = 27.6
+catastrophic_cliff = true
+notes = "72.2x lower PPLx vs v0.4.0 weight-only QMR-250 (393.75 -> 5.45) and 7.2x higher Top-1 (5.1% -> 36.9%)."
+
+[[stage_a_smollm2_360m]]
+variant = "QMR-225_GPTQ"
+complete_qmf_bpp = 2.250
+vram_mib = 97.4
+gpu_full_tok_per_s = 53.8
+ppl_inflation = 11.70
+mean_kl_vs_bf16 = 2.663
+top1_agreement = 0.290
+logit_cosine = 0.570
+retention_pct = 18.8
+catastrophic_cliff = true
+
+[[stage_a_smollm2_360m]]
+variant = "INT2_HADAMARD_GPTQ"
+complete_qmf_bpp = 2.270
+vram_mib = 98.3
+gpu_full_tok_per_s = 63.3
+ppl_inflation = 13.53
+mean_kl_vs_bf16 = 2.811
+top1_agreement = 0.295
+logit_cosine = 0.598
+retention_pct = 18.5
+catastrophic_cliff = true
+notes = "196.1x lower PPLx than v0.4.0 INT2_HADAMARD (2653.66 -> 13.53) and 41,068x lower than INT2_PLAIN (555,652.9 -> 13.53) at identical bytes."
+
+[[stage_a_smollm2_360m]]
+variant = "TERNARY_HADAMARD_GPTQ"
+complete_qmf_bpp = 1.738
+vram_mib = 75.3
+gpu_full_tok_per_s = 46.9
+ppl_inflation = 161.98
+mean_kl_vs_bf16 = 5.397
+top1_agreement = 0.091
+logit_cosine = 0.269
+retention_pct = 4.9
+catastrophic_cliff = true
+notes = "35.8x lower PPLx than v0.4.0 weight-only ternary (5797.78 -> 161.98), but still hits honest sub-2-bit PTQ cliff on 360M."
+
+# ==============================================================================
+# 3. Stage B-1 — SmolLM2-1.7B-Instruct (1.71B params, 3.42 GB BF16, GpuFull)
+# ==============================================================================
+
+[[stage_b_smollm2_1_7b]]
+variant = "INT4_Q4_0_GPTQ"
+complete_qmf_bpp = 4.502
+vram_mib = 918.9
+gpu_full_tok_per_s = 19.7
+ppl_inflation = 1.68
+mean_kl_vs_bf16 = 0.605
+top1_agreement = 0.835
+logit_cosine = 0.933
+retention_pct = 71.6
+catastrophic_cliff = false
+
+[[stage_b_smollm2_1_7b]]
+variant = "INT3_HADAMARD_GPTQ"
+complete_qmf_bpp = 3.252
+vram_mib = 663.9
+gpu_full_tok_per_s = 14.1
+ppl_inflation = 1.71
+mean_kl_vs_bf16 = 0.698
+top1_agreement = 0.830
+logit_cosine = 0.860
+retention_pct = 70.7
+catastrophic_cliff = false
+notes = "4.92x smaller than 3.42 GB BF16; Top-1 within 0.5 pp of 4-bit Q4_0 at 1.25 bpp less storage."
+
+[[stage_b_smollm2_1_7b]]
+variant = "QMR-300_GPTQ"
+complete_qmf_bpp = 3.000
+vram_mib = 612.5
+gpu_full_tok_per_s = 16.3
+ppl_inflation = 2.27
+mean_kl_vs_bf16 = 1.046
+top1_agreement = 0.716
+logit_cosine = 0.806
+retention_pct = 57.9
+catastrophic_cliff = false
+
+[[stage_b_smollm2_1_7b]]
+variant = "QMR-250_GPTQ"
+complete_qmf_bpp = 2.500
+vram_mib = 510.5
+gpu_full_tok_per_s = 22.6
+ppl_inflation = 2.79
+mean_kl_vs_bf16 = 1.327
+top1_agreement = 0.580
+logit_cosine = 0.747
+retention_pct = 46.9
+catastrophic_cliff = false
+notes = "Broke the 2.50 bpp barrier (OK, 6.70x smaller than BF16, 510.5 MiB VRAM, 22.6 tok/s)."
+
+[[stage_b_smollm2_1_7b]]
+variant = "INT2_HADAMARD_GPTQ"
+complete_qmf_bpp = 2.252
+vram_mib = 459.9
+gpu_full_tok_per_s = 30.7
+ppl_inflation = 8.09
+mean_kl_vs_bf16 = 2.460
+top1_agreement = 0.392
+logit_cosine = 0.619
+retention_pct = 25.8
+catastrophic_cliff = true
+
+[[stage_b_smollm2_1_7b]]
+variant = "TERNARY_HADAMARD_GPTQ"
+complete_qmf_bpp = 1.728
+vram_mib = 353.1
+gpu_full_tok_per_s = 25.7
+ppl_inflation = 116.14
+mean_kl_vs_bf16 = 5.110
+top1_agreement = 0.102
+logit_cosine = 0.447
+retention_pct = 5.5
+catastrophic_cliff = true
+
+# ==============================================================================
+# 4. Stage B-2 — Qwen2.5-1.5B-Instruct (Qwen2 biases, 152K vocab, GpuFull)
+# ==============================================================================
+
+[[stage_b_qwen2_5_1_5b]]
+variant = "INT4_Q4_0_GPTQ"
+complete_qmf_bpp = 4.503
+vram_mib = 829.7
+gpu_full_tok_per_s = 23.3
+ppl_inflation = 1.28
+mean_kl_vs_bf16 = 0.161
+top1_agreement = 0.840
+logit_cosine = 0.948
+retention_pct = 81.0
+catastrophic_cliff = false
+
+[[stage_b_qwen2_5_1_5b]]
+variant = "INT3_HADAMARD_GPTQ"
+complete_qmf_bpp = 3.253
+vram_mib = 599.7
+gpu_full_tok_per_s = 22.8
+ppl_inflation = 1.03
+mean_kl_vs_bf16 = 0.295
+top1_agreement = 0.777
+logit_cosine = 0.888
+retention_pct = 87.2
+catastrophic_cliff = false
+notes = "Only +3% perplexity inflation (PPLx=1.03x) at 3.25 bpp (5.15x smaller than 3.09 GB BF16, 22.8 tok/s)."
+
+[[stage_b_qwen2_5_1_5b]]
+variant = "INT2_HADAMARD_GPTQ"
+complete_qmf_bpp = 2.253
+vram_mib = 415.7
+gpu_full_tok_per_s = 31.5
+ppl_inflation = 4.12
+mean_kl_vs_bf16 = 1.993
+top1_agreement = 0.417
+logit_cosine = 0.588
+retention_pct = 33.0
+catastrophic_cliff = false
+notes = "Broke the 2.25 bpp 2-bit cliff on 1.5B (OK, 7.43x smaller than BF16, 415.7 MiB VRAM, 31.5 tok/s)."
+
+[[stage_b_qwen2_5_1_5b]]
+variant = "TERNARY_HADAMARD_GPTQ"
+complete_qmf_bpp = 1.731
+vram_mib = 319.6
+gpu_full_tok_per_s = 27.6
+ppl_inflation = 590.16
+mean_kl_vs_bf16 = 7.239
+top1_agreement = 0.074
+logit_cosine = 0.230
+retention_pct = 3.8
+catastrophic_cliff = true
+notes = "Honest sub-2-bit ternary PTQ cliff preserved."
+
+# ==============================================================================
+# 5. Stage C — Qwen2.5-3B-Instruct (2-Shard 6.17 GB BF16, Qwen2 biases, GpuFull)
+# ==============================================================================
+
+[[stage_c_qwen2_5_3b]]
+variant = "INT4_Q4_0_GPTQ"
+complete_qmf_bpp = 4.502
+vram_mib = 1657.2
+gpu_full_tok_per_s = 11.2
+ppl_inflation = 1.01
+mean_kl_vs_bf16 = 0.147
+top1_agreement = 0.840
+logit_cosine = 0.954
+retention_pct = 91.4
+catastrophic_cliff = false
+notes = "Only +1% perplexity inflation (PPLx=1.01x) and 91.4% retention on 2-shard 3.09B model in 1.62 GiB VRAM."
+
+[[stage_c_qwen2_5_3b]]
+variant = "INT3_HADAMARD_GPTQ"
+complete_qmf_bpp = 3.253
+vram_mib = 1197.4
+gpu_full_tok_per_s = 8.7
+ppl_inflation = 1.07
+mean_kl_vs_bf16 = 0.237
+top1_agreement = 0.783
+logit_cosine = 0.910
+retention_pct = 85.8
+catastrophic_cliff = false
+notes = "5.15x smaller than 6.17 GB BF16 (1.17 GiB VRAM), KL=0.237, PPLx=1.07x, 85.8% retention."
+
+[[stage_c_qwen2_5_3b]]
+variant = "INT2_HADAMARD_GPTQ"
+complete_qmf_bpp = 2.253
+vram_mib = 829.6
+gpu_full_tok_per_s = 18.6
+ppl_inflation = 2.76
+mean_kl_vs_bf16 = 1.606
+top1_agreement = 0.554
+logit_cosine = 0.649
+retention_pct = 45.8
+catastrophic_cliff = false
+notes = "7.43x smaller than 6.17 GB BF16 (829.6 MiB VRAM, 18.6 tok/s); coherent English at 2.253 complete bpp with PPLx=2.76x and 55.4% Top-1."

@@ -335,6 +335,135 @@ pub fn evaluate_capability_suite(
     })
 }
 
+/// Precomputed reference logits for the held-out Capability Retention Suite.
+/// Enables evaluating many compressed candidates using single-submission [`QCoreBackend::GpuFull`]
+/// AND dropping the large BF16 reference model from 8 GB consumer VRAM before loading candidates!
+#[derive(Debug, Clone)]
+pub struct ReferenceSuiteCache {
+    examples: Vec<CapabilityExample>,
+    /// `[example_idx][pos]` -> reference logits vector
+    ref_logits: Vec<Vec<Vec<f64>>>,
+}
+
+impl ReferenceSuiteCache {
+    /// Run `reference.forward_token` once over every example (leveraging `GpuFull` when active).
+    pub fn build(
+        reference: &QCoreModel,
+        examples: &[CapabilityExample],
+    ) -> Result<Self, RuntimeError> {
+        let mut all_logits = Vec::with_capacity(examples.len());
+        let num_layers = reference.config().num_layers;
+        for ex in examples {
+            if ex.tokens.len() < 2 {
+                all_logits.push(Vec::new());
+                continue;
+            }
+            let mut r_cache = KvCache::new(num_layers);
+            let eval_steps = ex.tokens.len() - 1;
+            let mut ex_logits = Vec::with_capacity(eval_steps);
+            for (pos, &tok) in ex.tokens.iter().take(eval_steps).enumerate() {
+                ex_logits.push(reference.forward_token(tok, pos, &mut r_cache)?);
+            }
+            all_logits.push(ex_logits);
+        }
+        Ok(Self {
+            examples: examples.to_vec(),
+            ref_logits: all_logits,
+        })
+    }
+}
+
+/// Fast Full-GPU-compatible Capability Retention Suite evaluation against a precomputed
+/// [`ReferenceSuiteCache`] (zero reference model VRAM needed during candidate evaluation).
+pub fn evaluate_capability_suite_with_cache(
+    cache: &ReferenceSuiteCache,
+    candidate: &QCoreModel,
+) -> Result<CapabilitySuiteReport, RuntimeError> {
+    let mut categories = Vec::with_capacity(cache.examples.len());
+    let mut total_tokens = 0usize;
+    let mut total_ref_nll = 0.0_f64;
+    let mut total_cand_nll = 0.0_f64;
+    let mut total_kl = 0.0_f64;
+    let mut total_top1 = 0usize;
+    let mut total_cos = 0.0_f64;
+    let num_layers = candidate.config().num_layers;
+
+    for (ex, ref_seq_logits) in cache.examples.iter().zip(&cache.ref_logits) {
+        if ex.tokens.len() < 2 || ref_seq_logits.is_empty() {
+            continue;
+        }
+        let mut c_cache = KvCache::new(num_layers);
+        let mut ref_nll = 0.0_f64;
+        let mut cand_nll = 0.0_f64;
+        let mut kl_sum = 0.0_f64;
+        let mut cos_sum = 0.0_f64;
+        let mut top1 = 0usize;
+        let eval_steps = ex.tokens.len() - 1;
+
+        for pos in 0..eval_steps {
+            let tok = ex.tokens[pos];
+            let next_tok = ex.tokens[pos + 1];
+            let r_logits = &ref_seq_logits[pos];
+            let c_logits = candidate.forward_token(tok, pos, &mut c_cache)?;
+            let r_probs = softmax(r_logits);
+            let c_probs = softmax(&c_logits);
+            ref_nll += -r_probs[next_tok].max(1e-12).ln();
+            cand_nll += -c_probs[next_tok].max(1e-12).ln();
+            kl_sum += logit_kl_divergence(r_logits, &c_logits);
+            cos_sum += cosine_similarity(r_logits, &c_logits);
+            if argmax(r_logits) == argmax(&c_logits) {
+                top1 += 1;
+            }
+        }
+        let ref_ppl = (ref_nll / eval_steps as f64).exp();
+        let cand_ppl = (cand_nll / eval_steps as f64).exp();
+        let mean_cos = cos_sum / eval_steps as f64;
+
+        total_tokens += eval_steps;
+        total_ref_nll += ref_nll;
+        total_cand_nll += cand_nll;
+        total_kl += kl_sum;
+        total_top1 += top1;
+        total_cos += mean_cos * eval_steps as f64;
+
+        categories.push(CapabilityCategorySummary {
+            category: ex.category,
+            token_count: eval_steps,
+            ref_perplexity: ref_ppl,
+            cand_perplexity: cand_ppl,
+            perplexity_ratio: cand_ppl / ref_ppl.max(1e-9),
+            mean_logit_kl: kl_sum / eval_steps as f64,
+            top1_agreement: top1 as f64 / eval_steps as f64,
+            final_layer_cosine: mean_cos,
+            mean_rsa: mean_cos,
+        });
+    }
+
+    let n = total_tokens.max(1) as f64;
+    let overall_ref_ppl = (total_ref_nll / n).exp();
+    let overall_cand_ppl = (total_cand_nll / n).exp();
+    let overall_ppl_ratio = overall_cand_ppl / overall_ref_ppl.max(1e-9);
+    let overall_mean_kl = total_kl / n;
+    let overall_top1 = total_top1 as f64 / n;
+    let overall_cos = total_cos / n;
+    let ppl_ret = (overall_ref_ppl / overall_cand_ppl.max(1e-9)).clamp(0.0, 1.0);
+    let composite_retention_pct = (0.5 * ppl_ret + 0.5 * overall_top1) * 100.0;
+    let catastrophic_failure =
+        overall_ppl_ratio > 5.0 || overall_mean_kl > 5.0 || overall_top1 < 0.25;
+
+    Ok(CapabilitySuiteReport {
+        categories,
+        overall_ref_perplexity: overall_ref_ppl,
+        overall_cand_perplexity: overall_cand_ppl,
+        overall_perplexity_ratio: overall_ppl_ratio,
+        overall_mean_kl,
+        overall_top1_agreement: overall_top1,
+        overall_final_cosine: overall_cos,
+        composite_retention_pct,
+        catastrophic_failure,
+    })
+}
+
 fn compute_layer_metrics(
     ref_acts: &[Vec<Vec<f64>>],
     cand_acts: &[Vec<Vec<f64>>],

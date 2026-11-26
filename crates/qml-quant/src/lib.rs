@@ -6,6 +6,7 @@
 //! - Reproducible reconstruction and matvec error evaluation
 
 pub mod baselines;
+pub mod gptq;
 pub mod map;
 pub mod resonance;
 pub mod rmq;
@@ -13,6 +14,12 @@ pub mod rmq;
 pub use baselines::{
     Bf16Matrix, FactorPrecision, Fp16Matrix, Int4AsymGroupMatrix, Int4SymGroupMatrix,
     Int8AsymMatrix, Int8SymMatrix, LowRankSvdMatrix, QuantizedFactor, SparseResidual,
+};
+pub use gptq::{
+    DEFAULT_HESSIAN_BLOCK_SIZE, LayerCalibrationAccumulator, LayerCalibrationStats,
+    ModelCalibrationProfile, activation_output_rel_error, fit_echo_calibrated,
+    fit_weighted_affine_group, quantize_int2_gptq, quantize_int3_gptq, quantize_int4_sym_gptq,
+    quantize_ternary_gptq, rotate_hessian_block_hadamard,
 };
 pub use map::{
     LayerAllocation, LayerCandidate, MapAllocationReport, MapConfig, MapLayerProfile,
@@ -24,7 +31,7 @@ pub use resonance::{
     ResonanceCandidateEval, ResonanceCandidateKind, ResonanceProfile, ResonanceTensorAllocation,
     ResonanceTensorProfile, TernaryPackedMatrix, VectorQuantMatrix, allocate_resonance_map_b,
     apply_hadamard_forward, apply_hadamard_inverse, estimate_consumer_hardware_fit, fwht_in_place,
-    hadamard_signs, profile_tensor_for_resonance,
+    hadamard_signs, profile_tensor_for_resonance, profile_tensor_for_resonance_calibrated,
 };
 pub use rmq::{
     RmqAblationReport, RmqComparisonRow, RmqResidualKind, RmqSharedBasisCluster,

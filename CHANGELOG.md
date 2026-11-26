@@ -1,5 +1,25 @@
 # Changelog
 
+## `v0.5.0` — PROJECT EVENT HORIZON Wave II (2026-11-26)
+
+- **Activation-Aware Blockwise Cholesky GPTQ + Hadamard Engine (`qml-quant::gptq`):**
+  - Implemented streaming per-layer input activation covariance collection (`LayerCalibrationAccumulator`, `LayerCalibrationStats`, `ModelCalibrationProfile`, `64×64` block-diagonal `H_b = (2/N) X_bᵀ X_b`) and exact orthogonal Hadamard covariance rotation (`H_b' = Q_b H_b Q_bᵀ`).
+  - Implemented Rayon-parallelized Blockwise Cholesky GPTQ with descending activation-salience ordering (`actorder`), Ledoit–Wolf-style adaptive sample shrinkage damping, activation-weighted least-squares affine/symmetric grid refitting (`fit_weighted_affine_group`, `fit_weighted_sym_scale`), and activation-weighted **PROJECT ECHO** (`fit_echo_calibrated`) across `INT4_SYM`, `INT3_ASYM`, `INT2_ASYM`, and `TERNARY_PACKED` with **zero extra storage bytes**.
+- **Full GPU-Resident Single-Submission WGSL Transformer (`qml-hardware::gpu_full` + `qml-runtime::QCoreBackend::GpuFull`):**
+  - Implemented 6 new WGSL compute shaders (`RMSNORM_WGSL`, `HADAMARD_FWD_WGSL` with bit-packed exact signs, `ROPE_AND_KV_APPEND_WGSL`, `GQA_ATTN_WGSL` with numerically stable online softmax, `SWIGLU_WGSL`, `VEC_ADD_WGSL`) chaining all 24–36 transformer layers + `lm_head` into **ONE single `CommandEncoder` submission per token** with zero intermediate CPU readbacks.
+  - Raised `GPU_SCRATCH_MAX_ELEMS` to `262,144` (covering 152K Qwen2.5 & 256K Gemma vocabularies) and requested full `adapter.limits()` so multi-GB VRAM tensors upload cleanly.
+  - Verified **`22.1×` real end-to-end speedup** (`1.84 -> 40.70 tok/s`, up to `63.3 tok/s` at 2-bit) over `GpuHybrid` on `SmolLM2-360M` (RTX 4070) with identical output and `< 1e-3` logit RMSE parity vs CPU.
+- **Qwen2 Architecture, Sharded Multi-GB Streaming, INT8 KV-Cache & GGUF K-Quants (`qml-model`, `qml-forge`, `qml-runtime`, `qml-behavior`, `qml-cli`, `qml-desktop`):**
+  - Added Qwen2/Qwen2.5 optional attention biases (`q_proj.bias`, `k_proj.bias`, `v_proj.bias`) across CPU, `GpuHybrid`, and `GpuFull`.
+  - Added unified single + multi-shard `SafetensorsSource` (`model.safetensors.index.json`), zero-duplicate-RAM `forge_path_to_file_atomic`, raised default `PayloadBudget` to `4 GiB/tensor` & `32 GiB/total`, and added exact safe-Rust **GGUF K-quant** payload decoding (`Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`).
+  - Added `KvCacheMode::Int8` (per-token symmetric INT8 + f16 scale KV-cache) and `ReferenceSuiteCache` (freeing 100% of BF16 reference VRAM before loading large compressed candidates).
+  - Upgraded `qml resonance-ladder --calibrate`, `qml generate --backend gpu` (`GpuFull`), `qml morph` (sharded support), and `qml-desktop` Q-Core Inference Chamber to `QCoreBackend::GpuFull`.
+- **Progressive Multi-Scale Real-Model Evidence (`exp-005`, Stage A `360M` → Stage B `1.5B` & `1.7B` → Stage C 2-Shard `3B`):**
+  - `SmolLM2-360M`: GPTQ+Hadamard cut `INT3` KL by `−67.3%` (`1.910 -> 0.624`), `QMR-300` KL by `−61.8%` (`2.803 -> 1.072`), broke the `QMR-275` (`2.75 bpp`) cliff (`PPLx 3.52×`), and cut `INT2` PPLx by `196×` (`2,653.7× -> 13.53×`, `41,068×` vs plain 2-bit) at `63.3 tok/s`.
+  - `SmolLM2-1.7B` (`3.42 GB` BF16): `INT3_HADAMARD_GPTQ` hit `83.0%` Top-1 in `663.9 MiB` VRAM, and **`QMR-250_GPTQ` (`2.500 bpp`, `510.5 MiB` VRAM, `22.6 tok/s`)** broke the `2.50 bpp` barrier (`PPLx = 2.79×`, `58.0%` Top-1).
+  - `Qwen2.5-1.5B` (`3.09 GB` BF16, Qwen2 biases): `INT3_HADAMARD_GPTQ` achieved **`PPLx = 1.03×`** (`+3%` over BF16!) at `3.253 bpp` (`599.7 MiB` VRAM, `22.8 tok/s`), and **`INT2_HADAMARD_GPTQ` (`2.253 bpp`, `415.7 MiB` VRAM, `31.5 tok/s`)** broke the `2.25 bpp` 2-bit cliff (`PPLx = 4.12×`, `41.7%` Top-1).
+  - **Stage C `Qwen2.5-3B` (2-shard `6.17 GB` BF16):** `INT4_Q4_0_GPTQ` hit **`PPLx = 1.01×`** (`91.4%` retention, `1.62 GiB` VRAM), `INT3_HADAMARD_GPTQ` hit **`PPLx = 1.07×`** (`KL = 0.237`, `1.17 GiB` VRAM), and **`INT2_HADAMARD_GPTQ` (`2.253 bpp`, `829.6 MiB` VRAM — `7.43×` smaller, `18.6 tok/s`)** achieved **`PPLx = 2.76×` (`OK`), `KL = 1.606`, `Top-1 = 55.4%`** with coherent English generation.
+
 ## `v0.4.0` — PROJECT RESONANCE & EVENT HORIZON Wave I (2026-11-26)
 
 - **Sub-3-Bit Neural Representation Engine (`qml-quant::resonance`):**

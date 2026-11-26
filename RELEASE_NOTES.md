@@ -1,21 +1,21 @@
-# Quantum Morph Laboratory v0.5.0 | PROJECT EVENT HORIZON Wave II
+# Quantum Morph Laboratory v0.5.1 | PROJECT EVENT HORIZON Wave II
 
 > *Don't just compress intelligence. Transform its representation.*
 
-**Quantum Morph Laboratory `v0.5.0` (PROJECT EVENT HORIZON Wave II)** delivers three major breakthroughs toward running capable multi-billion-parameter language models on consumer 6–8 GB GPUs: an **Activation-Aware Blockwise Cholesky GPTQ + Hadamard Compensation Engine** (zero extra storage bytes), a **Full GPU-Resident Single-Submission WGSL Transformer** (`22.1×` real end-to-end token throughput speedup on RTX 4070), and **Multi-Shard Qwen2 / Llama Scaling up to 3B Parameters** (`exp-005`), breaking the **`2.75 bpp`**, **`2.50 bpp`**, and **`2.25 bpp` (`2-bit`)** post-training quantization barriers with coherent language generation—all in **100% safe Rust (`#![forbid(unsafe_code)]`)**, **zero Python**, **MIT Licensed**, atop the **PROJECT PRISM** native WGPU 3D scientific observatory.
+**Quantum Morph Laboratory `v0.5.1` (PROJECT EVENT HORIZON Wave II)** delivers three major breakthroughs toward running capable multi-billion-parameter language models on consumer 6–8 GB GPUs: an **Activation-Aware Blockwise Cholesky GPTQ + Hadamard Compensation Engine** (zero extra storage bytes), a **Full GPU-Resident Single-Submission WGSL Transformer** (`22.1×` real end-to-end token throughput speedup on RTX 4070), and **Multi-Shard Qwen2 / Llama Scaling up to 3B Parameters** (`exp-005`), breaking the **`2.75 bpp`**, **`2.50 bpp`**, and **`2.25 bpp` (`2-bit`)** post-training quantization barriers with coherent language generation—all in **100% safe Rust (`#![forbid(unsafe_code)]`)**, **zero Python**, **MIT Licensed**, atop the **PROJECT PRISM** native WGPU 3D scientific observatory.
 
 > **Experimental Research Software Notice:** Quantum Morph Laboratory is active experimental scientific software—not a production inference server or commercial LLM runtime. Public binary releases let researchers and enthusiasts launch and inspect the laboratory immediately without compiling from source, while preserving strict scientific honesty about experimental container formats (`QMF v0/v1`), sub-2-bit compression cliffs, negative controls, and known limitations. "Quantum-inspired" refers strictly to classical mathematics (spectral decompositions, tensor networks, Walsh–Hadamard incoherence, Grassmannian subspace geometry) and makes no claim of physical quantum computation.
 
 ---
 
-## Direct Downloads (`v0.5.0`)
+## Direct Downloads (`v0.5.1`)
 
 | Platform | Package | Direct Download |
 |---|---|---|
-| **Windows 10/11 (x64)** | Standalone Native Desktop App (no installer, no terminal required) | [`Quantum-Morph-Laboratory-v0.5.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Windows-x64.exe) |
-| **Windows 10/11 (x64)** | Portable Suite (`qml-desktop.exe` + `qml.exe` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.5.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Windows-x64-Portable.zip) |
-| **Linux (x64)** | Portable Tarball (`qml-desktop` + `qml` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.5.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Linux-x64.tar.gz) |
-| **All Platforms** | Cryptographic Checksums | [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/SHA256SUMS.txt) |
+| **Windows 10/11 (x64)** | Standalone Native Desktop App (no installer, no terminal required) | [`Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe) |
+| **Windows 10/11 (x64)** | Portable Suite (`qml-desktop.exe` + `qml.exe` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip) |
+| **Linux (x64)** | Portable Tarball (`qml-desktop` + `qml` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz) |
+| **All Platforms** | Cryptographic Checksums | [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/SHA256SUMS.txt) |
 
 ---
 
@@ -24,7 +24,7 @@
 *Captured directly from the compiled Windows WGPU release binary running live on an NVIDIA GeForce RTX 4070 Laptop GPU (`157–187 FPS`, `2560×1440` & `1920×1080`).*
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.0/assets/screenshots/prism-command-center.png" alt="PROJECT PRISM Command Center — Computational Singularity (2560x1440 WGPU)" width="100%"/>
+  <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.1/assets/screenshots/prism-command-center.png" alt="PROJECT PRISM Command Center — Computational Singularity (2560x1440 WGPU)" width="100%"/>
   <br/>
   <em><strong>Command Center — The Computational Singularity (2560×1440, 180 FPS):</strong> Interactive 3D orbital observatory core with clickable subsystem portals and real host telemetry.</em>
 </p>
@@ -32,24 +32,24 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.0/assets/screenshots/prism-qscope-anatomy.png" alt="Q-Scope 3D Neural Anatomy on real SmolLM2-135M" width="100%"/>
+      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.1/assets/screenshots/prism-qscope-anatomy.png" alt="Q-Scope 3D Neural Anatomy on real SmolLM2-135M" width="100%"/>
       <br/>
       <em><strong>Q-Scope 3D Neural Anatomy (Real SmolLM2-135M):</strong> 272 measured tensors across 30 transformer layers with 6 live visual modes, 32-bin histogram & SVD spectra.</em>
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.0/assets/screenshots/prism-qentangle-constellation.png" alt="Q-Entangle 3D Latent Constellation on real SmolLM2-135M" width="100%"/>
+      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.1/assets/screenshots/prism-qentangle-constellation.png" alt="Q-Entangle 3D Latent Constellation on real SmolLM2-135M" width="100%"/>
       <br/>
       <em><strong>Q-Entangle Latent Constellation (Real SmolLM2-135M):</strong> 240 measured cross-layer Grassmannian subspace affinity pairs & 2D heatmap.</em>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.0/assets/screenshots/prism-qgenesis-crucible.png" alt="Q-Genesis 3D Evolutionary Crucible" width="100%"/>
+      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.1/assets/screenshots/prism-qgenesis-crucible.png" alt="Q-Genesis 3D Evolutionary Crucible" width="100%"/>
       <br/>
       <em><strong>Q-Genesis Evolutionary Crucible:</strong> 3D objective space (BPP × Matvec Error × FLOPs) with recorded parent-child lineage & Pareto frontier.</em>
     </td>
     <td width="50%" align="center">
-      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.0/assets/screenshots/prism-hardware-anatomy.png" alt="Hardware Observatory & PROJECT PRISM Graphics Controls" width="100%"/>
+      <img src="https://raw.githubusercontent.com/ShamelesAbyss/Quantum-Morph-Laboratory/v0.5.1/assets/screenshots/prism-hardware-anatomy.png" alt="Hardware Observatory & PROJECT PRISM Graphics Controls" width="100%"/>
       <br/>
       <em><strong>Hardware Observatory & PRISM Controls:</strong> 3D CPU/WGPU schematic, 5 graphics presets, live FPS, Consumer VRAM Fit Matrix & WGSL compute self-tests.</em>
     </td>
@@ -58,7 +58,7 @@
 
 ---
 
-## What's New in `v0.5.0` (PROJECT EVENT HORIZON Wave II)
+## What's New in `v0.5.1` (PROJECT EVENT HORIZON Wave II)
 
 ### 1. Activation-Aware Blockwise Cholesky GPTQ + Hadamard Engine (`qml-quant::gptq`, Zero Extra Bytes)
 - **Streaming Input Covariance Calibration (`ModelCalibrationProfile`):** Collects per-layer input channel RMS and `64×64` block-diagonal Hessians `H_b = (2/N) X_bᵀ X_b` from a strictly disjoint calibration corpus (sharing accumulators across QKV and Gate/Up projections).
@@ -78,10 +78,10 @@
 - **INT8 KV-Cache (`KvCacheMode::Int8`) & `ReferenceSuiteCache` (`qml-behavior`):** Per-head symmetric INT8 KV-cache compression (`< 5e-2` max diff vs FP64) and cached BF16 reference logits so `ref_model` drops and frees 100% of 8 GB VRAM before loading multi-GB compressed candidates.
 
 ### 4. Verified Real-Model Research Results (`exp-005` on RTX 4070 — Breaking `2.75`, `2.50`, and `2.25 bpp`!)
-Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, NVIDIA GeForce RTX 4070 Laptop GPU 8 GB VRAM, 4-category strictly held-out Capability Retention Suite; archived in [`experiments/exp-005-event-horizon-wave2-gptq-scaling.toml`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/blob/v0.5.0/experiments/exp-005-event-horizon-wave2-gptq-scaling.toml)):
+Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, NVIDIA GeForce RTX 4070 Laptop GPU 8 GB VRAM, 4-category strictly held-out Capability Retention Suite; archived in [`experiments/exp-005-event-horizon-wave2-gptq-scaling.toml`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/blob/v0.5.1/experiments/exp-005-event-horizon-wave2-gptq-scaling.toml)):
 
 #### Stage A Matched-Byte Control (`SmolLM2-360M-Instruct`, Zero Extra Bytes vs `v0.4.0` Weight-Only)
-| Variant | Complete BPP | Disk MiB | `v0.4.0` Weight-Only PPLx → **`v0.5.0` GPTQ PPLx** | Mean KL | Top-1 Match | `GpuFull` tok/s | Status |
+| Variant | Complete BPP | Disk MiB | `v0.4.0` Weight-Only PPLx → **`v0.5.1` GPTQ PPLx** | Mean KL | Top-1 Match | `GpuFull` tok/s | Status |
 |---|---:|---:|---:|---:|---:|---:|---|
 | `INT3_HADAMARD` | `3.270` | `141.4` | `5.63×` → **`1.64×`** (`3.43×` lower) | `0.624` (`−67.3%`) | `68.2%` (`+26.7 pp`) | `41.8` | `OK` |
 | `QMR-300` | `3.000` | `129.7` | `13.35×` → **`2.49×`** (`5.36×` lower) | `1.072` (`−61.8%`) | `58.5%` (`+26.7 pp`) | `44.8` | `OK` |
@@ -109,15 +109,15 @@ Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, NVIDIA GeForce RTX 40
 ## Installation & Quick Start
 
 ### Windows (No Rust, Python, or Terminal Required)
-1. **Fastest — Standalone Executable:** Download [`Quantum-Morph-Laboratory-v0.5.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Windows-x64.exe) and double-click it to launch the native desktop laboratory immediately.
-2. **Full Portable Suite:** Download [`Quantum-Morph-Laboratory-v0.5.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Windows-x64-Portable.zip), extract it anywhere, and double-click `qml-desktop.exe` (or run `qml.exe --help` for the 15-command CLI, including `qml resonance-ladder --calibrate`).
+1. **Fastest — Standalone Executable:** Download [`Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe) and double-click it to launch the native desktop laboratory immediately.
+2. **Full Portable Suite:** Download [`Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Windows-x64-Portable.zip), extract it anywhere, and double-click `qml-desktop.exe` (or run `qml.exe --help` for the 15-command CLI, including `qml resonance-ladder --calibrate`).
 
 ### Linux (x86_64)
-1. Download [`Quantum-Morph-Laboratory-v0.5.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/Quantum-Morph-Laboratory-v0.5.0-Linux-x64.tar.gz).
+1. Download [`Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz).
 2. Extract and launch:
    ```sh
-   tar -xzf Quantum-Morph-Laboratory-v0.5.0-Linux-x64.tar.gz
-   cd Quantum-Morph-Laboratory-v0.5.0-Linux-x64
+   tar -xzf Quantum-Morph-Laboratory-v0.5.1-Linux-x64.tar.gz
+   cd Quantum-Morph-Laboratory-v0.5.1-Linux-x64
    ./qml-desktop
    ```
 
@@ -134,11 +134,11 @@ Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, NVIDIA GeForce RTX 40
 
 ## SHA-256 Checksum Verification
 
-Verify your download against [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.0/SHA256SUMS.txt):
+Verify your download against [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.5.1/SHA256SUMS.txt):
 
 - **Windows (PowerShell):**
   ```powershell
-  Get-FileHash .\Quantum-Morph-Laboratory-v0.5.0-Windows-x64.exe -Algorithm SHA256
+  Get-FileHash .\Quantum-Morph-Laboratory-v0.5.1-Windows-x64.exe -Algorithm SHA256
   ```
 - **Linux:**
   ```sh

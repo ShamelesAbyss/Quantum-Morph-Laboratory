@@ -183,11 +183,11 @@ pub fn probe_hardware() -> HardwareReport {
                 "WGPU Compute ({} / {}) + Rayon CPU",
                 discrete.name, discrete.backend
             )
-        } else if let Some(first) = gpus.first() {
-            format!(
-                "WGPU Compute ({} / {}) + Rayon CPU",
-                first.name, first.backend
-            )
+        } else if let Some(hw) = gpus
+            .iter()
+            .find(|g| matches!(g.device_type.as_str(), "IntegratedGpu" | "VirtualGpu"))
+        {
+            format!("WGPU Compute ({} / {}) + Rayon CPU", hw.name, hw.backend)
         } else {
             "Rayon Multi-Threaded CPU (100% safe Rust)".to_owned()
         };
@@ -862,6 +862,12 @@ impl WgpuMatvecEngine {
         .ok_or(GpuComputeError::NoAdapterAvailable)?;
 
         let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            // Software CPU rasterizers (e.g. Microsoft WARP / llvmpipe) have no VRAM,
+            // run far slower than native Rayon CPU, and can fault on multi-dispatch
+            // compute graphs; decline them so Q-Core uses native Rayon CPU cleanly.
+            return Err(GpuComputeError::NoAdapterAvailable);
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("qml-wgpu-compute"),

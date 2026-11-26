@@ -124,40 +124,49 @@ fn main(
     let bs = params.block_size;
     let base = wid.x * bs;
     let tid = lid.x;
-    if (tid >= bs) {
-        return;
-    }
     let idx = base + tid;
-    if (base + bs > params.len) {
-        // Tail block smaller than block_size: pass through unchanged (matches CPU apply_hadamard_forward).
-        if (idx < params.len) {
-            y_out[idx] = x_in[idx];
-        }
-        return;
+    let in_block = tid < bs;
+    let full_block = base + bs <= params.len;
+    let is_active = in_block && full_block;
+
+    if (is_active) {
+        let sign_word = signs_bits[idx >> 5u];
+        let is_neg = ((sign_word >> (idx & 31u)) & 1u) != 0u;
+        let s = select(1.0, -1.0, is_neg);
+        sh[tid] = x_in[idx] * s;
+    } else {
+        sh[tid] = 0.0;
     }
-    let sign_word = signs_bits[idx >> 5u];
-    let is_neg = ((sign_word >> (idx & 31u)) & 1u) != 0u;
-    let s = select(1.0, -1.0, is_neg);
-    sh[tid] = x_in[idx] * s;
     workgroupBarrier();
 
     var h: u32 = 1u;
     while (h < bs) {
         let partner = tid ^ h;
-        let a = sh[tid];
-        let b = sh[partner];
+        var a: f32 = 0.0;
+        var b: f32 = 0.0;
+        if (is_active) {
+            a = sh[tid];
+            b = sh[partner];
+        }
         workgroupBarrier();
-        if ((tid & h) == 0u) {
-            sh[tid] = a + b;
-        } else {
-            sh[tid] = b - a;
+        if (is_active) {
+            if ((tid & h) == 0u) {
+                sh[tid] = a + b;
+            } else {
+                sh[tid] = b - a;
+            }
         }
         workgroupBarrier();
         h = h << 1u;
     }
 
-    let inv_sqrt = inverseSqrt(f32(bs));
-    y_out[idx] = sh[tid] * inv_sqrt;
+    if (is_active) {
+        let inv_sqrt = inverseSqrt(f32(bs));
+        y_out[idx] = sh[tid] * inv_sqrt;
+    } else if (in_block && idx < params.len) {
+        // Tail block smaller than block_size: pass through unchanged (matches CPU apply_hadamard_forward).
+        y_out[idx] = x_in[idx];
+    }
 }
 "#;
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## `v0.5.1` — PROJECT EVENT HORIZON Wave II (Public Release Fix, 2026-11-26)
+- **Strict WGSL Barrier Uniformity (`qml-hardware::gpu_full`):** Made every `workgroupBarrier()` in `HADAMARD_FWD_WGSL` strictly uniform across all 256 threads for clean cross-vendor WGSL/DX12/Vulkan/Metal execution.
+- **Hardware-Only WGPU Compute Selection (`qml-hardware`):** `WgpuMatvecEngine::try_new()` now declines software CPU emulators (`wgpu::DeviceType::Cpu`, such as headless Windows WARP `Microsoft Basic Render Driver` or `llvmpipe`), allowing GPU-less systems and headless CI runners to fall back automatically to native multi-threaded Rayon CPU without software driver faults.
+
 ## `v0.5.0` — PROJECT EVENT HORIZON Wave II (2026-11-26)
 
 - **Activation-Aware Blockwise Cholesky GPTQ + Hadamard Engine (`qml-quant::gptq`):**

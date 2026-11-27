@@ -58,8 +58,8 @@ release. Original autoregressive generation was not attempted after resource
 preflight: 29,540,133,960 checkpoint bytes exceed 17,563,394,048 available
 physical RAM bytes before runtime overhead; source BF16 streaming remains valid.
 
-Next: finish and verify only the pinned source; run streaming calibration and
-reference; forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
+Next: finish streaming calibration and reference for the verified pinned source;
+forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
 record every outcome/resource failure, update all required scientific docs,
 validate and publish v0.6.5 through the native Releases-only six-asset protocol,
 independently verify it, report exact total D: storage, and STOP. QMR-175 is

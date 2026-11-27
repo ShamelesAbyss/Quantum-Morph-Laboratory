@@ -85,6 +85,26 @@ These are committed historical captures of the implemented native application, n
 
 ## Recorded pretrained-model results
 
+### COLOSSUS — verified source, experiment in progress
+
+Experiment [007](experiments/exp-007-project-colossus.toml) selects only
+Qwen2.5-Coder-14B-Instruct. All six original BF16 shards match their official
+SHA-256 identities at the pinned revision. Native metadata inspection counts
+**14,770,033,664 parameters** and **29,540,133,960 shard-file bytes** (29.54 GB).
+No compressed-model result is established yet. The fixed protocol separates
+14 objective coding/reasoning/explanation/instruction tasks from 1,340 disjoint
+calibration tokens and 125 teacher-forced numerical-reference predictions.
+See the [research report](docs/PROJECT_COLOSSUS.md) and
+[complete inputs and harness](docs/COLOSSUS_REPRODUCTION.md).
+
+Original BF16 task generation is unmeasured after available-RAM preflight;
+streaming BF16 numerical references do not substitute for that task baseline.
+The published approximately 9 GB Ollama Q4_K_M size is a storage comparator
+only, with no measured quality comparison. All model/cache/QMF/result files
+remain outside Git under the dedicated D: experiment tree.
+
+### Historical exp-006 — Qwen2.5-7B-Instruct
+
 The following measurements are retained from [exp-006](experiments/exp-006-event-horizon-wave3-7b-sub2bit.toml), recorded for Qwen2.5-7B-Instruct on an i9-14900HX, RTX 4070 Laptop GPU (8 GB), Windows 11 and the specified short evaluation corpus. They were **not rerun during repository restoration**.
 
 | Representation | Complete artifact bpp | Artifact MiB | Reported GPU weight VRAM MiB | Tokens/s | Perplexity ratio vs BF16 | Top-1 agreement |
@@ -97,6 +117,13 @@ The following measurements are retained from [exp-006](experiments/exp-006-event
 | Ternary Hadamard GPTQ | 1.727 | 1,567.7 | 1,456.5 | 9.5 | 115.92 | 6.3% |
 
 Complete bpp includes serialized container overhead. Reported weight VRAM is not a measurement of total OS/driver memory, KV-cache overhead or process peak. The recorded calibration peak of 444.5 MiB describes layer-streaming VRAM, not whole-process RAM. The two lowest-rate rows show severe degradation; they are preserved as negative results.
+
+Historical token-rate values above remain verbatim. COLOSSUS identified prompt
+tokens being included in the generation-rate numerator and a ladder field
+mixing evaluation and generation rates. New generation rates count emitted
+tokens over total call time including prefill; new evaluation rates are
+reported separately. The old rates cannot be corrected without their original
+timing records and must not be compared directly with the corrected metric.
 
 The composite numerical fidelity score combines perplexity ratio and top-1 token agreement. It is not retained intelligence, an independent task benchmark or evidence of a power law. Independent reference-runtime comparisons and broader task-level validation remain important research work.
 

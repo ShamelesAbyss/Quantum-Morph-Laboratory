@@ -91,6 +91,10 @@ Experiment [007](experiments/exp-007-project-colossus.toml) selects only
 Qwen2.5-Coder-14B-Instruct. All six original BF16 shards match their official
 SHA-256 identities at the pinned revision. Native metadata inspection counts
 **14,770,033,664 parameters** and **29,540,133,960 shard-file bytes** (29.54 GB).
+The native streamed BF16 reference completed in 1,148.6 seconds with a reported
+525.0 MiB layer-weight GPU peak and a separately sampled 3.45 GiB process RAM
+peak. These are scoped calibration/reference measurements, not compressed
+inference memory or a measured BF16 coding-task baseline.
 No compressed-model result is established yet. The fixed protocol separates
 14 objective coding/reasoning/explanation/instruction tasks from 1,340 disjoint
 calibration tokens and 125 teacher-forced numerical-reference predictions.

@@ -1,7 +1,7 @@
 # PROJECT COLOSSUS — experiment 007
 
-Status: source verified and calibration in progress; no 14B compression or
-task-quality result is established yet.
+Status: source and streamed BF16 reference verified; primary compression/task
+trials are in progress. No candidate task-quality result is established yet.
 The owner authorized this experiment after SENTINEL. This does not authorize new
 quantizers, model architectures, graphical changes or another milestone.
 
@@ -131,7 +131,21 @@ are preserved and are not retroactively recalculated without raw timing data.
 
 ## Results and reproducibility
 
-Pending the actual runs. The local frozen protocol, Rust driver, objective
+The first completed phase is the original BF16-weight streaming reference.
+Computation took **1,148.589287 seconds** with GPU use reported. The existing
+layer-weight GPU counter peaked at **550,502,512 bytes (525.0 MiB)**.
+Externally sampled process working set peaked at **3,708,489,728 bytes
+(3.45 GiB)** at one-second sampling; this is not a guaranteed OS high-water mark.
+The full process took **1,881.6290715 seconds**, including the existing safe
+cache serialization/publication overhead. These timing scopes are distinct.
+
+The collected profile accounts for 1,114,480,640 bytes of Hessian/RMS values in
+memory. Its 337 verified tensor shards total 557,461,943 bytes; seven verified
+reference-cache files total 76,034,012 bytes. This is a completed native
+reference/calibration result for the specified checkpoint and corpus, not a
+measured original-model autoregressive coding baseline or a general 14B claim.
+
+Candidate results are pending the actual runs. The local frozen protocol, Rust driver, objective
 oracle, command logs and resource measurements are under
 `D:\QML-COLOSSUS`. Final summaries belong in experiment 007, README,
 CHANGELOG, release notes and HANDOFF. A public v0.6.5 release is not complete

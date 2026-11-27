@@ -83,8 +83,16 @@ quality claims here; their separate correction is outside the authorized
 application scope. Original-source rehash and precise final storage accounting
 scripts are prepared under D: scratch for execution after workloads finish.
 
-Next: finish streaming calibration and reference for the verified pinned source;
-forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
+Streaming reference now completed successfully: 1,148.589287 seconds of engine
+computation; 1,881.6290715 seconds full process including safe cache publication;
+used_gpu=true; layer-weight GPU counter 550,502,512 bytes (525 MiB);
+externally sampled process peak 3,708,489,728 bytes (3.45 GiB, one-second
+samples). Profile Hessian/RMS accounting is 1,114,480,640 bytes. All 337 QCAL
+shards total 557,461,943 bytes; all seven QREF shards total 76,034,012 bytes.
+Completion marker and process exit=0 are present. INT3 forging has begun.
+These scopes are not whole-device allocation or measured BF16 task quality.
+
+Next: forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
 record every outcome/resource failure, update all required scientific docs,
 validate and publish v0.6.5 through the native Releases-only six-asset protocol,
 independently verify it, report exact total D: storage, and STOP. QMR-175 is

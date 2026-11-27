@@ -20,16 +20,43 @@ the ladder separation regression passes; formatting and strict Clippy for the
 runtime/CLI and all their targets pass. Full final workspace release validation
 has not yet run for COLOSSUS.
 
-Frozen local protocol defines 14 tasks across all seven requested categories,
-eight disjoint calibration passages and seven numerical-reference passages.
+Frozen protocol revision 2 defines 14 tasks across all seven requested categories,
+17 disjoint calibration passages (1,340 tokens, including nine actual code
+passages) and seven numerical-reference passages (125 predictions).
 The external Rust experiment driver builds offline using existing workspace
 APIs/dependencies. Positive oracle self-tests passed 14/14; deliberately wrong
 negative controls were rejected 14/14. These are synthetic harness tests,
-not model scores. Source download/verification is still in progress. No 14B
+not model scores. All six original shards now pass official SHA-256 verification;
+native bounded inspection counts 579 BF16 tensors, 14,770,033,664 parameters,
+29,540,067,328 payload bytes and 29,540,133,960 shard-file bytes. No 14B
 compression, generation-quality, performance or fit result is claimed yet.
 Original BF16 generation may be constrained by available RAM; do not claim
 task-quality retention without an actually measured original baseline.
 See docs/PROJECT_COLOSSUS.md and experiments/exp-007-project-colossus.toml.
+
+The initial 283-token prose-only calibration setup was revised before any
+quantization or candidate output. Its preliminary reference pass was deliberately
+stopped after 43.806 seconds; no cache completed. All v1 protocol, provenance,
+partial logs and measurements remain on D:. Revision 2 adds code calibration
+coverage while preserving every held-out task/assertion, numerical-reference
+passage and generation setting. Current cache identity:
+40c4a4351ba8056a15974ce9b9a88d4183d220fd7f9d0eaad1dcee83f96af2c2.
+The full protocol, external Rust driver and objective oracle are documented in
+docs/COLOSSUS_REPRODUCTION.md. Active pipeline is
+D:\QML-COLOSSUS\scratch\run-experiment.ps1, with evidence in
+experiment-results\experiment-pipeline-v2.log and reference-v2.stderr.log.
+It uses the same existing algorithms, ATLAS publication and verified cache APIs;
+the untied embedding retains the existing non-calibrated quantizer when no
+embedding calibration statistic is supplied.
+
+Application checkpoint 7d9ca53dd715ddcfd30b3440c4dc13fd131803f9 is pushed to main.
+CI run https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45999301187
+passed all jobs: 142 Windows tests, 143 Linux tests, zero failures/ignored, plus
+formatting, documentation/memorial checks, builds, strict Clippy and dependency
+policy. This is an intermediate validated checkpoint, not a completed COLOSSUS
+release. Original autoregressive generation was not attempted after resource
+preflight: 29,540,133,960 checkpoint bytes exceed 17,563,394,048 available
+physical RAM bytes before runtime overhead; source BF16 streaming remains valid.
 
 Next: finish and verify only the pinned source; run streaming calibration and
 reference; forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;

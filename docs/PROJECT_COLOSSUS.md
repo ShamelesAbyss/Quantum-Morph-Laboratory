@@ -1,6 +1,7 @@
 # PROJECT COLOSSUS — experiment 007
 
-Status: in progress; no 14B compression or task-quality result is established yet.
+Status: source verified and calibration in progress; no 14B compression or
+task-quality result is established yet.
 The owner authorized this experiment after SENTINEL. This does not authorize new
 quantizers, model architectures, graphical changes or another milestone.
 
@@ -13,6 +14,11 @@ configuration, tokenizer, model card and Apache-2.0 license are kept under
 `D:\QML-COLOSSUS\original-model`. Six shard sizes and SHA-256 identities come
 from the pinned official repository inventory; every shard must verify before use.
 No weights, calibration logits or generated QMF files are committed.
+
+All six original shards passed their official SHA-256 identities on November
+27, 2026. Native bounded metadata inspection counted **14,770,033,664 parameters**,
+all BF16. Shards total 29,540,133,960 bytes including headers; tensor payloads
+total 29,540,067,328 bytes.
 
 The preflight recorded 585,672,253,440 free bytes on D: and a 200 GiB reservation
 floor. Dedicated directories contain download-cache, scratch, calibration,
@@ -54,8 +60,10 @@ dependency or orchestration implementation. Synthetic known-correct controls
 passed all 14 checks; deliberately wrong controls were rejected by all 14.
 These control results are harness tests, not model performance.
 
-Calibration uses eight separate programming/CS passages, disjoint from all task
-prompts and targets. A separate seven-passage teacher-forced corpus supplies
+Calibration uses 17 separate programming/CS passages, including nine actual
+Rust/Python/JavaScript code passages, disjoint from all task prompts and targets:
+**1,340 native-tokenizer tokens**. A separate seven-passage teacher-forced corpus
+contains **125 next-token predictions** and supplies
 streamed BF16 reference logits. It measures numerical fidelity, independently
 of task pass rates. Calibration Hessian block 64, Hadamard block 64, quantization
 group 128 and seed 42 preserve existing calibrated GPTQ mathematics.
@@ -63,6 +71,17 @@ QCAL2 profiles are sharded by tensor using the existing bounded verified cache
 serializer; QREF2 references are sharded by example. Every shard binds pinned
 source inventory, verified file hashes, original config/tokenizer bytes,
 datasets, effective runtime settings and execution-identity domain.
+
+Protocol revision 1's eight prose passages produced only 283 calibration tokens.
+Before quantization or any candidate output, its preliminary streaming reference
+pass was deliberately stopped after 43.806 seconds (six layer progress entries);
+no completed cache or candidate result was produced. Its protocol, provenance,
+partial logs and sampled process measurements remain preserved as v1 evidence.
+Revision 2 adds code calibration coverage. All 14 held-out tasks/assertions,
+generation settings and seven numerical reference passages are unchanged.
+The [complete frozen inputs and research harness](COLOSSUS_REPRODUCTION.md)
+are published for inspection. These tasks are held out from calibration, with
+no claim that their general concepts are absent from model pretraining.
 
 ## Representations and interpretation
 

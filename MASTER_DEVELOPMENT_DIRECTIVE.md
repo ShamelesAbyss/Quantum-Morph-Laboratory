@@ -1,3 +1,7 @@
+# Current owner override — permanent GitHub compliance
+
+The current distribution authority is [docs/GITHUB_DISTRIBUTION_POLICY.md](docs/GITHUB_DISTRIBUTION_POLICY.md). Earlier directives reproduced below are historical records and cannot authorize direct asset links, download buttons, mirrors, proxies or alternative distribution. Use native GitHub Releases exclusively. Preserve the exact memorial. Do not weaken the rule without explicit owner authorization AND clarification from GitHub Support.
+
 # Complete Master Development Directive
 
 This document preserves, in order, the three user-supplied directive messages. The parts are reproduced verbatim beneath the separators; the combined document is the project guidance and does not replace any existing project-specific implementation notes.

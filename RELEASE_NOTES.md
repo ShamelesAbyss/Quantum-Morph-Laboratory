@@ -1,5 +1,9 @@
 # v0.6.2 | PROJECT ATLAS
 
+Compiled executables, portable packages, source archives, release notes and SHA-256 checksums are available through the repository's [GitHub Releases section](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases).
+
+Documentation distribution references follow the permanent owner compliance policy; historical measurements and published releases are unchanged.
+
 PROJECT ATLAS adds bounded-memory QMF v1 artifact construction. It is a narrowly scoped engineering foundation, not a new compression algorithm or a large-model research result. Project Prism, GPU kernels, quantization mathematics, Q-Genesis, Q-Behavior and historical experiments are unchanged.
 
 ## Architecture and compatibility
@@ -39,12 +43,12 @@ Individual quantizers still allocate dense tensors and workspace; RMQ can retain
 
 No additional pretrained models were downloaded, no deleted checkpoints were restored, no large real-model transformation was run, and no historical measurements were changed. **This assignment does not scientifically validate 14B, 27B or 32B model support.** Those experiments, sampled MAP-B optimization, resumable jobs, lattice methods and architecture extensions require separate authorization.
 
-## Downloads
+## Distribution
 
-- [Standalone Windows EXE](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe)
-- [Windows portable ZIP](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip)
-- [Linux x64 archive](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz)
-- [SHA256SUMS.txt](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.2/SHA256SUMS.txt)
+- Standalone Windows EXE (native GitHub Releases)
+- Windows portable ZIP (native GitHub Releases)
+- Linux x64 archive (native GitHub Releases)
+- SHA256SUMS.txt (native GitHub Releases)
 
 MIT licensing, historical releases and the permanent memorial dedication are preserved.
 
@@ -65,12 +69,12 @@ PROJECT AEGIS is a scoped correctness and artifact-safety release. QML remains e
 - Existing QCAL1/QREF1 files are preserved, marked unverified and rejected. Regenerate into a new output directory. Provenance-free legacy cache loading and saving APIs return explicit errors.
 - The score is now `composite_numerical_fidelity_pct`: `100 × (0.5 × min(reference perplexity / candidate perplexity, 1) + 0.5 × top-1 agreement)`. It measures numerical fidelity, not retained intelligence or benchmark capability. Historical numerical results remain unchanged.
 
-## Downloads
+## Distribution
 
-- [Standalone Windows EXE](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64.exe)
-- [Windows portable ZIP](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Windows-x64-Portable.zip)
-- [Linux x64 archive](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/Quantum-Morph-Laboratory-v0.6.1-Linux-x64.tar.gz)
-- [SHA256SUMS.txt](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.1/SHA256SUMS.txt)
+- Standalone Windows EXE (native GitHub Releases)
+- Windows portable ZIP (native GitHub Releases)
+- Linux x64 archive (native GitHub Releases)
+- SHA256SUMS.txt (native GitHub Releases)
 
 ## Validation and limitations
 
@@ -90,14 +94,14 @@ Checksums detect corruption; they do not authenticate a malicious producer. Cach
 
 ---
 
-## Direct Downloads (`v0.6.0`)
+## Historical release packages (`v0.6.0`)
 
 | Platform | Package | Direct Download |
 |---|---|---|
-| **Windows 10/11 (x64)** | Standalone Native Desktop App (no installer, no terminal required) | [`Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe) |
-| **Windows 10/11 (x64)** | Portable Suite (`qml-desktop.exe` + `qml.exe` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip) |
-| **Linux (x64)** | Portable Tarball (`qml-desktop` + `qml` CLI + Docs + MIT License) | [`Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz) |
-| **All Platforms** | Cryptographic Checksums | [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/SHA256SUMS.txt) |
+| **Windows 10/11 (x64)** | Standalone Native Desktop App (no installer, no terminal required) | `Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe` (native GitHub Releases) |
+| **Windows 10/11 (x64)** | Portable Suite (`qml-desktop.exe` + `qml.exe` CLI + Docs + MIT License) | `Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip` (native GitHub Releases) |
+| **Linux (x64)** | Portable Tarball (`qml-desktop` + `qml` CLI + Docs + MIT License) | `Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz` (native GitHub Releases) |
+| **All Platforms** | Cryptographic Checksums | `SHA256SUMS.txt` (native GitHub Releases) |
 
 ---
 
@@ -177,11 +181,11 @@ Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, 8 GB NVIDIA GeForce R
 ## Installation & Quick Start
 
 ### Windows (No Rust, Python, or Terminal Required)
-1. **Fastest — Standalone Executable:** Download [`Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe) and double-click it to launch the native desktop laboratory immediately.
-2. **Full Portable Suite:** Download [`Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip), extract it anywhere, and double-click `qml-desktop.exe` (or run `qml.exe --help` for the 15-command CLI, including `qml resonance-ladder --calibrate --kv-cache int8`).
+1. **Fastest — Standalone Executable:** Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64.exe` (native GitHub Releases) and double-click it to launch the native desktop laboratory immediately.
+2. **Full Portable Suite:** Download `Quantum-Morph-Laboratory-v0.6.0-Windows-x64-Portable.zip` (native GitHub Releases), extract it anywhere, and double-click `qml-desktop.exe` (or run `qml.exe --help` for the 15-command CLI, including `qml resonance-ladder --calibrate --kv-cache int8`).
 
 ### Linux (x86_64)
-1. Download [`Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz).
+1. Download `Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz` (native GitHub Releases).
 2. Extract and launch:
    ```sh
    tar -xzf Quantum-Morph-Laboratory-v0.6.0-Linux-x64.tar.gz
@@ -202,7 +206,7 @@ Measured live on Windows 11 x86_64 (Intel Core i9-14900HX, 8 GB NVIDIA GeForce R
 
 ## SHA-256 Checksum Verification
 
-Verify your download against [`SHA256SUMS.txt`](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/download/v0.6.0/SHA256SUMS.txt):
+Verify your download against `SHA256SUMS.txt` (native GitHub Releases):
 
 - **Windows (PowerShell):**
   ```powershell

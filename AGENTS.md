@@ -17,7 +17,7 @@ QML is a local-first computational research laboratory, not a chatbot or a thin 
 - The repository is licensed under the **MIT License** (`LICENSE`, approved by the repository owner); respect all third-party dependency licenses verified via `cargo-deny`.
 - **Permanent Memorial Dedication:** The memorial dedication to **Ashlan Haley Rapponotti** at the end of `README.md` must remain intact throughout all future documentation updates, repository reorganizations, and releases. Never remove, alter, or relocate it.
 - **Permanent Public Release Distribution Policy (MANDATORY):**
-  - All future user-facing application releases **must** be published as full, visible public GitHub Releases (`draft: false`, `prerelease: false`, `make_latest: true`) with compiled downloadable assets, comprehensive `RELEASE_NOTES.md`, and prominent download links near the top of `README.md`.
+  - All future user-facing application releases **must** be published as full, visible public GitHub Releases (`draft: false`, `prerelease: false`, `make_latest: true`) with compiled downloadable assets, comprehensive `RELEASE_NOTES.md`, and only an ordinary informational link to the native GitHub Releases page in `README.md`.
   - Use clean semantic version numbers (`v0.3.0`, `v0.3.1`, `v0.4.0`, `v0.5.0`, etc.). Do **not** automatically classify development milestones as prereleases. Only use `alpha`, `beta`, or `prerelease: true` when explicitly authorized by the repository owner.
   - Experimental maturity must always be accurately and honestly documented inside `RELEASE_NOTES.md` and `README.md`; never confuse public binary distribution with a claim of production maturity.
   - Every public application release **must** include all four compiled/verified assets:
@@ -26,6 +26,16 @@ QML is a local-first computational research laboratory, not a chatbot or a thin 
     - `Quantum-Morph-Laboratory-<version>-Linux-x64.tar.gz` (desktop app, CLI, docs, and `LICENSE`)
     - `SHA256SUMS.txt` (verified against all published assets)
   - A Git tag is **not** a completed application release. A successful CI build is **not** a completed application release. An uploaded GitHub Actions artifact is **not** a completed application release. A source-code archive is **not** a completed application release. A release is complete **only** when ordinary users can visit the GitHub repository homepage, see the latest public release, and directly download the verified compiled application from the public GitHub Release page.
+
+## Permanent GitHub compliance — highest-priority owner override
+
+Follow [docs/GITHUB_DISTRIBUTION_POLICY.md](docs/GITHUB_DISTRIBUTION_POLICY.md) and the always-applied project rule. This supersedes conflicting historical distribution instructions.
+
+- Software assets, archives, checksums and release notes are distributed exclusively through native GitHub Releases. README may use only an ordinary informational Releases link and the approved neutral wording.
+- Never insert direct executable/APK/archive/checksum links, release-asset URL patterns, browser-download URL links, download buttons/badges, shorteners, redirects, mirrors, proxies or disguised download mechanisms. Never bypass this through other docs, generated pages or files.
+- Keep artwork committed locally with correctly cased relative image paths; informational badges must not initiate artifact downloads.
+- Preserve the exact permanent dedication as the final README section. CI and release validation must enforce documentation compliance and memorial integrity.
+- Do not weaken this rule without explicit owner authorization AND clarification from GitHub Support.
 
 ## Architecture and coding conventions
 

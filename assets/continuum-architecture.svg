@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="330" viewBox="0 0 1200 330" role="img" aria-label="QML architecture">
+<defs><linearGradient id="bg"><stop stop-color="#0a0716"/><stop offset="1" stop-color="#17102e"/></linearGradient><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#a78bfa"/></marker></defs>
+<rect width="1200" height="330" rx="18" fill="url(#bg)"/><g font-family="Segoe UI,Arial,sans-serif" fill="#eee9ff">
+<text x="34" y="43" font-size="24" font-weight="700">QML · from immutable weights to direct execution</text>
+<g stroke="#8b5cf6" fill="#201638" stroke-width="1.5"><rect x="30" y="78" width="200" height="115" rx="12"/><rect x="264" y="78" width="200" height="115" rx="12"/><rect x="498" y="78" width="200" height="115" rx="12"/><rect x="732" y="78" width="200" height="115" rx="12"/><rect x="966" y="78" width="204" height="115" rx="12"/></g>
+<g font-size="18" font-weight="700"><text x="48" y="111">Read-only source</text><text x="283" y="111">Q-Forge</text><text x="517" y="111">QMF v1</text><text x="750" y="111">Q-Core</text><text x="983" y="111">Observation</text></g>
+<g font-size="14" fill="#c5b8e6"><text x="48" y="139">Safetensors + shards</text><text x="48" y="164">config + tokenizer</text><text x="283" y="139">baselines · RMQ · MAP</text><text x="283" y="164">tensor / cluster work</text><text x="517" y="139">disk-backed payload</text><text x="517" y="164">shared factors + checks</text><text x="750" y="139">direct operators</text><text x="750" y="164">CPU · optional WGPU</text><text x="983" y="139">traces + evaluations</text><text x="983" y="164">native PRISM views</text></g>
+<g stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow)"><path d="M235 135H258"/><path d="M469 135H492"/><path d="M703 135H726"/><path d="M937 135H960"/></g>
+<text x="34" y="242" font-size="16" fill="#c4b5fd">Bounded construction ≠ bounded quantizer workspace ≠ measured model quality</text>
+<text x="34" y="277" font-size="14" fill="#a9a0bd">Classical mathematics · complete byte accounting · source provenance · independent baselines · reproducible evidence</text>
+</g></svg>
+

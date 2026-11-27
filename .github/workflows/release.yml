@@ -35,6 +35,12 @@ jobs:
         run: |
           $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
           echo "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Enforce permanent documentation and memorial policy
+        shell: bash
+        run: |
+          mkdir -p target
+          rustc --edition=2024 -D warnings scripts/repository_policy.rs -o target/repository-policy-check.exe
+          ./target/repository-policy-check.exe .
       - name: Validate formatting, lint, and tests
         run: |
           cargo fmt --all -- --check

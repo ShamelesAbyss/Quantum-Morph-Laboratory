@@ -19,6 +19,12 @@ jobs:
           components: rustfmt, clippy
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Enforce permanent documentation and memorial policy
+        shell: bash
+        run: |
+          mkdir -p target
+          rustc --edition=2024 -D warnings scripts/repository_policy.rs -o target/repository-policy-check.exe
+          ./target/repository-policy-check.exe .
       - name: Run tests
         run: cargo test --workspace
       - name: Build workspace

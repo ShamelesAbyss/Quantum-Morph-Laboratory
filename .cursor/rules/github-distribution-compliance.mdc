@@ -1,0 +1,16 @@
+---
+description: Permanent GitHub distribution compliance and memorial preservation
+alwaysApply: true
+---
+
+Follow docs/GITHUB_DISTRIBUTION_POLICY.md; it supersedes historical distribution instructions.
+Use native GitHub Releases as the exclusive software distribution location.
+Never add direct executable/APK/archive/checksum asset links or download buttons/badges.
+Never use release-asset URL routes, browser-download URL links, shorteners, redirects, mirrors or proxies.
+Do not bypass this through other documentation, generated pages, repository files or self-updaters.
+README may use only an ordinary informational native Releases link with the approved neutral wording.
+Keep artwork committed locally and use exact-case repository-relative image paths.
+Preserve the exact permanent memorial as the final README section.
+Run the repository policy validator before committing and in CI/releases.
+Do not weaken this rule without explicit owner authorization AND clarification from GitHub Support.
+

@@ -1,0 +1,43 @@
+name: Verify native public release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable release tag to verify
+        required: true
+        type: string
+      commit:
+        description: Full source commit SHA corresponding to the tag
+        required: true
+        type: string
+      signed:
+        description: Release manifest includes a configured Sigstore signature
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  verify-public:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_COMMIT: ${{ inputs.commit }}
+      SIGN_RELEASES: ${{ inputs.signed }}
+      ALLOW_PRERELEASE: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Require exact immutable tag and checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$SOURCE_COMMIT"
+      - uses: sigstore/cosign-installer@v3
+        if: env.SIGN_RELEASES == 'true'
+      - name: Verify public assets and packaged CLI without authentication
+        shell: pwsh
+        run: ./scripts/verify-public-release.ps1 -Tag $env:RELEASE_TAG -Commit $env:SOURCE_COMMIT -Repository $env:GITHUB_REPOSITORY

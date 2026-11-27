@@ -165,6 +165,7 @@ jobs:
           if [ "$ALLOW_PRERELEASE" = true ]; then pre=true; latest=false; fi
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$pre" --latest="$latest"
   verify-public:
+    if: always() && needs.publish.result == 'success'
     needs: publish
     runs-on: ubuntu-latest
     steps:

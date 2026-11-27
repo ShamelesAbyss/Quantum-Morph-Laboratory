@@ -26,7 +26,8 @@ All three loaders use the same distinction:
 
 - No directory entry: the optional bias remains absent.
 - An existing entry: require exactly one dimension, with query length hidden_size and key/value length num_key_value_heads × head_dim.
-- Decode through the existing bounded reader, propagate read/CRC/representation failures with the tensor name, then require the exact decoded length and finite values.
+- For QMF, check the dense vector encoding and exact payload byte length before reading/decoding; malformed lengths cannot force a large irrelevant allocation.
+- Decode through the existing bounded reader, propagate read/CRC/representation failures with the tensor name, then require the exact decoded length and finite values. Safetensors metadata already validates its shape/dtype byte lengths.
 
 The contract applies before execution in in-memory QMF, file-backed QMF and streaming BF16 calibration/reference. A failed load is never reinterpreted as absence. It protects CPU, GpuHybrid and GpuFull loading through their shared model construction paths; no backend, shader or quantization mathematics was replaced.
 

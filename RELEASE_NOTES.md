@@ -14,7 +14,7 @@ Omitted defaults now use epsilon 1e-6 and theta 10000 for both families, with Ll
 
 ## Optional tensor correctness
 
-Memory QMF, file-backed QMF and streaming BF16 use the same presence, vector-shape, decoded-length and finite-value contract for q/k/v biases. An absent directory entry stays absent. A present tensor must contain the exact query or KV vector length. CRC, I/O, decoding and representation errors propagate with the tensor name; they no longer become a silent no-bias fallback. Non-finite F32/F16/BF16 values are errors even if container checksums are valid.
+Memory QMF, file-backed QMF and streaming BF16 use the same presence, vector-shape, decoded-length and finite-value contract for q/k/v biases. An absent directory entry stays absent. A present tensor must contain the exact query or KV vector length. QMF dense encoding and payload byte lengths are checked before decoding to reject malformed sizes without large irrelevant allocations. CRC, I/O, decoding and representation errors propagate with the tensor name; they no longer become a silent no-bias fallback. Non-finite F32/F16/BF16 values are errors even if container checksums are valid.
 
 The AEGIS untied lm_head requirement is unchanged. Missing or corrupt required output projections still fail, and explicitly tied embeddings retain their existing behavior. CPU, GpuHybrid and GpuFull construction use the validated inputs; no inference backend or shader was replaced.
 

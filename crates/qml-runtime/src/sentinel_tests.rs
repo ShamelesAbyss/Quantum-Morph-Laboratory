@@ -621,13 +621,40 @@ fn sentinel_nonfinite_and_truncated_streaming_biases_are_errors() {
     }
 }
 #[test]
-fn sentinel_decoded_bias_length_and_crc_failures_are_not_absence() {
+fn sentinel_bias_payload_length_and_crc_failures_are_not_absence() {
     for projection in ["q", "k", "v"] {
         let name = format!("model.layers.0.self_attn.{projection}_proj.bias");
         let len = if projection == "q" { 8 } else { 4 };
         let valid = archive(&source(Some((&name, vec![len], vec![0.0; len]))));
         let shortened = rewrite(&valid, &name, |data, _| data.len -= 4);
         let memory = QmfArchiveV1::read_from(Cursor::new(&shortened)).unwrap();
+        let header_len = u64::from_le_bytes(shortened[8..16].try_into().unwrap());
+        let entry = valid
+            .manifest()
+            .tensors
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap();
+        let QmfRepresentation::DenseF32 { data } = entry.representation else {
+            panic!("expected vector")
+        };
+        let start = 32 + header_len + data.offset;
+        let mut no_payload_read = QmfFileReader::open(
+            FailingRead {
+                inner: Cursor::new(shortened.clone()),
+                range: start..start + data.len,
+            },
+            &QmfBudget::default(),
+        )
+        .unwrap();
+        let error = QCoreModel::from_qmf_reader(&mut no_payload_read, config())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("payload byte length") && !error.contains("injected"),
+            "{error}"
+        );
         assert!(
             QCoreModel::from_qmf(&memory, config())
                 .err()

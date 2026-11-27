@@ -783,12 +783,13 @@ impl QCoreModel {
             |name, cache| archive.load_operator_cached(name, cache),
             |name| archive.load_vector_f64(name),
             |name, expected| {
-                let shape = archive
+                let entry = archive
                     .manifest()
                     .tensors
                     .iter()
-                    .find(|tensor| tensor.name == name)
-                    .map(|tensor| tensor.shape.as_slice());
+                    .find(|tensor| tensor.name == name);
+                bias::validate_qmf(entry, name, expected)?;
+                let shape = entry.map(|tensor| tensor.shape.as_slice());
                 bias::load(name, shape, expected, || Ok(archive.load_vector_f64(name)?))
             },
         )

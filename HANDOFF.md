@@ -1,5 +1,45 @@
 # Handoff
 
+## PROJECT COLOSSUS — authorized experiment in progress
+
+Owner selected only Qwen/Qwen2.5-Coder-14B-Instruct, superseding the earlier
+22B–24B choice and authorizing this one original BF16 download after SENTINEL.
+Pinned revision: aedcc2d42b622764e023cf882b6652e646b95671.
+All experiment storage is D:\QML-COLOSSUS, with dedicated original-model,
+download-cache, scratch, calibration, reference-evaluation, compressed-qmf
+and experiment-results directories. Preflight free D: space was
+585,672,253,440 bytes; 200 GiB was reserved as the planning floor.
+No other models are downloaded; no existing files or models are deleted.
+
+The only application correction counts emitted generation tokens over total
+generation-call time including prefill, and separates ladder evaluation rate
+from optional sample-generation rate. Prompt tokens no longer inflate the
+generation numerator. Inference, quantizers, graphics and architecture are
+unchanged. Targeted runtime metric and real-generation regression tests pass;
+the ladder separation regression passes; formatting and strict Clippy for the
+runtime/CLI and all their targets pass. Full final workspace release validation
+has not yet run for COLOSSUS.
+
+Frozen local protocol defines 14 tasks across all seven requested categories,
+eight disjoint calibration passages and seven numerical-reference passages.
+The external Rust experiment driver builds offline using existing workspace
+APIs/dependencies. Positive oracle self-tests passed 14/14; deliberately wrong
+negative controls were rejected 14/14. These are synthetic harness tests,
+not model scores. Source download/verification is still in progress. No 14B
+compression, generation-quality, performance or fit result is claimed yet.
+Original BF16 generation may be constrained by available RAM; do not claim
+task-quality retention without an actually measured original baseline.
+See docs/PROJECT_COLOSSUS.md and experiments/exp-007-project-colossus.toml.
+
+Next: finish and verify only the pinned source; run streaming calibration and
+reference; forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
+record every outcome/resource failure, update all required scientific docs,
+validate and publish v0.6.5 through the native Releases-only six-asset protocol,
+independently verify it, report exact total D: storage, and STOP. QMR-175 is
+optional if resources permit. Do not download any additional model, commit
+weights/QMF, change algorithms/Prism/distribution/MIT/memorial or begin another
+milestone. v0.6.4 remains the latest completed verified release.
+
 ## PROJECT SENTINEL — v0.6.4 COMPLETE AND INDEPENDENTLY VERIFIED — STOP
 
 Verified November 27, 2026. The public native GitHub Releases section contains v0.6.4 | PROJECT SENTINEL, draft=false, prerelease=false and latest=true. All six required assets are present with comprehensive release notes: standalone Windows desktop EXE, Windows portable desktop/CLI ZIP, Linux desktop/CLI archive, source archive, RELEASE_MANIFEST.json and SHA256SUMS.txt. Distribution remains exclusively native GitHub Releases; the README has only the approved informational navigation and now displays verified Windows/Linux results. Signing is not configured and no signature is claimed.

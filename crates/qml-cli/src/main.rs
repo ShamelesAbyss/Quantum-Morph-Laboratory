@@ -2092,6 +2092,8 @@ struct ResonanceLadderRow {
     gpu_resident_ops: usize,
     cpu_fallback_ops: usize,
     eval_tok_per_sec: f64,
+    /// End-to-end emitted-token rate including prefill; absent if no sample ran.
+    generation_tok_per_sec: Option<f64>,
     ref_perplexity: f64,
     cand_perplexity: f64,
     perplexity_ratio: f64,
@@ -2101,6 +2103,32 @@ struct ResonanceLadderRow {
     composite_numerical_fidelity_pct: f64,
     catastrophic_failure: bool,
     sample_output: String,
+}
+
+fn ladder_throughput(
+    evaluation_tokens: usize,
+    evaluation_seconds: f64,
+    generation: Option<&qml_runtime::GenerationResult>,
+) -> (f64, Option<f64>) {
+    (
+        evaluation_tokens as f64 / evaluation_seconds.max(1e-6),
+        generation.map(|g| g.tokens_per_second),
+    )
+}
+
+#[test]
+fn ladder_keeps_evaluation_and_generation_rates_separate() {
+    let generation = qml_runtime::GenerationResult {
+        prompt_tokens: vec![1; 100],
+        generated_tokens: vec![2; 10],
+        elapsed_micros: 500_000,
+        tokens_per_second: 20.0,
+    };
+    assert_eq!(
+        ladder_throughput(30, 6.0, Some(&generation)),
+        (5.0, Some(20.0))
+    );
+    assert_eq!(ladder_throughput(30, 6.0, None), (5.0, None));
 }
 
 fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
@@ -2391,6 +2419,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
                 gpu_resident_ops: cand_model.backend_stats().gpu_resident_operators,
                 cpu_fallback_ops: cand_model.backend_stats().cpu_fallback_operators,
                 eval_tok_per_sec: n_tok as f64 / dt,
+                generation_tok_per_sec: None,
                 ref_perplexity: suite.overall_ref_perplexity,
                 cand_perplexity: suite.overall_cand_perplexity,
                 perplexity_ratio: suite.overall_perplexity_ratio,
@@ -2820,9 +2849,8 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             .map(|res| res.generated_tokens.iter().map(|&id| id as u32).collect())
             .unwrap_or_default();
         let sample_text = tok.decode(&gen_new, true).replace(['\r', '\n'], " ");
-        let display_tps = gen_res
-            .as_ref()
-            .map_or(n_tok as f64 / dt, |g| g.tokens_per_second);
+        let (eval_tok_per_sec, generation_tok_per_sec) =
+            ladder_throughput(n_tok, dt, gen_res.as_ref());
 
         let row = ResonanceLadderRow {
             label: if calibrate {
@@ -2836,7 +2864,8 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             vram_weight_mib: cand_model.backend_stats().vram_weight_bytes as f64 / 1_048_576.0,
             gpu_resident_ops: cand_model.backend_stats().gpu_resident_operators,
             cpu_fallback_ops: cand_model.backend_stats().cpu_fallback_operators,
-            eval_tok_per_sec: display_tps,
+            eval_tok_per_sec,
+            generation_tok_per_sec,
             ref_perplexity: suite.overall_ref_perplexity,
             cand_perplexity: suite.overall_cand_perplexity,
             perplexity_ratio: suite.overall_perplexity_ratio,
@@ -2852,7 +2881,7 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
         }
         if !json {
             eprintln!(
-                "  [done] {:<20} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Fidelity={:>5.1}% | {:>5.1} tok/s | {:?}",
+                "  [done] {:<20} | {:>5.2} bpp | {:>6.1} MiB VRAM | KL={:>6.3} | PPLx={:>6.2} | Top1={:>5.1}% | Fidelity={:>5.1}% | {:>5.1} eval tok/s | {:?}",
                 row.label,
                 row.complete_qmf_bpp,
                 row.vram_weight_mib,
@@ -2882,7 +2911,7 @@ fn print_resonance_ladder_table(rows: &[ResonanceLadderRow]) {
         "Profile",
         "Eff BPP",
         "VRAM MiB",
-        "Tok/s",
+        "Eval/s",
         "PPLx",
         "MeanKL",
         "Top-1",

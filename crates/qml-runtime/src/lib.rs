@@ -726,7 +726,17 @@ pub struct GenerationResult {
     pub prompt_tokens: Vec<usize>,
     pub generated_tokens: Vec<usize>,
     pub elapsed_micros: u64,
+    /// Emitted tokens per second over the entire generation call, including prefill.
+    /// This is not a decode-only rate; prompt tokens are excluded from the numerator.
     pub tokens_per_second: f64,
+}
+
+fn generation_rate(generated_tokens: usize, elapsed_micros: u64) -> f64 {
+    if elapsed_micros == 0 {
+        0.0
+    } else {
+        generated_tokens as f64 * 1_000_000.0 / elapsed_micros as f64
+    }
 }
 
 /// Strictly runtime-only, reversible causal intervention applied during a traced forward pass.
@@ -1581,12 +1591,7 @@ impl QCoreModel {
         }
 
         let elapsed_micros = start.elapsed().as_micros() as u64;
-        let total_tokens = prompt_tokens.len() + generated.len();
-        let tps = if elapsed_micros > 0 {
-            (total_tokens as f64) / (elapsed_micros as f64 / 1_000_000.0)
-        } else {
-            0.0
-        };
+        let tps = generation_rate(generated.len(), elapsed_micros);
 
         Ok(GenerationResult {
             prompt_tokens: prompt_tokens.to_vec(),
@@ -1919,6 +1924,12 @@ pub fn generate_synthetic_llama_safetensors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn generation_rate_counts_only_emitted_tokens_over_total_time() {
+        assert_eq!(generation_rate(20, 2_000_000), 10.0);
+        assert_eq!(generation_rate(0, 2_000_000), 0.0);
+        assert_eq!(generation_rate(20, 0), 0.0);
+    }
     use qml_forge::{TransformStrategy, forge_safetensors_to_qmf};
     use qml_model::PayloadBudget;
     use qml_quant::FactorPrecision;
@@ -1978,6 +1989,10 @@ mod tests {
         let gen2 = rmq_model.generate(&[1, 5, 12], 6, 0.0, 99).unwrap();
         assert_eq!(gen1.generated_tokens, gen2.generated_tokens);
         assert_eq!(gen1.generated_tokens.len(), 6);
+        assert_eq!(
+            gen1.tokens_per_second,
+            generation_rate(6, gen1.elapsed_micros)
+        );
 
         // Evaluate logit KL divergence and perplexity fidelity directly on compressed RMQ execution!
         let eval =

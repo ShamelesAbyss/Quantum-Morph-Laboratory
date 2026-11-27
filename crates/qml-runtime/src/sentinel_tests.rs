@@ -76,6 +76,17 @@ fn sentinel_preserves_llama_and_qwen2_identity_and_architecture_defaults() {
     input.as_object_mut().unwrap().remove("architectures");
     input.as_object_mut().unwrap().remove("num_key_value_heads");
     assert_eq!(parse(&input).unwrap().num_kv_heads, 2);
+    let mut qwen = hf();
+    qwen["model_type"] = json!("qwen2");
+    qwen["architectures"] = json!(["Qwen2ForCausalLM"]);
+    qwen["hidden_size"] = json!(256);
+    qwen["num_attention_heads"] = json!(64);
+    qwen.as_object_mut().unwrap().remove("num_key_value_heads");
+    assert_eq!(parse(&qwen).unwrap().num_kv_heads, 32);
+    qwen["num_key_value_heads"] = Value::Null;
+    assert_eq!(parse(&qwen).unwrap().num_kv_heads, 64);
+    qwen["num_key_value_heads"] = json!(4);
+    assert_eq!(parse(&qwen).unwrap().num_kv_heads, 4);
 }
 
 #[test]

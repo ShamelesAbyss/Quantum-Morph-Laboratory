@@ -10,7 +10,7 @@ Supported inputs retain the existing SiLU/SwiGLU, grouped-query attention and fu
 
 Numerical constants must be positive and finite in CPU/GPU precision, including a finite rotary angle range. Dimensions must be nonzero, satisfy head/KV relationships, fit the existing shader scalar interface and have checked addressable byte spans. An enormous declared layer count no longer causes an up-front layer-directory allocation before required tensors are checked. Configuration JSON is capped at 1 MiB. Classified checkpoint/interface metadata remains accepted; unclassified controls fail rather than being guessed harmless.
 
-Omitted defaults now use epsilon 1e-6 and theta 10000 for both families, with Llama context 2048 and Qwen2 context 32768. Explicit supported values, including Qwen2.5 checkpoint theta 1000000, are preserved. Results can differ from earlier incorrect epsilon/context defaults when configuration values were omitted. Consult docs/RUNTIME_ADMISSION.md for exact admission rules. A family name alone does not establish support for scaled or otherwise extended variants.
+Omitted defaults now use epsilon 1e-6 and theta 10000 for both families, with Llama context 2048 and Qwen2 context 32768. Omitted KV heads use query heads for Llama and the HF default 32 for Qwen2; an explicit null uses query heads in both families. Explicit supported values, including Qwen2.5 checkpoint theta 1000000 and its KV-head count, are preserved. Results can differ from earlier incorrect epsilon/context/KV defaults when configuration values were omitted. Consult docs/RUNTIME_ADMISSION.md for exact admission rules. A family name alone does not establish support for scaled or otherwise extended variants.
 
 ## Optional tensor correctness
 

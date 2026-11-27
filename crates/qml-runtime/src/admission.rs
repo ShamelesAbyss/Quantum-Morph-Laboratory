@@ -53,7 +53,8 @@ struct HfConfig {
     intermediate_size: usize,
     num_hidden_layers: usize,
     num_attention_heads: usize,
-    num_key_value_heads: Option<usize>,
+    #[serde(default)]
+    num_key_value_heads: KvHeads,
     head_dim: Option<usize>,
     hidden_act: Option<String>,
     rms_norm_eps: Option<f64>,
@@ -79,6 +80,19 @@ struct HfConfig {
     mlp_bias: bool,
     #[serde(flatten, deserialize_with = "unique_extra")]
     extra: BTreeMap<String, Value>,
+}
+
+#[derive(Default)]
+enum KvHeads {
+    #[default]
+    Missing,
+    Provided(Option<usize>),
+}
+
+impl<'de> Deserialize<'de> for KvHeads {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<usize>::deserialize(deserializer).map(Self::Provided)
+    }
 }
 
 fn default_sliding_window() -> Option<usize> {
@@ -305,7 +319,11 @@ pub(super) fn parse(bytes: &[u8]) -> Result<TransformerConfig, RuntimeError> {
         intermediate_size: raw.intermediate_size,
         num_layers: raw.num_hidden_layers,
         num_heads: raw.num_attention_heads,
-        num_kv_heads: raw.num_key_value_heads.unwrap_or(raw.num_attention_heads),
+        num_kv_heads: match raw.num_key_value_heads {
+            KvHeads::Missing if family == "qwen2" => 32,
+            KvHeads::Missing | KvHeads::Provided(None) => raw.num_attention_heads,
+            KvHeads::Provided(Some(heads)) => heads,
+        },
         rms_norm_eps: raw.rms_norm_eps.unwrap_or(1e-6),
         rope_theta: theta.unwrap_or(10_000.0),
         max_seq_len: raw.max_position_embeddings.unwrap_or(if family == "qwen2" {

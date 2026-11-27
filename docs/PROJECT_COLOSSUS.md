@@ -151,3 +151,43 @@ oracle, command logs and resource measurements are under
 CHANGELOG, release notes and HANDOFF. A public v0.6.5 release is not complete
 until exact-tag validation and independent native public-release verification
 pass with all six mandatory assets.
+
+INT3 GPTQ construction completed successfully. The complete QMF is
+**6,003,510,569 bytes**, **3.2517247857777125 bpp**, SHA-256
+`181e5c6afa8cf1af9399b44212b9d8bc1e4be6e2c6a278d88616fed5e475a5c3`.
+The measured forge call took 1,180.6526261 seconds, including safe publication;
+its process took 1,191.0513974 seconds including setup/cache loading.
+One-second process sampling recorded a 14,042,476,544-byte working-set peak
+(13.08 GiB). This illustrates quantizer workspace beyond ATLAS builder-owned
+limits. All seven numerical evaluations are recorded; task correctness remains
+pending completion of the fixed generation and objective checks.
+
+The artifact loaded as WGPU Full-Resident on the RTX 4070 Laptop GPU/Vulkan:
+337 reported GPU operators, zero reported CPU fallback operators and
+5,687,212,304 bytes of GPU weight accounting (5.30 GiB). Whole-file integrity
+revalidation took 148.9443314 seconds; model loading then took 89.6171724 seconds.
+The reported counters exclude host embedding-row access, tokenization and
+other CPU work, and are not total device allocation.
+
+## Native use at the measured context
+
+A separate read-only `compressed-qmf/runtime-config-1024.json` changes only
+the copied configuration's maximum context to 1024. Structural comparison
+against the original passed with exactly that one intentional field change.
+Original configuration/tokenizer bytes remain unchanged. The native runtime
+requires the QMF, this 661-byte configuration and the 7,031,645-byte tokenizer:
+INT3's minimum three-file inference set is 6,010,542,875 bytes. Calibration
+caches and original weights are retained experimental data, not inference
+inputs. The published Ollama figure is approximate storage context, with
+no measured quality or speed comparison.
+
+For exploratory native CLI use, keep prompt plus requested output within the
+measured 1024-token window. The original advertised 32768-token context is
+not evaluated. This command uses the application's default chat formatting;
+the frozen Rust harness above supplies the exact benchmark system/prompt:
+
+```powershell
+qml generate D:\QML-COLOSSUS\compressed-qmf\int3.qmf --config D:\QML-COLOSSUS\compressed-qmf\runtime-config-1024.json --tokenizer D:\QML-COLOSSUS\original-model\tokenizer.json --backend gpu-full --kv-cache int8 --chat --prompt "Your short coding question" --max-tokens 256 --temperature 0
+```
+
+No additional generation is run or scored by documenting this example.

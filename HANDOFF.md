@@ -92,6 +92,34 @@ shards total 557,461,943 bytes; all seven QREF shards total 76,034,012 bytes.
 Completion marker and process exit=0 are present. INT3 forging has begun.
 These scopes are not whole-device allocation or measured BF16 task quality.
 
+INT3 forging subsequently completed with process exit=0 and safe verified
+publication: D:\QML-COLOSSUS\compressed-qmf\int3.qmf, 6,003,510,569 bytes,
+3.2517247857777125 complete bpp, SHA-256
+181e5c6afa8cf1af9399b44212b9d8bc1e4be6e2c6a278d88616fed5e475a5c3.
+Forge-call elapsed was 1,180.6526261 seconds; full process 1,191.0513974 seconds;
+sampled peak working set 14,042,476,544 bytes (13.08 GiB). Builder-owned
+resource bounds do not bound this larger quantizer workspace. INT3 evaluation
+is now active, beginning with full artifact revalidation. No task score or
+quality-retention result is claimed yet.
+
+INT3 load and all seven numerical evaluations have now completed. Backend is
+WGPU Full-Resident on NVIDIA RTX 4070 Laptop/Vulkan, 337 reported GPU operators,
+zero reported fallback operators, 5,687,212,304 GPU weight bytes. These counters
+exclude normal host embedding-row/tokenizer work and are not total device
+allocation. Integrity revalidation took 148.9443314s; subsequent loading
+89.6171724s. The 14 fixed task generations are in progress; do not repair,
+discard or adapt settings to any generated failure.
+
+Read-only compressed-qmf\runtime-config-1024.json is a derived copy whose only
+semantic change is max_position_embeddings=1024; structural comparison passed.
+Original 32768-context configuration is unchanged and its full context is not
+tested. Derived configuration SHA-256:
+a588753edb612d7eb4a9c4b9bffd34483d4714f01de389ac77ea5b746af9ba90.
+It is 661 bytes; original tokenizer.json is 7,031,645 bytes. INT3's minimal
+QMF/config/tokenizer set totals 6,010,542,875 bytes. A native CLI example is
+documented without running additional prompts; fixed benchmark inputs remain
+unchanged. All experiment files, including this metadata, stay under D:.
+
 Next: forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
 record every outcome/resource failure, update all required scientific docs,
 validate and publish v0.6.5 through the native Releases-only six-asset protocol,

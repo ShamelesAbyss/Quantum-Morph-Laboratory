@@ -95,7 +95,10 @@ The native streamed BF16 reference completed in 1,148.6 seconds with a reported
 525.0 MiB layer-weight GPU peak and a separately sampled 3.45 GiB process RAM
 peak. These are scoped calibration/reference measurements, not compressed
 inference memory or a measured BF16 coding-task baseline.
-No compressed-model result is established yet. The fixed protocol separates
+INT3 construction also completed: **6,003,510,569 bytes at 3.251725 complete
+bits per parameter**, with full staged integrity verification and safe atomic
+publication. This is an artifact-size result; task-quality evaluation is still
+running. The fixed protocol separates
 14 objective coding/reasoning/explanation/instruction tasks from 1,340 disjoint
 calibration tokens and 125 teacher-forced numerical-reference predictions.
 See the [research report](docs/PROJECT_COLOSSUS.md) and

@@ -1,6 +1,25 @@
 # Handoff
 
-## PROJECT SENTINEL — v0.6.4 active, strictly scoped
+## PROJECT SENTINEL — v0.6.4 COMPLETE AND INDEPENDENTLY VERIFIED — STOP
+
+Verified November 27, 2026. The public native GitHub Releases section contains v0.6.4 | PROJECT SENTINEL, draft=false, prerelease=false and latest=true. All six required assets are present with comprehensive release notes: standalone Windows desktop EXE, Windows portable desktop/CLI ZIP, Linux desktop/CLI archive, source archive, RELEASE_MANIFEST.json and SHA256SUMS.txt. Distribution remains exclusively native GitHub Releases; the README has only the approved informational navigation and now displays verified Windows/Linux results. Signing is not configured and no signature is claimed.
+
+Immutable annotated tag v0.6.4 identifies application source 5a6bfe2aa37411efe009a12d5748567827c2702d. Main CI passed at https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45990440439. Exact-tag validation, publication and automatic independent public verification passed at https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45990448588. The formerly skipped downstream-verification case is resolved: optional signing was skipped, while verify-public actually ran and succeeded. Windows passed 140 tests and Linux 141, zero failures/ignored, plus doc-tests; all five required checks passed in their platform/policy jobs. Existing tests remain intact.
+
+The unauthenticated public job downloaded all six assets, verified complete checksum coverage and exact source identity, checked public/latest/maturity flags, confirmed standalone/portable desktop byte equality, validated both platform packages' artwork/documentation/MIT/memorial and executed the downloaded Linux CLI. A separate local retrieval of the actual public Windows portable ZIP matched its public digest, passed packaged documentation/memorial checks and executed qml 0.6.4 natively. No GUI launch/performance benchmark or real-model experiment is claimed. Only the README/results record and this handoff change after the immutable application tag; release assets and historical releases are not overwritten.
+
+| Public asset | Bytes | SHA-256 |
+|---|---:|---|
+| Windows standalone EXE | 13,871,104 | 8676707a0dd1fabcd806dea6b79b7157188b4eb8d11bab64ed2f1445255e8c4e |
+| Windows portable ZIP | 12,374,029 | 7d556d7ce902337a2b5fa20e988ad16ee12ecb640dc1b8bcbe14e92ba7ee0cee |
+| Linux archive | 15,204,281 | 2582eae803eb16ce93591c51e79d07913dcb93a3a95e17691c395286d81f0bbb |
+| Source archive | 3,622,263 | 98fb118a958ddef52f543263a5e7074752253e8be114836b1e2ba70dc1944a48 |
+| RELEASE_MANIFEST.json | 842 | 0b9bc2a7d1f32aaf153882eb04c8700a99277536640bb7f604f61c31b3521c71 |
+| SHA256SUMS.txt | 552 | f5412a983250aefea326b46b83ae85c125e277470954ffdb3d74dbbff01d4c9a |
+
+Completion audit: architecture/activation/attention/RoPE/window admission, harmless inactive metadata, finite constants, checked dimensions, optional-bias presence/shape/byte length/finite/error behavior across all three loaders, unchanged AEGIS output-projection errors, runtime-bound cache provenance migration, 19 new synthetic regressions, all validation gates, six native release assets and independent public verification are complete. MIT, Project Prism/hardware kernels, original artwork, historical experiments, existing model files, dependency graph and permanent distribution rules are preserved. The exact memorial remains the final README section. No model was downloaded or deleted. The following candidate-era notes are historical; this verified status supersedes their pending statements.
+
+Remaining boundaries: only the documented unscaled existing Llama/Qwen2 subset is admitted; no scaled/hybrid or new architecture implementation is claimed. Old caches require a fresh output directory because corrected effective defaults/semantics change provenance. Dimension representability is not a physical RAM/VRAM reservation. Safetensors cannot identify a finite structurally valid value change without independently expected identity; unsigned checksums do not authenticate a producer. No new pretrained-model quality, independent reference-runtime agreement or performance finding follows from the synthetic tests. SENTINEL is complete. Stop now and await explicit owner authorization for any subsequent milestone.
 
 Owner-authorized starting checkpoint: 65d1491764303582846792fa406f3e408a3d36a1. CONTINUUM is complete and independently verified. SENTINEL is limited to runtime architecture/configuration admission, optional attention-bias correctness, synthetic regression validation and public v0.6.4 publication. Stop after SENTINEL is complete; do not begin another milestone, download/delete models, add architectures, change compression mathematics or graphics, or change the permanent distribution policy. Older CONTINUUM active/pending/continue statements below are historical and superseded by this scope and stop condition.
 

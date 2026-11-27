@@ -33,3 +33,7 @@ tempfile = "3"
 [[test]]
 name = "repository_policy"
 path = "../../scripts/repository_policy.rs"
+
+[[test]]
+name = "release_contract"
+path = "../../scripts/release_contract.rs"

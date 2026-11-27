@@ -1,3 +1,29 @@
+# v0.6.3 | PROJECT CONTINUUM
+
+This experimental engineering checkpoint restores the laboratory presentation and permanently enforces native GitHub Releases-only distribution. It does not add a compression method or establish new model-quality, memory, speed or architecture results.
+
+## Repository restoration and permanent compliance
+
+Original committed banners and screenshots, a classical architecture diagram, local informational badges and structured scientific documentation are restored. The exact memorial remains the final README section. Permanent AGENTS instructions, an always-applied project rule and native Rust CI checks reject prohibited distribution links, encoded asset routes, shorteners, alternate mirrors, missing or incorrectly cased images and memorial changes. Historical experiments, measurements, MIT licensing, Prism and mathematical implementations are preserved.
+
+## Permanent release infrastructure
+
+The release workflow now validates the exact tag, workspace version and source commit; gates publication on formatting, strict Clippy, workspace tests, Windows and Linux workspace release builds and dependency policy; smoke-tests the packaged CLI version; includes complete offline artwork and documentation; and publishes an explicit source archive. RELEASE_MANIFEST.json binds payload names, sizes, SHA-256 values and source identity. SHA256SUMS.txt covers every payload and the manifest. Optional Sigstore signing is enabled only when configured and verified against the tagged workflow identity. This release does not claim a configured signature.
+
+Permissions are read-only by default, with scoped publication and optional signing jobs. Publication refuses existing releases and stages a new complete draft before making it public. An independent unauthenticated job verifies native public assets, manifest, checksum coverage, source identity, latest status and maturity flags. Release assets remain exclusively in native GitHub Releases.
+
+## Usage and scientific limitations
+
+Use the repository’s native Releases section for the actual desktop application, portable CLI packages, source, notes and checksums. Launch qml-desktop for the graphical laboratory or run qml --help for CLI usage. Packages require supported graphics drivers for graphical views; CLI smoke tests do not demonstrate graphical rendering performance.
+
+Builder accounting remains distinct from process RSS. Quantizer tensors and workspace are not end-to-end memory bounded. Historical perplexity and token-agreement values are numerical fidelity measurements; they do not measure retained intelligence or general task capability. Current architecture/configuration admission and real-model independent reference reassessment remain future CONTINUUM work, documented in docs/CAPABILITIES.md. No new model was downloaded, benchmarked or claimed supported by this release.
+
+## Validation evidence
+
+The release workflow records format, strict lint, full regression, Windows/Linux release build, cargo-deny, package smoke and public verification results. HANDOFF.md records local results and any limitations. New regression cases cover version mismatch, unauthorized prerelease, manifest provenance, checksum coverage, tampering, missing payloads, exclusive creation and permanent documentation policy. Existing tests remain intact.
+
+---
+
 # v0.6.2 | PROJECT ATLAS
 
 Compiled executables, portable packages, source archives, release notes and SHA-256 checksums are available through the repository's [GitHub Releases section](https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases).

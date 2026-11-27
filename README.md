@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/badges/version.svg" alt="Current public version v0.6.2"/>
+  <img src="assets/badges/version.svg" alt="Milestone version v0.6.3"/>
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml/badge.svg?branch=main" alt="Windows and Linux Rust CI"/></a>
   <img src="assets/badges/research.svg" alt="Experimental research • native Rust • MIT"/>
 </p>

@@ -25,6 +25,8 @@ Disk-backed QMF v1 construction and Q-Forge integration with independent resourc
 
 ## Next Milestones (PROJECT EVENT HORIZON Wave IV & Beyond)
 
+CONTINUUM supersedes earlier authorization limits for continued correctness and scientific development, but does not validate the large-model projections below. The v0.6.3 restoration checkpoint establishes permanent distribution compliance and verifiable release infrastructure. The next correctness gates are strict supported-configuration admission, malformed optional-tensor errors and provenance-pinned independent small-model reference validation; see docs/CAPABILITIES.md. Large-model fit and performance remain unverified hypotheses.
+
 - **Next — Stage E (`14B`) & Stage F (`27B–32B`) on 8 GB Consumer GPUs:** Add sampled-row fast `MAP-B` Pass 1 screening (10× faster on `7B–32B`), resumable layer-checkpointed disk streaming in Q-Forge, and benchmark `14B` (`~3.4–4.2 GiB` at `2.00–2.25 bpp`) and `27B–32B` (`~6.8–7.6 GiB` at `1.75–2.00 bpp`) live on an 8 GB RTX 4070!
 - **Next — Breaking `< 2.00 bpp` (`1.75–1.50 bpp`) via Hessian-Compensated Lattice/Trellis Quantization:** Combine Wave III's `MATVEC_VQ_WGSL` + `H⁻¹` Cholesky error compensation (QuIP#/QTIP-style E8/trellis + block-128 GPTQ + PV-Tuning coordinate refinement) to push `7B–32B` below `1.75 bpp` cleanly.
 - **Next — Extended Architectures & Hierarchical Activation-Calibrated Q-Genesis:** Add Mistral/Gemma/MoE routing, connect `qml-genesis` to cached `QCAL1`/`QREF1` evaluation, and expand long-context & coding/math capability suites.

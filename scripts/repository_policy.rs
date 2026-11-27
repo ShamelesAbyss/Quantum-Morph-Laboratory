@@ -187,6 +187,39 @@ pub fn exact_local_path(root: &Path, target: &str) -> Result<PathBuf, String> {
 }
 pub fn validate_readme(root: &Path, text: &str) -> Result<(), String> {
     validate_distribution(text)?;
+    // Inspect all URL tokens, including reference-style links and raw HTML.
+    // An exact allowlist prevents lookalike repository prefixes and opaque proxies.
+    let canonical = [
+        RELEASES.to_ascii_lowercase(),
+        format!(
+            "{}/actions/workflows/ci.yml",
+            RELEASES.trim_end_matches("/releases")
+        )
+        .to_ascii_lowercase(),
+        format!(
+            "{}/actions/workflows/ci.yml/badge.svg?branch=main",
+            RELEASES.trim_end_matches("/releases")
+        )
+        .to_ascii_lowercase(),
+    ];
+    for token in normalized(text).split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '\"' | '\'' | '<' | '>' | '(' | ')' | '\u{60}' | '[' | ']'
+            )
+    }) {
+        if (token.starts_with("http:") || token.starts_with("https:") || token.starts_with("//"))
+            && !canonical
+                .iter()
+                .any(|allowed| allowed == token.trim_end_matches([',', ';', '!']))
+        {
+            return Err(
+                "README remote navigation must use an approved canonical page or native CI badge"
+                    .into(),
+            );
+        }
+    }
     let text = text.replace("\r\n", "\n");
     if !text.ends_with(MEMORIAL) {
         return Err("README must end with the exact permanent memorial and one newline".into());
@@ -285,7 +318,7 @@ pub fn validate_repository(root: &Path) -> Result<usize, String> {
     Ok(files.len())
 }
 #[cfg(not(test))]
-fn main() {
+pub fn main() {
     let root = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
@@ -334,6 +367,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn reference_links_html_and_repository_lookalikes_cannot_hide_proxies() {
+        for link in [
+            "[package][opaque]\n[opaque]: https://mirror.example/get",
+            "<a href='https://mirror.example/get'>package</a>",
+            "https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory-mirror/get",
+            "//mirror.example/get",
+        ] {
+            let text = format!(
+                "Compiled executables, portable packages, source archives, release notes and SHA-256 checksums\n{link}\n\n{MEMORIAL}"
+            );
+            assert!(validate_readme(Path::new("."), &text).is_err());
+        }
     }
     #[test]
     fn artwork_case_and_missing_files_fail_on_every_os() {

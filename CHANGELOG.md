@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.3 — PROJECT CONTINUUM
+
+Restore original artwork and structured scientific presentation; permanently enforce native GitHub Releases-only distribution and the exact memorial through owner rules and Rust CI checks. Harden release validation, complete offline packaging, source archive, source-bound integrity manifest, optional configured signing, scoped permissions, non-overwriting publication and independent public verification. No numerical algorithms, Prism renderer or historical measurements change. Architecture admission and independent real-model reference reassessment remain subsequent work.
+
 ## v0.6.2 — PROJECT ATLAS
 
 Disk-backed QMF v1 construction shares encoders with the retained memory builder. Q-Forge streams verified artifacts with independent file, builder-memory, disk, tensor and manifest limits, configurable scratch, explicit overwrite, cancellation and repeated source/index protection. Synthetic parity/resource/cleanup tests instrument bounded builder storage. Quantizer/cluster workspace remains a memory bottleneck. No large-model scientific validation is claimed.

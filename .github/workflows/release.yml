@@ -1,200 +1,179 @@
 name: Release
-
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v0.3.0)'
+        description: Exact existing version tag
         required: true
         type: string
       prerelease:
-        description: 'Mark as prerelease (ONLY set true when explicitly requested by repository owner)'
-        required: false
-        default: false
+        description: Only with explicit owner authorization
         type: boolean
-
+        default: false
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  ALLOW_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+  SIGN_RELEASES: ${{ vars.QML_SIGN_RELEASES == 'true' }}
 jobs:
-  build-windows:
-    name: Validate & Build Windows x64 Release
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Determine release tag
-        shell: pwsh
-        run: |
-          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
-          echo "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
-      - name: Enforce permanent documentation and memorial policy
+      - name: Validate exact source and release contract
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p target
-          rustc --edition=2024 -D warnings scripts/repository_policy.rs -o target/repository-policy-check.exe
-          ./target/repository-policy-check.exe .
-      - name: Validate formatting, lint, and tests
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-      - name: Build qml-desktop and qml-cli (release)
-        run: cargo build --release -p qml-desktop -p qml-cli
-      - name: Package Windows x64 executable, portable ZIP, and SHA-256 checksums
+          rustc --edition=2024 -D warnings scripts/release_contract.rs -o target/release-contract.exe
+          target/release-contract.exe validate . "$RELEASE_TAG" "$(git rev-parse HEAD)"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+      - name: Package desktop, CLI and complete offline documentation
         shell: pwsh
-        run: |
-          $tag = $env:RELEASE_TAG
-          $stage = "dist/windows"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          $pkgDir = "$stage/Quantum-Morph-Laboratory-$tag-Windows-x64-Portable"
-          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-
-          Copy-Item "target/release/qml-desktop.exe" "$pkgDir/qml-desktop.exe"
-          Copy-Item "target/release/qml.exe" "$pkgDir/qml.exe"
-          Copy-Item "LICENSE" "$pkgDir/LICENSE"
-          Copy-Item "README.md" "$pkgDir/README.md"
-          Copy-Item "RELEASE_NOTES.md" "$pkgDir/RELEASE_NOTES.md"
-          Copy-Item "ARCHITECTURE.md" "$pkgDir/ARCHITECTURE.md"
-          Copy-Item "SECURITY.md" "$pkgDir/SECURITY.md"
-          Copy-Item "CHANGELOG.md" "$pkgDir/CHANGELOG.md"
-
-          $exeName = "Quantum-Morph-Laboratory-$tag-Windows-x64.exe"
-          $zipName = "Quantum-Morph-Laboratory-$tag-Windows-x64-Portable.zip"
-
-          Copy-Item "target/release/qml-desktop.exe" "$stage/$exeName"
-          Compress-Archive -Path "$pkgDir/*" -DestinationPath "$stage/$zipName" -Force
-
-          # Verify packaged executables exist and CLI executes cleanly
-          if (-not (Test-Path "$stage/$exeName")) { throw "Missing $exeName" }
-          if (-not (Test-Path "$stage/$zipName")) { throw "Missing $zipName" }
-          & "$pkgDir/qml.exe" --version
-
-          $sumFile = "$stage/SHA256SUMS-windows.txt"
-          @(
-            "$((Get-FileHash "$stage/$exeName" -Algorithm SHA256).Hash.ToLower())  $exeName",
-            "$((Get-FileHash "$stage/$zipName" -Algorithm SHA256).Hash.ToLower())  $zipName"
-          ) | Set-Content -Path $sumFile -Encoding ascii
+        run: ./scripts/package-release.ps1 -Tag $env:RELEASE_TAG
       - uses: actions/upload-artifact@v4
         with:
-          name: release-windows-x64
-          path: |
-            dist/windows/*.exe
-            dist/windows/*.zip
-            dist/windows/SHA256SUMS-windows.txt
-
-  build-linux:
-    name: Validate & Build Linux x64 Release
+          name: release-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+  dependency-policy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Determine release tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "RELEASE_TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
-          else
-            echo "RELEASE_TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
-          fi
-      - name: Validate formatting, lint, and tests
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-      - name: Build qml-desktop and qml-cli (release)
-        run: cargo build --release -p qml-desktop -p qml-cli
-      - name: Package Linux x64 tarball and SHA-256 checksums
-        run: |
-          TAG="${RELEASE_TAG}"
-          PKG_DIR="dist/linux/Quantum-Morph-Laboratory-${TAG}-Linux-x64"
-          mkdir -p "${PKG_DIR}"
-          cp target/release/qml-desktop "${PKG_DIR}/qml-desktop"
-          cp target/release/qml "${PKG_DIR}/qml"
-          cp LICENSE README.md RELEASE_NOTES.md ARCHITECTURE.md SECURITY.md CHANGELOG.md "${PKG_DIR}/"
-          "${PKG_DIR}/qml" --version
-          TAR_NAME="Quantum-Morph-Laboratory-${TAG}-Linux-x64.tar.gz"
-          tar -C dist/linux -czf "dist/linux/${TAR_NAME}" "Quantum-Morph-Laboratory-${TAG}-Linux-x64"
-          (cd dist/linux && sha256sum "${TAR_NAME}" > SHA256SUMS-linux.txt)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-linux-x64
-          path: |
-            dist/linux/*.tar.gz
-            dist/linux/SHA256SUMS-linux.txt
-
-  publish-release:
-    name: Publish Public GitHub Release
-    needs: [build-windows, build-linux]
+      - run: cargo install cargo-deny --version 0.21.0 --locked
+      - run: cargo deny check
+  assemble:
+    needs: [build, dependency-policy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-      - name: Determine release metadata
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-            IS_PRE="${{ inputs.prerelease }}"
-          else
-            TAG="${{ github.ref_name }}"
-            IS_PRE="false"
-          fi
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-          echo "IS_PRERELEASE=${IS_PRE}" >> "$GITHUB_ENV"
-
-          # Extract release title from first Markdown heading in RELEASE_NOTES.md
-          FIRST_HEADING=$(grep -m 1 '^# ' RELEASE_NOTES.md | sed 's/^# //' || true)
-          if [ -n "${FIRST_HEADING}" ]; then
-            echo "RELEASE_TITLE=${FIRST_HEADING}" >> "$GITHUB_ENV"
-          else
-            echo "RELEASE_TITLE=Quantum Morph Laboratory ${TAG}" >> "$GITHUB_ENV"
-          fi
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
+          pattern: release-*
           path: dist
           merge-multiple: true
-      - name: Merge and verify SHA-256 checksums
+      - name: Archive source and prepare integrity manifest
+        shell: bash
         run: |
-          cat dist/SHA256SUMS-windows.txt dist/SHA256SUMS-linux.txt > dist/SHA256SUMS.txt
-          rm -f dist/SHA256SUMS-windows.txt dist/SHA256SUMS-linux.txt
-          ls -lh dist/
-          cat dist/SHA256SUMS.txt
-          (cd dist && sha256sum -c SHA256SUMS.txt)
-      - name: Verify all mandatory release assets are present
-        run: |
-          TAG="${RELEASE_TAG}"
-          for f in \
-            "dist/Quantum-Morph-Laboratory-${TAG}-Windows-x64.exe" \
-            "dist/Quantum-Morph-Laboratory-${TAG}-Windows-x64-Portable.zip" \
-            "dist/Quantum-Morph-Laboratory-${TAG}-Linux-x64.tar.gz" \
-            "dist/SHA256SUMS.txt"; do
-            if [ ! -s "$f" ]; then
-              echo "ERROR: Required release asset missing or empty: $f"
-              exit 1
-            fi
-          done
-      - name: Publish Public GitHub Release with Assets
-        uses: softprops/action-gh-release@v2
+          set -euo pipefail
+          mkdir -p target
+          rustc --edition=2024 -D warnings scripts/release_contract.rs -o target/release-contract
+          target/release-contract validate . "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          git archive --format=tar --prefix="Quantum-Morph-Laboratory-$RELEASE_TAG-Source/" HEAD | gzip -n > "dist/Quantum-Morph-Laboratory-$RELEASE_TAG-Source.tar.gz"
+          target/release-contract prepare dist "$RELEASE_TAG" "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TITLE }}
-          body_path: RELEASE_NOTES.md
-          draft: false
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          make_latest: ${{ env.IS_PRERELEASE == 'true' && 'false' || 'true' }}
-          files: |
-            dist/Quantum-Morph-Laboratory-*-Windows-x64.exe
-            dist/Quantum-Morph-Laboratory-*-Windows-x64-Portable.zip
-            dist/Quantum-Morph-Laboratory-*-Linux-x64.tar.gz
-            dist/SHA256SUMS.txt
+          name: assembled-release
+          path: dist/*
+          if-no-files-found: error
+  sign:
+    if: vars.QML_SIGN_RELEASES == 'true'
+    needs: assemble
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: assembled-release
+          path: dist
+      - uses: sigstore/cosign-installer@v3
+      - name: Require tagged workflow identity for signing
+        shell: bash
+        run: test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+      - run: cosign sign-blob --yes --bundle dist/RELEASE_MANIFEST.sigstore.json dist/RELEASE_MANIFEST.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest-signature
+          path: dist/RELEASE_MANIFEST.sigstore.json
+          if-no-files-found: error
+  publish:
+    if: always() && needs.assemble.result == 'success' && (needs.sign.result == 'success' || needs.sign.result == 'skipped')
+    needs: [assemble, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: assembled-release
+          path: dist
+      - uses: actions/download-artifact@v4
+        if: env.SIGN_RELEASES == 'true'
+        with:
+          name: manifest-signature
+          path: dist
+      - uses: sigstore/cosign-installer@v3
+        if: env.SIGN_RELEASES == 'true'
+      - name: Verify configured signature
+        if: env.SIGN_RELEASES == 'true'
+        shell: bash
+        run: |
+          cosign verify-blob --bundle dist/RELEASE_MANIFEST.sigstore.json --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$RELEASE_TAG" --certificate-oidc-issuer https://token.actions.githubusercontent.com dist/RELEASE_MANIFEST.json
+      - name: Verify and publish a new native Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          rustc --edition=2024 -D warnings scripts/release_contract.rs -o target/release-contract
+          target/release-contract validate . "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          target/release-contract checksums dist "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          target/release-contract verify dist "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > existing-release-tags.txt
+          if grep -Fxq -- "$RELEASE_TAG" existing-release-tags.txt; then
+            echo "Release already exists; refusing to modify it."
+            exit 1
+          fi
+          title=$(head -n 1 RELEASE_NOTES.md | sed 's/^# //' | tr -d '\r')
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$title" --notes-file RELEASE_NOTES.md dist/*
+          pre=false
+          latest=true
+          if [ "$ALLOW_PRERELEASE" = true ]; then pre=true; latest=false; fi
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$pre" --latest="$latest"
+  verify-public:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: sigstore/cosign-installer@v3
+        if: env.SIGN_RELEASES == 'true'
+      - name: Independently verify public assets without authentication
+        shell: pwsh
+        run: ./scripts/verify-public-release.ps1 -Tag $env:RELEASE_TAG -Commit (git rev-parse HEAD) -Repository $env:GITHUB_REPOSITORY

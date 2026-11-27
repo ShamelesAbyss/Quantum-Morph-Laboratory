@@ -53,6 +53,8 @@ Follow [docs/GITHUB_DISTRIBUTION_POLICY.md](docs/GITHUB_DISTRIBUTION_POLICY.md) 
 
 ## Engineering and testing
 
+Permanent release procedure: follow [docs/RELEASE_PROTOCOL.md](docs/RELEASE_PROTOCOL.md). Every coherent validated application milestone requires a real native GitHub Release with exact tag/version/source identity, Windows and Linux desktop/CLI packages, source archive, complete checksums and manifest, optional configured signature, all validation gates and independent public integrity verification. Default workflow permissions are read-only; publication and signing receive only their respective scoped permissions. Never overwrite historical releases. Documentation distribution restrictions remain authoritative.
+
 For applicable changes, run:
 
 ```sh

@@ -97,12 +97,20 @@ peak. These are scoped calibration/reference measurements, not compressed
 inference memory or a measured BF16 coding-task baseline.
 INT3 construction also completed: **6,003,510,569 bytes at 3.251725 complete
 bits per parameter**, with full staged integrity verification and safe atomic
-publication. This is an artifact-size result; task-quality evaluation is still
-running. The fixed protocol separates
+publication. **INT3 passed 11/14 fixed tasks**, with failures in run encoding,
+graph-path weight and strict JSON-only formatting. Corrected aggregate generation
+rate was **0.534 emitted tokens/s including prefill**. All outputs reached EOS.
+The separate short numerical corpus measured 1.0104× perplexity and 85.6%
+top-1 agreement; these do not establish retained coding capability.
+INT2 and QMR-200 trials remain in progress. The fixed protocol separates
 14 objective coding/reasoning/explanation/instruction tasks from 1,340 disjoint
 calibration tokens and 125 teacher-forced numerical-reference predictions.
 See the [research report](docs/PROJECT_COLOSSUS.md) and
 [complete inputs and harness](docs/COLOSSUS_REPRODUCTION.md).
+All [raw task outputs](docs/COLOSSUS_TASK_OUTPUTS.md), including failures,
+are preserved for inspection. Fourteen custom tasks, a 1024-token tested context
+and this measured latency do not establish a generally useful programming
+assistant.
 
 Original BF16 task generation is unmeasured after available-RAM preflight;
 streaming BF16 numerical references do not substitute for that task baseline.

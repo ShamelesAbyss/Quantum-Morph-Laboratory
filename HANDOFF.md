@@ -120,7 +120,29 @@ QMF/config/tokenizer set totals 6,010,542,875 bytes. A native CLI example is
 documented without running additional prompts; fixed benchmark inputs remain
 unchanged. All experiment files, including this metadata, stay under D:.
 
-Next: forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
+INT3 evaluation and its fixed objective oracle completed with process exit=0:
+11/14 tasks passed. Rust 1/2, Python 2/2, JS 2/2, debugging 2/2, reasoning 1/2,
+explanation 2/2, instruction following 1/2. Failures: mixed-run Rust logic
+(compiled but assertion failed; initial value never updated), graph path
+weight 7 instead of 4, and Markdown despite explicit JSON-only formatting.
+Raw outputs are published unchanged in docs/COLOSSUS_TASK_OUTPUTS.md. All 14
+reached EOS; zero truncations; only 1/14 literal format-compliant outputs.
+All per-task results, token/timing counts and output hashes are in exp-007.
+
+INT3 emitted 827 tokens over 1,549.205938 generation-call seconds, corrected
+aggregate 0.533821863 emitted tokens/s including prefill. Numerical reference
+PPL=36.5527760797859, candidate=36.93154912153539, ratio=1.010362360465392;
+KL=0.0550587877294491 nats; top-1=107/125 (85.6%); composite numerical fidelity
+92.28719583830207%, not capability. Numerical calls took 101.0093159s;
+the full evaluation process 1,892.3775918s, sampled working-set peak
+13,741,355,008 bytes (12.80 GiB). High numerical fidelity did not guarantee
+task correctness. No original-task retention or general-assistant claim is made.
+
+INT2 forging is active. Two new private research READMEs on D: retain the exact
+final memorial; MIT code-license copies and private-package metadata were added.
+Upstream original-model README/license/configuration remain unchanged.
+
+Next: finish INT2 and QMR-200 using existing algorithms;
 record every outcome/resource failure, update all required scientific docs,
 validate and publish v0.6.5 through the native Releases-only six-asset protocol,
 independently verify it, report exact total D: storage, and STOP. QMR-175 is

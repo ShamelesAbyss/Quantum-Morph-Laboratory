@@ -1,7 +1,7 @@
 # PROJECT COLOSSUS — experiment 007
 
-Status: source and streamed BF16 reference verified; primary compression/task
-trials are in progress. No candidate task-quality result is established yet.
+Status: INT3 construction and evaluation completed; INT2 and QMR-200 remain
+in progress. Results apply only to this small fixed experiment.
 The owner authorized this experiment after SENTINEL. This does not authorize new
 quantizers, model architectures, graphical changes or another milestone.
 
@@ -145,7 +145,7 @@ reference-cache files total 76,034,012 bytes. This is a completed native
 reference/calibration result for the specified checkpoint and corpus, not a
 measured original-model autoregressive coding baseline or a general 14B claim.
 
-Candidate results are pending the actual runs. The local frozen protocol, Rust driver, objective
+Remaining candidate results are pending the actual runs. The local frozen protocol, Rust driver, objective
 oracle, command logs and resource measurements are under
 `D:\QML-COLOSSUS`. Final summaries belong in experiment 007, README,
 CHANGELOG, release notes and HANDOFF. A public v0.6.5 release is not complete
@@ -159,8 +159,37 @@ The measured forge call took 1,180.6526261 seconds, including safe publication;
 its process took 1,191.0513974 seconds including setup/cache loading.
 One-second process sampling recorded a 14,042,476,544-byte working-set peak
 (13.08 GiB). This illustrates quantizer workspace beyond ATLAS builder-owned
-limits. All seven numerical evaluations are recorded; task correctness remains
-pending completion of the fixed generation and objective checks.
+limits. All seven numerical evaluations and fourteen task checks are complete.
+
+**INT3 passed 11/14 tasks.** Category counts are Rust 1/2, Python 2/2,
+JavaScript 2/2, debugging 2/2, algorithmic reasoning 1/2, code explanation 2/2
+and instruction following 1/2. The run-encoding function compiles but never
+updates its initial run value; the mixed-run assertion fails. The graph answer
+has the correct path but reports weight 7 instead of 4. The JSON-only answer's
+values are correct after extraction, but its Markdown fence violates the
+explicit instruction. Outputs are unchanged in the
+[raw answer record](COLOSSUS_TASK_OUTPUTS.md).
+
+All fourteen outputs reached EOS, with zero output-limit truncations. Only
+1/14 outputs had literal format compliance; single fenced code/JSON blocks
+remain eligible for functional testing except when an instruction explicitly
+forbids Markdown. This distinction is fixed in the published oracle.
+
+Generation emitted 827 tokens over 1,549.205938 seconds of generation-call time:
+**0.533821863 emitted tokens/s including prefill**, not decode-only throughput.
+The short numerical corpus measured reference perplexity 36.5527760797859,
+candidate perplexity 36.93154912153539, ratio 1.010362360465392, mean KL
+0.0550587877294491 nats, and 107/125 matching top-1 predictions (85.6%).
+The existing composite numerical-fidelity formula yields 92.28719583830207%;
+this is not task capability or retained intelligence. Numerical evaluation
+took 101.0093159 seconds (1.237509619 predictions/s), a separate metric.
+The full evaluation process took 1,892.3775918 seconds and sampled peak
+working set was 13,741,355,008 bytes (12.80 GiB).
+
+These are objective observations on fourteen custom tasks. The errors and
+latency limit practical conclusions; no original BF16 task baseline, broad
+benchmark capability, generally useful assistant or measured quality-retention
+claim follows.
 
 The artifact loaded as WGPU Full-Resident on the RTX 4070 Laptop GPU/Vulkan:
 337 reported GPU operators, zero reported CPU fallback operators and

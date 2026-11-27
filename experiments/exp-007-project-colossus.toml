@@ -1,6 +1,6 @@
 id = "exp-007"
 name = "PROJECT COLOSSUS"
-status = "in_progress_streamed_reference_completed"
+status = "in_progress_int3_completed_int2_running"
 model = "Qwen/Qwen2.5-Coder-14B-Instruct"
 source_revision = "aedcc2d42b622764e023cf882b6652e646b95671"
 source_license = "Apache-2.0"
@@ -54,7 +54,7 @@ memory_scope = "Layer GPU weight accounting and externally sampled process worki
 
 [int3]
 construction_status = "completed_verified"
-evaluation_status = "in_progress"
+evaluation_status = "completed"
 complete_qmf_bytes = 6003510569
 complete_qmf_bpp = 3.2517247857777125
 sha256 = "181e5c6afa8cf1af9399b44212b9d8bc1e4be6e2c6a278d88616fed5e475a5c3"
@@ -68,3 +68,181 @@ reported_cpu_fallback_operators = 0
 gpu_weight_accounting_bytes = 5687212304
 integrity_revalidation_seconds = 148.9443314
 model_load_seconds = 89.6171724
+tasks_passed = 11
+tasks_total = 14
+literal_format_compliant = 1
+eos_stopped = 14
+output_limit_reached = 0
+emitted_tokens = 827
+generation_call_seconds = 1549.205938
+end_to_end_emitted_tokens_per_second = 0.5338218630039875
+numerical_predictions = 125
+reference_perplexity = 36.5527760797859
+candidate_perplexity = 36.93154912153539
+perplexity_ratio = 1.010362360465392
+mean_logit_kl_nats = 0.0550587877294491
+top1_matching_tokens = 107
+top1_agreement = 0.856
+composite_numerical_fidelity_pct = 92.28719583830207
+numerical_evaluation_seconds = 101.00931589999999
+numerical_predictions_per_second = 1.237509618654887
+evaluation_process_seconds = 1892.3775918
+sampled_peak_evaluation_working_set_bytes = 13741355008
+
+[[int3.tasks]]
+id = "rust-1"
+category = "rust_generation"
+passed = false
+format_compliant = false
+eos_emitted = true
+generated_tokens = 109
+elapsed_micros = 144054524
+end_to_end_tokens_per_second = 0.7566579443211378
+output_sha256 = "354af30ac09d79da19f9f556fc126e3cceae4f9e49610c4734d8ed0f5567a167"
+failure = "Compiles but mixed-run assertion fails; initial run value is never updated."
+
+[[int3.tasks]]
+id = "rust-2"
+category = "rust_generation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 121
+elapsed_micros = 148443419
+end_to_end_tokens_per_second = 0.8151253913115541
+output_sha256 = "f3fc5c42311a60b7bdec0fe88daad755c607a2431fdc2b47c0c8490f2fb2dea3"
+
+[[int3.tasks]]
+id = "python-1"
+category = "python_generation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 129
+elapsed_micros = 158208116
+end_to_end_tokens_per_second = 0.8153816837057841
+output_sha256 = "ec857be0739dae41a37f5605d9ceccda364a39a0a0ac32b6a57548e5f7b5fb80"
+
+[[int3.tasks]]
+id = "python-2"
+category = "python_generation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 55
+elapsed_micros = 95501060
+end_to_end_tokens_per_second = 0.575909838068813
+output_sha256 = "96d500bde5159723100d9773705397a7f5c49e1cdd034189856f1775b49a0e92"
+
+[[int3.tasks]]
+id = "js-1"
+category = "javascript_generation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 60
+elapsed_micros = 109455763
+end_to_end_tokens_per_second = 0.5481666598039246
+output_sha256 = "31e60cc18654b019a3eb9ae1a66542b1f8e4d149090fe0c08d30eeb942fabeae"
+
+[[int3.tasks]]
+id = "js-2"
+category = "javascript_generation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 86
+elapsed_micros = 124100346
+end_to_end_tokens_per_second = 0.6929875924761725
+output_sha256 = "dc9800a6e601f10f084db51e2770a139023f3649dabbbb46df9f898354ace04f"
+
+[[int3.tasks]]
+id = "debug-1"
+category = "debugging"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 61
+elapsed_micros = 145800158
+end_to_end_tokens_per_second = 0.4183808909178274
+output_sha256 = "58136eb5dfb571dfced94c93bd7198db5ecc2d17062240444f8a862e94e2e189"
+
+[[int3.tasks]]
+id = "debug-2"
+category = "debugging"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 32
+elapsed_micros = 109432334
+end_to_end_tokens_per_second = 0.2924181439829292
+output_sha256 = "0a7a79860f593b37b105493c0b29bdc296853630d307d7fead52b148366673d0"
+
+[[int3.tasks]]
+id = "reason-1"
+category = "algorithmic_reasoning"
+passed = false
+format_compliant = false
+eos_emitted = true
+generated_tokens = 30
+elapsed_micros = 96274060
+end_to_end_tokens_per_second = 0.3116104171777943
+output_sha256 = "074b9e42219fb6c2fef7fcf20fa3594bf81e31f3b2d06811e93f4448458ca613"
+failure = "Correct path but weight 7 instead of 4."
+
+[[int3.tasks]]
+id = "reason-2"
+category = "algorithmic_reasoning"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 24
+elapsed_micros = 87796532
+end_to_end_tokens_per_second = 0.273359316743855
+output_sha256 = "3f1006556b695a0b4f998b94c8a0170a99b8d3b4738825a9ed10ac8276e34d60"
+
+[[int3.tasks]]
+id = "explain-1"
+category = "code_explanation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 47
+elapsed_micros = 109092296
+end_to_end_tokens_per_second = 0.43082785607518975
+output_sha256 = "bcb497149ad3848f7e1d29af46c1c52a6426cb6e80db45434798fbfe252363f9"
+
+[[int3.tasks]]
+id = "explain-2"
+category = "code_explanation"
+passed = true
+format_compliant = false
+eos_emitted = true
+generated_tokens = 37
+elapsed_micros = 93879300
+end_to_end_tokens_per_second = 0.394123092098045
+output_sha256 = "ca9de46eba50f3ccfd389f3a154c41f7e6ff355630fef589209b900549b59ff5"
+
+[[int3.tasks]]
+id = "instruction-1"
+category = "instruction_following"
+passed = false
+format_compliant = false
+eos_emitted = true
+generated_tokens = 28
+elapsed_micros = 72189777
+end_to_end_tokens_per_second = 0.3878665534595016
+output_sha256 = "893e329f36a8112983fa6afadd85a0c1ab16929be3c41a5fa84f6c67da6ddfa0"
+failure = "Correct values after extraction, but Markdown violates explicit JSON-only format."
+
+[[int3.tasks]]
+id = "instruction-2"
+category = "instruction_following"
+passed = true
+format_compliant = true
+eos_emitted = true
+generated_tokens = 8
+elapsed_micros = 54978253
+end_to_end_tokens_per_second = 0.1455120809313457
+output_sha256 = "6506c1cafceb6e44967d78d9dfa110cc92864d83612e41f010c7119b7ad6c32e"
+

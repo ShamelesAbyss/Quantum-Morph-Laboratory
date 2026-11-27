@@ -9,6 +9,10 @@
 //! with incremental KV-cache, SwiGLU MLP, autoregressive token generation, and
 //! rigorous reference-vs-transformed logit KL divergence & perplexity evaluation.
 
+mod admission;
+mod bias;
+#[cfg(test)]
+mod sentinel_tests;
 pub mod streaming;
 pub use streaming::{StreamingCalibAndRefResult, stream_calibrate_and_reference};
 
@@ -77,6 +81,91 @@ impl TransformerConfig {
                 "head_dim {head_dim} must be even for RoPE"
             )));
         }
+        for (name, value) in [
+            ("rms_norm_eps", self.rms_norm_eps),
+            ("rope_theta", self.rope_theta),
+        ] {
+            if !value.is_finite()
+                || value <= 0.0
+                || !(value as f32).is_finite()
+                || value as f32 <= 0.0
+            {
+                return Err(RuntimeError::InvalidConfig(format!(
+                    "{name} must be positive and finite in both CPU and GPU precision"
+                )));
+            }
+        }
+        // Shader arguments use u32. Check before any narrowing or dimension arithmetic.
+        for dimension in [
+            self.vocab_size,
+            self.hidden_size,
+            self.intermediate_size,
+            self.num_layers,
+            self.num_heads,
+            self.num_kv_heads,
+            self.max_seq_len,
+        ] {
+            u32::try_from(dimension).map_err(|_| {
+                RuntimeError::InvalidConfig(
+                    "transformer dimension exceeds the supported u32 range".into(),
+                )
+            })?;
+        }
+        let span = |name: &str, factors: &[usize]| -> Result<(), RuntimeError> {
+            factors
+                .iter()
+                .try_fold(1_usize, |total, &factor| total.checked_mul(factor))
+                .filter(|&bytes| bytes <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    RuntimeError::InvalidConfig(format!(
+                        "{name} dimension/byte arithmetic exceeds addressable storage"
+                    ))
+                })?;
+            Ok(())
+        };
+        let kv_dim = self
+            .num_kv_heads
+            .checked_mul(head_dim)
+            .ok_or_else(|| RuntimeError::InvalidConfig("KV dimension overflow".into()))?;
+        span(
+            "embedding/output projection",
+            &[self.vocab_size, self.hidden_size, 8],
+        )?;
+        span(
+            "attention projection",
+            &[self.hidden_size, self.hidden_size, 8],
+        )?;
+        span(
+            "MLP projection",
+            &[self.hidden_size, self.intermediate_size, 8],
+        )?;
+        span("KV projection", &[kv_dim, self.hidden_size, 8])?;
+        span(
+            "sequence activations",
+            &[self.max_seq_len, self.hidden_size, 8],
+        )?;
+        span("layer traces", &[self.num_layers, self.hidden_size, 8])?;
+        span(
+            "KV cache",
+            &[self.num_layers, self.max_seq_len, kv_dim, 2, 8],
+        )?;
+        span(
+            "layer directory",
+            &[self.num_layers, std::mem::size_of::<TransformerBlock>()],
+        )?;
+        self.num_layers
+            .checked_mul(7)
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| RuntimeError::InvalidConfig("operator count overflow".into()))?;
+        let largest_angle = (self.max_seq_len - 1).max(1) as f64
+            / f64::from(self.rope_theta as f32)
+                .min(1.0)
+                .powf((head_dim - 2) as f64 / head_dim as f64);
+        if !(largest_angle as f32).is_finite() {
+            return Err(RuntimeError::InvalidConfig(
+                "RoPE angle exceeds finite GPU precision".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -84,42 +173,21 @@ impl TransformerConfig {
         self.hidden_size / self.num_heads
     }
 
-    /// Parse a standard Hugging Face `config.json` into a `TransformerConfig`.
+    /// Admit the supported unscaled Llama/Qwen2 subset of Hugging Face configurations.
     pub fn from_hf_config_bytes(bytes: &[u8]) -> Result<Self, RuntimeError> {
-        #[derive(Deserialize)]
-        struct HfLlamaConfig {
-            vocab_size: usize,
-            hidden_size: usize,
-            intermediate_size: usize,
-            num_hidden_layers: usize,
-            num_attention_heads: usize,
-            #[serde(default)]
-            num_key_value_heads: Option<usize>,
-            #[serde(default)]
-            rms_norm_eps: Option<f64>,
-            #[serde(default)]
-            rope_theta: Option<f64>,
-            #[serde(default)]
-            max_position_embeddings: Option<usize>,
-            #[serde(default)]
-            tie_word_embeddings: bool,
-        }
-        let raw: HfLlamaConfig = serde_json::from_slice(bytes)
-            .map_err(|e| RuntimeError::InvalidConfig(format!("config.json parse error: {e}")))?;
-        let cfg = Self {
-            vocab_size: raw.vocab_size,
-            hidden_size: raw.hidden_size,
-            intermediate_size: raw.intermediate_size,
-            num_layers: raw.num_hidden_layers,
-            num_heads: raw.num_attention_heads,
-            num_kv_heads: raw.num_key_value_heads.unwrap_or(raw.num_attention_heads),
-            rms_norm_eps: raw.rms_norm_eps.unwrap_or(1e-5),
-            rope_theta: raw.rope_theta.unwrap_or(10_000.0),
-            max_seq_len: raw.max_position_embeddings.unwrap_or(2048),
-            tie_word_embeddings: raw.tie_word_embeddings,
-        };
-        cfg.validate()?;
-        Ok(cfg)
+        admission::parse(bytes)
+    }
+
+    /// Bind cached calibration/reference data to effective settings and runtime semantics.
+    /// Advance this domain whenever execution/admission changes invalidate earlier evidence.
+    pub fn execution_identity(&self) -> Result<String, RuntimeError> {
+        self.validate()?;
+        let settings = serde_json::to_vec(self)
+            .map_err(|e| RuntimeError::InvalidConfig(format!("execution identity: {e}")))?;
+        let mut sha = qml_core::Sha256::new();
+        sha.update(b"Q-Core/SENTINEL-execution-v1\0");
+        sha.update(&settings);
+        Ok(sha.finalize_hex())
     }
 }
 
@@ -714,6 +782,15 @@ impl QCoreModel {
             backend,
             |name, cache| archive.load_operator_cached(name, cache),
             |name| archive.load_vector_f64(name),
+            |name, expected| {
+                let shape = archive
+                    .manifest()
+                    .tensors
+                    .iter()
+                    .find(|tensor| tensor.name == name)
+                    .map(|tensor| tensor.shape.as_slice());
+                bias::load(name, shape, expected, || Ok(archive.load_vector_f64(name)?))
+            },
         )
     }
 
@@ -765,7 +842,8 @@ impl QCoreModel {
             Arc::new(RuntimeOperator::cpu_only(embed_raw))
         };
 
-        let mut layers = Vec::with_capacity(config.num_layers);
+        // Grow only after real layers load; a declared count alone must not reserve enormous RAM.
+        let mut layers = Vec::new();
         for l in 0..config.num_layers {
             let p = format!("model.layers.{l}");
             layers.push(TransformerBlock {
@@ -774,23 +852,29 @@ impl QCoreModel {
                     &format!("{p}.self_attn.q_proj.weight"),
                     &mut latent_cache,
                 )?),
-                q_bias: reader
-                    .load_vector_f64(&format!("{p}.self_attn.q_proj.bias"))
-                    .ok(),
+                q_bias: bias::from_reader(
+                    reader,
+                    &format!("{p}.self_attn.q_proj.bias"),
+                    config.hidden_size,
+                )?,
                 k_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.k_proj.weight"),
                     &mut latent_cache,
                 )?),
-                k_bias: reader
-                    .load_vector_f64(&format!("{p}.self_attn.k_proj.bias"))
-                    .ok(),
+                k_bias: bias::from_reader(
+                    reader,
+                    &format!("{p}.self_attn.k_proj.bias"),
+                    config.num_kv_heads * config.head_dim(),
+                )?,
                 v_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.v_proj.weight"),
                     &mut latent_cache,
                 )?),
-                v_bias: reader
-                    .load_vector_f64(&format!("{p}.self_attn.v_proj.bias"))
-                    .ok(),
+                v_bias: bias::from_reader(
+                    reader,
+                    &format!("{p}.self_attn.v_proj.bias"),
+                    config.num_kv_heads * config.head_dim(),
+                )?,
                 o_proj: wrap_op(reader.load_operator_cached(
                     &format!("{p}.self_attn.o_proj.weight"),
                     &mut latent_cache,
@@ -885,6 +969,7 @@ impl QCoreModel {
         backend: QCoreBackend,
         load_op: FOp,
         load_vec: FVec,
+        load_bias: impl Fn(&str, usize) -> Result<Option<Vec<f64>>, RuntimeError>,
     ) -> Result<Self, RuntimeError>
     where
         FOp: Fn(&str, &mut QmfLatentCache) -> Result<QmfOperator, QmfError>,
@@ -922,7 +1007,7 @@ impl QCoreModel {
             Arc::new(RuntimeOperator::cpu_only(embed_raw))
         };
 
-        let mut layers = Vec::with_capacity(config.num_layers);
+        let mut layers = Vec::new();
         for l in 0..config.num_layers {
             layers.push(TransformerBlock {
                 input_norm: load_vec(&format!("model.layers.{l}.input_layernorm.weight"))?,
@@ -930,17 +1015,26 @@ impl QCoreModel {
                     &format!("model.layers.{l}.self_attn.q_proj.weight"),
                     &mut latent_cache,
                 )?),
-                q_bias: load_vec(&format!("model.layers.{l}.self_attn.q_proj.bias")).ok(),
+                q_bias: load_bias(
+                    &format!("model.layers.{l}.self_attn.q_proj.bias"),
+                    config.hidden_size,
+                )?,
                 k_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.k_proj.weight"),
                     &mut latent_cache,
                 )?),
-                k_bias: load_vec(&format!("model.layers.{l}.self_attn.k_proj.bias")).ok(),
+                k_bias: load_bias(
+                    &format!("model.layers.{l}.self_attn.k_proj.bias"),
+                    config.num_kv_heads * config.head_dim(),
+                )?,
                 v_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.v_proj.weight"),
                     &mut latent_cache,
                 )?),
-                v_bias: load_vec(&format!("model.layers.{l}.self_attn.v_proj.bias")).ok(),
+                v_bias: load_bias(
+                    &format!("model.layers.{l}.self_attn.v_proj.bias"),
+                    config.num_kv_heads * config.head_dim(),
+                )?,
                 o_proj: wrap_op(load_op(
                     &format!("model.layers.{l}.self_attn.o_proj.weight"),
                     &mut latent_cache,

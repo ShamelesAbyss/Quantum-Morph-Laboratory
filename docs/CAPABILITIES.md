@@ -2,6 +2,8 @@
 
 This is a source/evidence reassessment for CONTINUUM, not a new pretrained-model benchmark. Historical experiment files remain unchanged.
 
+SENTINEL updates only the runtime admission and optional-bias correctness gates. It adds synthetic regression evidence and does not repeat or extend the pretrained-model experiments.
+
 | Component | Implemented evidence | Boundary |
 |---|---|---|
 | qml-core | Dense matrices, exact/randomized SVD, deterministic RNG, FIPS SHA-256 tests | Classical numerical foundations; no quantum hardware/state simulation |
@@ -11,7 +13,7 @@ This is a source/evidence reassessment for CONTINUUM, not a new pretrained-model
 | qml-format | QMF v0/v1, shared factors, bounded metadata readers, per-blob/full CRC and streaming SHA-256 | Experimental formats; explicit file/allocation limits |
 | qml-forge | Tensor/cluster transformation, calibrated paths, disk-backed QMF payload construction, cancellation and safe publication | Quantizers and RMQ clusters still require dense workspace; not full-process bounded RSS |
 | qml-tokenizer | Native Hugging Face byte-level BPE, ChatML formatting and stateful UTF-8 decoding | Not universal tokenizer support or SentencePiece ingestion |
-| qml-runtime | Llama-style/Qwen2 mathematical execution, optional Q/K/V biases, CPU/GpuHybrid/GpuFull, KV caches, streaming calibration/reference | HF configuration admission requires stricter architecture/feature checks; present optional bias corruption must not be silently treated as absence |
+| qml-runtime | Llama-style/Qwen2 execution, validated HF admission, optional Q/K/V biases, CPU/GpuHybrid/GpuFull, KV caches, streaming calibration/reference | SENTINEL rejects unsupported active configurations and malformed present biases; see [supported subset](RUNTIME_ADMISSION.md). Independent pretrained-model inference comparison remains pending |
 | qml-hardware | Hardware selection, direct compressed matvec kernels and GPU transformer primitives with parity tests | Device/driver support varies; no OS-wide peak VRAM or power telemetry |
 | qml-behavior | Traces, RSA/interventions, numerical reference comparisons and provenance-verified caches | Composite numerical fidelity is not retained intelligence or a task benchmark |
 | qml-genesis | Stratified evolutionary representation search and QMF export | Experimental objective proxies; not evidence of a novel superior model |
@@ -29,8 +31,8 @@ This is a source/evidence reassessment for CONTINUUM, not a new pretrained-model
 
 ## Next correctness gates before additional real-model claims
 
-1. Reject unsupported HF architecture/positional/activation configurations rather than silently executing a Llama-like interpretation.
-2. Distinguish absent optional tensors from malformed tensors; required tensors must fail explicitly.
+1. SENTINEL implements supported HF architecture/positional/activation admission; unknown or unsupported active configurations produce errors.
+2. SENTINEL distinguishes absent optional biases from malformed present tensors; AEGIS required-output-projection errors remain in place.
 3. Use a provenance-pinned, appropriately licensed small model and its actual tokenizer/configuration.
 4. Compare native execution with an independent reference implementation under matching weights, prompts and precision; record tolerances and unfavorable results.
 5. Measure artifact bytes and scoped memory/load/prefill/generation metrics separately; do not extrapolate large-model fit.

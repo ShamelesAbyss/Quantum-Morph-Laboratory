@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.4 — PROJECT SENTINEL
+
+Strict Llama/Qwen2 HF architecture and active-feature admission replaces silently ignored controls. Validate activation, attention geometry, RoPE, active versus inactive sliding windows, finite constants and checked dimension spans; correct omitted family defaults and avoid unbacked layer-directory reservations. Optional q/k/v biases remain optional only when absent; present malformed, non-finite, CRC-corrupt or unreadable tensors now fail with named errors in memory, file-backed QMF and streaming BF16 loaders. A runtime semantics/effective-settings fingerprint prevents stale reference/calibration cache reuse without modifying old files or formats. Nineteen new synthetic tests preserve AEGIS output-projection regressions and existing backends. No model downloads, new dependencies, compression/graphics changes or new model-quality claims. Stop after the verified SENTINEL release.
+
 ## v0.6.3 — PROJECT CONTINUUM
 
 Restore original artwork and structured scientific presentation; permanently enforce native GitHub Releases-only distribution and the exact memorial through owner rules and Rust CI checks. Harden release validation, complete offline packaging, source archive, source-bound integrity manifest, optional configured signing, scoped permissions, non-overwriting publication and independent public verification. No numerical algorithms, Prism renderer or historical measurements change. Architecture admission and independent real-model reference reassessment remain subsequent work.

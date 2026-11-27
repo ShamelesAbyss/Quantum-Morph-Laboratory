@@ -1,3 +1,45 @@
+# v0.6.4 | PROJECT SENTINEL
+
+PROJECT SENTINEL corrects runtime input admission and optional attention-bias loading. This is a strictly scoped correctness release, not a new architecture implementation, compression technique, graphical redesign or model-quality result. The application remains experimental.
+
+## Architecture admission
+
+Previously, dimension-compatible Hugging Face configurations could silently ignore unsupported architecture, activation, rotary and window settings. Admission now requires an identified Llama/Qwen2 causal decoder and rejects contradictory or unsupported active controls with explicit errors. Duplicate root controls and nested rotary keys are rejected instead of allowing later neutral values to hide an active setting.
+
+Supported inputs retain the existing SiLU/SwiGLU, grouped-query attention and full-head split-half RoPE computation. Default/unscaled rotary settings and identity factors are accepted. Scaled, partial, interleaved or hybrid rotary execution is not substituted. Explicit attention/head dimensions must match the existing decoder geometry. Active sliding windows and hybrid attention layer types fail; nominal window metadata remains harmless when disabled, when no layer uses it, or when explicit all-full-attention layer types control execution.
+
+Numerical constants must be positive and finite in CPU/GPU precision, including a finite rotary angle range. Dimensions must be nonzero, satisfy head/KV relationships, fit the existing shader scalar interface and have checked addressable byte spans. An enormous declared layer count no longer causes an up-front layer-directory allocation before required tensors are checked. Configuration JSON is capped at 1 MiB. Classified checkpoint/interface metadata remains accepted; unclassified controls fail rather than being guessed harmless.
+
+Omitted defaults now use epsilon 1e-6 and theta 10000 for both families, with Llama context 2048 and Qwen2 context 32768. Explicit supported values, including Qwen2.5 checkpoint theta 1000000, are preserved. Results can differ from earlier incorrect epsilon/context defaults when configuration values were omitted. Consult docs/RUNTIME_ADMISSION.md for exact admission rules. A family name alone does not establish support for scaled or otherwise extended variants.
+
+## Optional tensor correctness
+
+Memory QMF, file-backed QMF and streaming BF16 use the same presence, vector-shape, decoded-length and finite-value contract for q/k/v biases. An absent directory entry stays absent. A present tensor must contain the exact query or KV vector length. CRC, I/O, decoding and representation errors propagate with the tensor name; they no longer become a silent no-bias fallback. Non-finite F32/F16/BF16 values are errors even if container checksums are valid.
+
+The AEGIS untied lm_head requirement is unchanged. Missing or corrupt required output projections still fail, and explicitly tied embeddings retain their existing behavior. CPU, GpuHybrid and GpuFull construction use the validated inputs; no inference backend or shader was replaced.
+
+## Runtime cache migration
+
+Reference/calibration cache identity now also binds a Q-Core runtime-semantics domain and effective validated settings. This prevents earlier defaults or ignored bias failures from being silently reused as current reference evidence. Old cache files and cache formats are preserved; older provenance fails explicitly under SENTINEL. Regenerate into a new output directory instead of deleting or overwriting historical evidence. Cache serialization, integrity checks and safe publication algorithms are unchanged.
+
+## Regression and release validation
+
+Nineteen new synthetic tests exercise supported identities/defaults and representative family metadata, conflicting/missing/unknown architectures, activations and unsupported controls, attention geometry, rotary variants, active/inactive windows, numerical constants, dimension/input limits, unbacked directory counts and stable settings-sensitive runtime identity. Tensor cases cover absent/valid q/k/v biases, multi-token positive execution, wrong ranks/lengths, decoded-length mismatch, NaN/infinities across three floating encodings, CRC corruption, injected I/O failure and a streaming source truncated after metadata admission. Existing tests are retained.
+
+The release is gated on formatting, strict workspace Clippy, full workspace tests, Windows/Linux workspace release builds, dependency policy, package/documentation/memorial checks, CLI smoke tests, complete checksums and independent unauthenticated public verification. Actual results and run references are recorded in HANDOFF.md and GitHub Actions. Publication includes the six established assets exclusively through native GitHub Releases: the Windows desktop executable, Windows portable desktop/CLI package, Linux desktop/CLI archive, source archive, source-bound release manifest and SHA-256 checksum file. Optional signing runs only when configured and must not be inferred from checksums.
+
+Local validation passed all five required checks, all 140 Windows workspace tests (including 23 runtime tests), doc-tests, complete Windows package/archive checks and the packaged qml 0.6.4 smoke test. Existing tests were not weakened or removed. Exact-tag platform and public verification results are recorded by the release workflow.
+
+## Usage, migration and limits
+
+Launch the packaged qml-desktop graphical laboratory or use qml --help. Existing native inference commands and supported artifact representations are preserved. An unsupported-feature error identifies a configuration the current runtime cannot execute faithfully; do not interpret a family label as universal model compatibility.
+
+No model was downloaded, deleted or newly benchmarked. No new dependency, compression mathematics, Project Prism renderer, GPU kernel, tokenizer algorithm, historical experiment or permanent distribution rule was changed. MIT licensing, artwork, repository history and the exact memorial are preserved.
+
+Arithmetic admission is not a physical RAM/VRAM reservation or a large-model fit guarantee. Synthetic input tests do not establish pretrained-model quality, throughput or independent reference-runtime agreement. Safetensors lacks embedded checksums, so a structurally valid finite value change requires an independently expected source identity to detect. CRC/SHA-256 integrity does not authenticate an unsigned producer. No new graphical performance result is claimed. Stop after the verified SENTINEL milestone; subsequent work requires owner authorization.
+
+---
+
 # v0.6.3 | PROJECT CONTINUUM
 
 This experimental engineering checkpoint restores the laboratory presentation and permanently enforces native GitHub Releases-only distribution. It does not add a compression method or establish new model-quality, memory, speed or architecture results.

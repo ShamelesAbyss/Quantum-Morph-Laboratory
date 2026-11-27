@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/badges/version.svg" alt="Milestone version v0.6.3"/>
+  <img src="assets/badges/version.svg" alt="Milestone version v0.6.4"/>
   <a href="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml"><img src="https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/workflows/ci.yml/badge.svg?branch=main" alt="Windows and Linux Rust CI"/></a>
   <img src="assets/badges/research.svg" alt="Experimental research • native Rust • MIT"/>
 </p>
@@ -40,7 +40,7 @@ The repository preserves unfavorable results and sub-2-bit failure boundaries. A
 | Q-Scope / qml-model | Read-only Safetensors, shard indexes, GGUF inspection, tensor statistics and spectra | Format inspection is distinct from end-to-end architecture support |
 | Q-Forge / qml-quant | Conventional baselines, RMQ, MAP, GPTQ, rotations, sparse and low-rank corrections | Quantizers still allocate dense tensor or cluster workspace |
 | QMF v1 / qml-format | Typed operators, shared latents, bounded parsing, CRC-32 and artifact SHA-256 | Experimental format; default reader and resource limits remain explicit |
-| Q-Core / qml-runtime | Llama-style and Qwen2 decoder inference over compressed operators | Supported parameter subsets require validation; not every family/configuration is supported |
+| Q-Core / qml-runtime | Llama-style and Qwen2 decoder inference over compressed operators | SENTINEL validates the [supported configuration subset and optional tensors](docs/RUNTIME_ADMISSION.md); scaled/hybrid or other architectures are rejected |
 | Q-Behavior / Q-Genesis | Numerical comparisons, traces, reversible interventions and representation search | Composite numerical fidelity is not a task benchmark |
 | PROJECT PRISM / qml-desktop | Native WGPU scientific observatory with real engine integration | Historical screenshots below; no interface redesign is implied |
 

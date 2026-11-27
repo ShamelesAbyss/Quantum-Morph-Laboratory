@@ -2509,6 +2509,11 @@ fn run_resonance_ladder_cmd(args: Vec<String>) -> ExitCode {
             qml_model::SafetensorsSource::open(&model_p, &budget).map_err(std::io::Error::other)?;
         let mut sha = qml_core::Sha256::new();
         sha.update(b"AEGIS-cache-v2-f32-hessian64");
+        sha.update(
+            cfg.execution_identity()
+                .map_err(std::io::Error::other)?
+                .as_bytes(),
+        );
         let mut files = source.source_paths();
         files.push(cfg_p.clone());
         files.push(tok_p.clone());

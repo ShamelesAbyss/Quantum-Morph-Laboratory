@@ -53,6 +53,10 @@ QMF publication defaults to no replacement. Explicit authorized replacement uses
 
 ## Safety and Resource Constraints
 
+SENTINEL v0.6.4 admits only identified Llama/Qwen2 causal decoder configurations with supported SiLU, attention geometry, unscaled full-head RoPE and full attention. Unsupported active rotary/window/hybrid/normalization/bias layouts and unclassified configuration controls fail explicitly; known inactive metadata remains harmless. Family defaults, finite CPU/GPU constants and checked dimension/byte products are validated before loading. See [runtime admission](docs/RUNTIME_ADMISSION.md) for exact controls and limits.
+
+Memory QMF, file-backed QMF and streaming BF16 share the optional attention-bias contract: missing directory entries remain absent; present q/k/v entries must have the exact vector rank, query/KV length and finite decoded values. Existing reader failures propagate with tensor context. Directories grow after successful layer loads rather than preallocating from an unbacked count. The AEGIS required untied lm_head behavior and all existing inference backends remain unchanged.
+
 - `unsafe` is forbidden at workspace level (`Cargo.toml`).
 - Imported model files are opened read-only and never modified; output writes use atomic staging with alias protection.
 - All parsers bound header/manifest/file sizes and use checked integer arithmetic before allocation.

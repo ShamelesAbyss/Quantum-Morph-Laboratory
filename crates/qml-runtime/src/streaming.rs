@@ -150,8 +150,33 @@ where
         Ok(StreamingLinear::from_bf16(mat, eng))
     };
 
-    let load_opt_vec = |src: &mut SafetensorsSource, name: &str| -> Option<Vec<f64>> {
-        src.read_tensor_f64(name, budget).ok()
+    let load_opt_vec = |src: &mut SafetensorsSource,
+                        name: &str,
+                        expected: usize|
+     -> Result<Option<Vec<f64>>, RuntimeError> {
+        let shape = src
+            .metadata()
+            .tensors
+            .iter()
+            .find(|tensor| tensor.name == name)
+            .map(|tensor| {
+                tensor
+                    .shape
+                    .iter()
+                    .map(|&dim| {
+                        usize::try_from(dim).map_err(|_| {
+                            RuntimeError::InvalidConfig(format!(
+                                "optional attention bias {name} dimension exceeds usize"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        crate::bias::load(name, shape.as_deref(), expected, || {
+            src.read_tensor_f64(name, budget)
+                .map_err(|e| RuntimeError::InvalidConfig(e.to_string()))
+        })
     };
 
     // 2. Stream ONE transformer layer at a time through VRAM / RAM
@@ -171,15 +196,18 @@ where
         let q_bias = load_opt_vec(
             &mut source,
             &format!("model.layers.{l}.self_attn.q_proj.bias"),
-        );
+            h,
+        )?;
         let k_bias = load_opt_vec(
             &mut source,
             &format!("model.layers.{l}.self_attn.k_proj.bias"),
-        );
+            config.num_kv_heads * head_dim,
+        )?;
         let v_bias = load_opt_vec(
             &mut source,
             &format!("model.layers.{l}.self_attn.v_proj.bias"),
-        );
+            config.num_kv_heads * head_dim,
+        )?;
 
         let (q_proj, b0) = load_bf16_linear(
             &mut source,

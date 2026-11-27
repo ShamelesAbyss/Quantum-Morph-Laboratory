@@ -58,6 +58,31 @@ release. Original autoregressive generation was not attempted after resource
 preflight: 29,540,133,960 checkpoint bytes exceed 17,563,394,048 available
 physical RAM bytes before runtime overhead; source BF16 streaming remains valid.
 
+Additional setup safeguards: all 13 original model/support files are read-only.
+The owner COLOSSUS scope is recorded in MASTER_DEVELOPMENT_DIRECTIVE.md and
+ROADMAP.md without weakening distribution or stop rules. README preserves the
+historical rates verbatim and explains the metric incompatibility. The ladder
+optional generation-rate field is JSON null when unavailable, with no
+evaluation-rate substitution.
+
+Before any candidate output, the objective oracle's strict three-line check
+was corrected to reject outer spaces/extra blank lines while accepting CRLF
+and one terminal line ending. Three format regressions and all 14 positive /
+14 negative controls passed again; the previous oracle is preserved. Final
+oracle SHA-256 is 9996ffae07ea9f9b4c2647a6c8a33d534f97d9ef7e82ffd8beebbfd3b57bba13.
+This does not change task expected values or calibration/reference data;
+oracle-format-regression.json explicitly supplements the original cache
+provenance rather than overwriting it. Whole-device GPU samples are captured
+separately from operator bytes and sampled process working set.
+
+Remaining scientific/reporting limitations include small calibration/reference
+corpora, no independent HF runtime/tokenizer parity, no measured BF16 task
+baseline, and existing fast-probe diagnostics stored in some Frobenius-named
+Q-Forge fields. Those diagnostic fields will not support dense-error or task
+quality claims here; their separate correction is outside the authorized
+application scope. Original-source rehash and precise final storage accounting
+scripts are prepared under D: scratch for execution after workloads finish.
+
 Next: finish streaming calibration and reference for the verified pinned source;
 forge/evaluate INT3, INT2 and QMR-200 using existing algorithms;
 record every outcome/resource failure, update all required scientific docs,

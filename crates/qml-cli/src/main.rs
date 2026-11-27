@@ -2092,7 +2092,7 @@ struct ResonanceLadderRow {
     gpu_resident_ops: usize,
     cpu_fallback_ops: usize,
     eval_tok_per_sec: f64,
-    /// End-to-end emitted-token rate including prefill; absent if no sample ran.
+    /// End-to-end emitted-token rate including prefill; JSON null if unavailable.
     generation_tok_per_sec: Option<f64>,
     ref_perplexity: f64,
     cand_perplexity: f64,

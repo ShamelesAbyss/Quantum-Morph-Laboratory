@@ -28,6 +28,7 @@ source_shards_sha256_verified = true
 cache_identity = "40c4a4351ba8056a15974ce9b9a88d4183d220fd7f9d0eaad1dcee83f96af2c2"
 oracle_positive_controls_passed = 14
 oracle_negative_controls_rejected = 14
+oracle_format_regressions_passed = 3
 ollama_published_q4_k_m_bytes_approx = 9000000000
 ollama_quality_measured = false
 bf16_task_baseline_measured = false

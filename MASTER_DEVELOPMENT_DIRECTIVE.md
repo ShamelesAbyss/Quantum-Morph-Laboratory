@@ -2,6 +2,36 @@
 
 The current distribution authority is [docs/GITHUB_DISTRIBUTION_POLICY.md](docs/GITHUB_DISTRIBUTION_POLICY.md). Earlier directives reproduced below are historical records and cannot authorize direct asset links, download buttons, mirrors, proxies or alternative distribution. Use native GitHub Releases exclusively. Preserve the exact memorial. Do not weaken the rule without explicit owner authorization AND clarification from GitHub Support.
 
+## Current engineering authorization — PROJECT COLOSSUS v0.6.5
+
+After independently verified SENTINEL, the owner authorized one real-model
+experiment using exclusively Qwen/Qwen2.5-Coder-14B-Instruct, superseding the
+earlier 22B–24B selection. Only its original Safetensors checkpoint and required
+configuration/tokenizer/license metadata may be acquired. All experiment
+storage belongs under D:\QML-COLOSSUS with dedicated original, cache, scratch,
+calibration, reference, compressed-artifact and result directories. Check disk
+capacity first; preserve all originals and existing files. Never commit weights
+or generated QMF artifacts and never download another model.
+
+Reuse existing calibrated GPTQ, MAP-B, ATLAS and streaming reference code for
+INT3 GPTQ, INT2 GPTQ and QMR-200; QMR-175 is optional if resources permit.
+Only the small benchmark-throughput reporting correction is authorized in the
+application. No quantizer replacement, new compression algorithm, architecture
+implementation, graphical change or broad rewrite is authorized.
+
+Use identical held-out Rust/Python/JavaScript generation, debugging, algorithmic
+reasoning, code-explanation and instruction-following inputs. Report objective
+correctness separately from numerical fidelity. Ollama's approximately 9 GB
+Q4_K_M listing is a published storage comparison only unless independently
+tested. Record failures, resource limits and unmeasured baselines honestly.
+
+Publish actual findings in README, experiment 007, HANDOFF, CHANGELOG, release
+notes and relevant research documentation. Validate and publish v0.6.5 through
+the unchanged native GitHub Releases-only six-asset protocol, verify it
+independently, report exact experiment paths/storage, and STOP. Preserve MIT,
+Project Prism, historical findings, artwork and the exact memorial. Earlier
+stop/no-download instructions remain historical outside this explicit scope.
+
 # Complete Master Development Directive
 
 This document preserves, in order, the three user-supplied directive messages. The parts are reproduced verbatim beneath the separators; the combined document is the project guidance and does not replace any existing project-specific implementation notes.

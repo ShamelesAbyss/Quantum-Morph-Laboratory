@@ -352,13 +352,19 @@ fn main()->Result<()>{
 // Fixed objective checks. No packages, services, or network are used.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const cp=require('node:child_process'),path=require('node:path'),crypto=require('node:crypto');
-const root='D:/QML-COLOSSUS',rep=process.argv[2],selfTest=['oracle-selftest','oracle-negative-selftest'].includes(rep),negative=rep==='oracle-negative-selftest';
+const root='D:/QML-COLOSSUS',rep=process.argv[2],selfTest=/^oracle-(negative-)?selftest(-v2)?$/.test(rep),negative=rep.startsWith('oracle-negative-');
 if(!selfTest&&!['int3','int2','qmr200'].includes(rep))throw Error('representation');
 const protocol=JSON.parse(fs.readFileSync(path.join(root,'experiment-results/protocol.json'),'utf8'));
 const prepared=selfTest?{identity:'oracle-selftest-not-model-evidence'}:JSON.parse(fs.readFileSync(path.join(root,'experiment-results/prepared.json'),'utf8'));
 const outdir=path.join(root,'experiment-results',rep+'-objective-tests');
 fs.mkdirSync(outdir);
 const results=[];
+function strictText(text){return text.replace(/\r\n/g,'\n').replace(/\n$/,'');}
+if(selfTest){
+ assert.equal(strictText('ALPHA\n56\nomega\n'),'ALPHA\n56\nomega');
+ assert.notEqual(strictText('\nALPHA\n56\nomega'),'ALPHA\n56\nomega');
+ assert.notEqual(strictText(' ALPHA\n56\nomega '),'ALPHA\n56\nomega');
+}
 const controls={
  'rust-1':'pub fn runs(xs:&[i32])->Vec<(i32,usize)>{let mut r:Vec<(i32,usize)>=Vec::new();for &x in xs{if let Some(p)=r.last_mut(){if p.0==x{p.1+=1;continue;}}r.push((x,1));}r}',
  'rust-2':'pub fn first_unique(s:&str)->Option<char>{s.chars().find(|&c|s.chars().filter(|&d|d==c).count()==1)}',
@@ -391,7 +397,7 @@ for(const task of protocol.tasks){
    assert.deepEqual(JSON.parse(text),task.expected);
    if(task.category==='instruction_following')assert.equal(format,true);
    r.pass=true;
-  }else if(task.language==='text'){assert.equal(text,task.expected);r.pass=true;}
+  }else if(task.language==='text'){assert.equal(strictText(record.text??''),task.expected);r.pass=true;}
   else if(task.language==='javascript'){
    if(/\b(require|process|import|fetch|WebAssembly)\b/.test(text))throw Error('rejected external execution feature');
    save(task.id+'.js',text+'\n'+task.tests);
@@ -422,4 +428,3 @@ const summary={identity:prepared.identity,representation:rep,synthetic_oracle_se
  limitations:'Fourteen custom tasks; passing functional tests does not prove complexity, general capability, or retention against unmeasured original BF16 generation. Errors and truncated outputs remain included.'};
 save('summary.json',JSON.stringify(summary,null,2)+'\n');console.log(JSON.stringify(summary,null,2));
 ```
-

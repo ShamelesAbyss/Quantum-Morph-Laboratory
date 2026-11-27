@@ -25,6 +25,16 @@ Disk-backed QMF v1 construction and Q-Forge integration with independent resourc
 
 ## Next Milestones (PROJECT EVENT HORIZON Wave IV & Beyond)
 
+The owner subsequently authorized PROJECT COLOSSUS v0.6.5 using exclusively
+Qwen2.5-Coder-14B-Instruct, superseding the earlier 22B–24B selection. This one
+experiment reuses existing algorithms and records objective coding-task
+correctness separately from numerical fidelity. Only throughput reporting may
+change in the application. All experiment data stays under D:\QML-COLOSSUS;
+no additional model, new compression algorithm, architecture implementation or
+graphical change is authorized. See experiment 007 and docs/PROJECT_COLOSSUS.md.
+Stop after its validated, independently verified native public release.
+Future items below remain proposals rather than authorization.
+
 PROJECT SENTINEL v0.6.4 is strictly limited to runtime configuration admission, optional attention-bias correctness, synthetic validation and a verified release. The owner requires a stop after SENTINEL. No next milestone, real-model download, architecture implementation or compression/graphics work is authorized by this assignment. Its exact admission subset is documented in docs/RUNTIME_ADMISSION.md; independent real-model inference comparison remains outside this milestone.
 
 CONTINUUM supersedes earlier authorization limits for continued correctness and scientific development, but does not validate the large-model projections below. The v0.6.3 restoration checkpoint establishes permanent distribution compliance and verifiable release infrastructure. The next correctness gates are strict supported-configuration admission, malformed optional-tensor errors and provenance-pinned independent small-model reference validation; see docs/CAPABILITIES.md. Large-model fit and performance remain unverified hypotheses.

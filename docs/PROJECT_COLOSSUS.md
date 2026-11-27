@@ -59,6 +59,11 @@ for the explicitly requested generated Python snippets, never an application
 dependency or orchestration implementation. Synthetic known-correct controls
 passed all 14 checks; deliberately wrong controls were rejected by all 14.
 These control results are harness tests, not model performance.
+Before any candidate output, three format regressions also verify that the
+strict three-line task accepts one terminal line ending but rejects extra blank
+lines and leading/trailing spaces. The previous oracle is preserved; both
+14-case positive and negative controls pass again with the corrected guard.
+Calibration/reference data and task expected values remain unchanged.
 
 Calibration uses 17 separate programming/CS passages, including nine actual
 Rust/Python/JavaScript code passages, disjoint from all task prompts and targets:
@@ -102,6 +107,18 @@ Original BF16 full-model generation exceeds currently available physical RAM;
 unless an original autoregressive baseline actually runs, compressed task scores
 must not be described as measured task-quality retention against BF16.
 
+The native streaming BF16-weight reference and candidate GPU execution paths
+use their existing accumulation, attention and KV implementations. No independent
+Hugging Face runtime/tokenizer parity check is claimed. Any numerical difference
+may include backend arithmetic as well as compression. The 1,340-token
+calibration set and 125-prediction reference corpus remain small.
+
+Existing Q-Forge fast paths populate some Frobenius-named diagnostic fields
+with matvec-probe surrogates. Those fields are not used as independently
+measured dense Frobenius errors or as quality conclusions here. Correcting
+that separate legacy reporting issue is outside the authorized application
+change, which remains limited to throughput reporting.
+
 ## Throughput correction
 
 Generation throughput now counts emitted tokens over the entire generation
@@ -109,7 +126,7 @@ call, including prefill and callback work. Prompt tokens are excluded from the
 numerator. This is explicitly an end-to-end generation rate, not a decode-only
 measurement. Ladder evaluation throughput always counts evaluated predictions
 over evaluation wall time; sample-generation rate is a separate optional JSON
-field and is absent if generation did not run or failed. Historical measurements
+field and is null if generation did not run or failed. Historical measurements
 are preserved and are not retroactively recalculated without raw timing data.
 
 ## Results and reproducibility

@@ -1,6 +1,6 @@
 # Handoff
 
-## PROJECT ATLAS — v0.6.2 STABLE IMPLEMENTATION; PUBLIC RELEASE VERIFICATION BLOCKED
+## PROJECT ATLAS — v0.6.2 COMPLETE
 
 Starting checkpoint: 1c80f69477c483750dd1162f8ba68698aa918e5e. Work is exclusively on main. This owner-authorized assignment supersedes the prior AEGIS stop only for bounded-memory artifact construction, associated Q-Forge/CLI configuration, synthetic validation and v0.6.2 publication.
 
@@ -46,19 +46,23 @@ No 14B, 27B or 32B support has been scientifically validated. No sampled MAP-B o
 ARCHITECTURE.md; CHANGELOG.md; Cargo.lock; Cargo.toml; HANDOFF.md; README.md; RELEASE_NOTES.md; ROADMAP.md; crates/qml-cli/Cargo.toml; crates/qml-cli/src/main.rs; crates/qml-cli/tests/atlas_cli.rs; crates/qml-forge/Cargo.toml; crates/qml-forge/src/lib.rs; crates/qml-format/Cargo.toml; crates/qml-format/src/lib.rs; crates/qml-format/src/v1.rs; crates/qml-format/src/v1/disk.rs.
 ### Commit and CI status
 
-Implementation commit: d426d91f6df53a2906612f65467346f0e4fb393a. Main-branch Windows/Linux/dependency-policy CI passed: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812230204. Annotated tag v0.6.2 points to this validated commit. Release workflow is running: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812861029.
+Implementation commit: d426d91f6df53a2906612f65467346f0e4fb393a. Main-branch Windows/Linux/dependency-policy CI passed: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812230204. Annotated tag v0.6.2 points to this validated commit. Release workflow was started at: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/actions/runs/45812861029.
 
-### GitHub access failure after validated milestone push
+### Public release verified — November 27, 2026
 
-The implementation commit and annotated v0.6.2 tag were successfully pushed before access failed. Main-branch CI was confirmed green on both platforms. The release workflow was last observed with Windows build/packaging complete and Linux optimized compilation still running. During the next verification attempt, the GitHub connector returned reauthentication required; Git returned invalid username/token; the unauthenticated repository homepage, repository API and release/workflow endpoints returned HTTP 404. Therefore public release completion, latest status, downloadable assets and public SHA-256 verification are NOT confirmed. No historical release/tag was altered or removed.
+Git and the GitHub plugin were reauthenticated successfully for ShamelesAbyss. The public release is v0.6.2 | PROJECT ATLAS: https://github.com/ShamelesAbyss/Quantum-Morph-Laboratory/releases/tag/v0.6.2. The latest-release endpoint returns v0.6.2; draft=false and prerelease=false. The release workflow sets make_latest=true. All four mandatory assets were downloaded without authentication. All three binary hashes match the public SHA256SUMS.txt.
 
-The owner then requested a stable milestone, push of all work, attached release notes and test results, followed by a stop. The remaining changes are documentation only: recorded CI/access status and corrected the new README memory approximation to exact byte measurements (151,280–151,728 bytes). A final local handoff commit and attempted push preserve the stable point. Release notes, validation evidence and a repository bundle are provided as local outputs if remote access remains unavailable.
+- Quantum-Morph-Laboratory-v0.6.2-Windows-x64.exe: 13778944 bytes; SHA-256 b488cacd6ded4125dbc6f36e465c9a6ca2ae21a17891f2ef030de45c342f5a7d.
+- Quantum-Morph-Laboratory-v0.6.2-Windows-x64-Portable.zip: 9038341 bytes; SHA-256 8ce1e99cde45f5105b4cc4d74a58d4048ce17e5aeeea74be6d06cf89d851dd15.
+- Quantum-Morph-Laboratory-v0.6.2-Linux-x64.tar.gz: 11914842 bytes; SHA-256 0adb4fa746517bb305fdfe219b5b28d58da00ea0762e6cb7d41400be9958ce89.
 
-### Required action to finish remote distribution
+The standalone Windows EXE is byte-identical to the portable desktop binary. The downloaded portable CLI executed as qml 0.6.2, and both portable archives contain the expected applications and MIT license. Previous source CI was observed green on Windows (107 tests), Linux (108 tests) and dependency policy. Historical Actions run records currently return 404; they cannot be re-fetched. Source code and the release tag remain unchanged. All five required local validation commands passed as recorded above.
 
-Restore the GitHub connection and Git credentials, or provide the moved repository URL. Then push the final documentation commit without rewriting history, inspect release workflow 45812861029, and verify all four public v0.6.2 assets, latest status and SHA-256 checksums. Do not claim this public release is verified until those checks succeed. STOP at this stable ATLAS point; do not begin another assignment.
+The access failure after the initial push blocked final verification temporarily; it is resolved. A final documentation-only local commit f831e0a0860720792229f130d0846f932ea25007 and the newer remote README edit 4ed1575fa2577cff4c58982b58dc5d29b23ee068 are joined with a regular merge on main, preserving both histories. The newer README edit is retained, with the mandatory direct download links and exact permanent memorial restored. No source code, mathematical algorithms, protected subsystem or experiment measurements were changed during this reconciliation.
 
+The earlier local completion report and Windows packages remain historical local backups. The public release and checksums are now verified; a refreshed completion report supersedes the earlier blocked status. No ATLAS implementation issues remain beyond the documented resource limitations. No 14B/27B/32B scientific validation is claimed.
 
+**STRICT STOP: PROJECT ATLAS is complete. Await further instructions; do not begin another assignment.**
 
 ## PROJECT AEGIS — v0.6.1 COMPLETE
 
